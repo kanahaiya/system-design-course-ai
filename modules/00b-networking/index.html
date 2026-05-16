@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Learn networking fundamentals for system design interviews: HTTP, DNS, TCP vs UDP, L4 vs L7 load balancers, and 3-tier architecture explained from first principles.">
+  <title>Networking Fundamentals — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/00b-networking/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#http" class="module-toc__link">HTTP / HTTPS Basics</a></li>
+          <li><a href="#dns" class="module-toc__link">DNS Resolution</a></li>
+          <li><a href="#tcp-udp" class="module-toc__link">TCP vs UDP</a></li>
+          <li><a href="#architecture" class="module-toc__link">3-Tier Architecture</a></li>
+          <li><a href="#load-balancers" class="module-toc__link">L4 vs L7 Load Balancers</a></li>
+          <li><a href="#ports" class="module-toc__link">Ports &amp; Protocols</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-00b" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 00-B</span>
+        </nav>
+        <div class="module-header__number">Module 00-B — Beginner Foundation</div>
+        <h1 class="module-header__title">Networking Fundamentals</h1>
+        <p class="module-header__desc">
+          Everything about HTTP, DNS, TCP/UDP, load balancers, and architecture tiers that shows up
+          in system design interviews — explained from first principles with analogies and diagrams.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 40 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Beginner</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📋</span> Pre-requisite for all modules</div>
+        </div>
+      </header>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 1: HTTP / HTTPS
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="http" aria-labelledby="http-title">
+        <h2 class="content-section__title" id="http-title">
+          <span class="content-section__title-icon" aria-hidden="true">🌐</span>
+          HTTP / HTTPS Basics
+        </h2>
+        <div class="content-section__body">
+          <p>
+            <strong>HTTP (HyperText Transfer Protocol)</strong> is a <em>request-response protocol</em>.
+            Think of it like a formal postal system: every conversation starts with a client (your
+            browser) sending a letter (request) to a server, and the server mailing back a reply
+            (response). Critically, the postal system has no memory — each letter is treated as if
+            it is the first one ever sent. This is what <strong>stateless</strong> means: HTTP does
+            not remember previous requests. The server treats request #1,000 the same as request #1.
+          </p>
+          <p>
+            Every HTTP request has three parts: a <strong>method</strong> (what action to take),
+            a <strong>URL</strong> (where to take it), and optional <strong>headers + body</strong>
+            (extra metadata and data). Every response has a <strong>status code</strong> (what happened)
+            plus optional headers and body.
+          </p>
+
+          <h3>HTTP Methods — What Each One Means</h3>
+          <p>
+            Methods tell the server <em>what you want to do</em>, not just which resource to act on.
+            Two important properties: <strong>idempotent</strong> means calling it multiple times
+            gives the same result as calling it once (like pressing a light switch that's already on).
+            <strong>Safe</strong> means it does not change any server-side data.
+          </p>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="HTTP methods comparison">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Meaning</th>
+                  <th>Idempotent?</th>
+                  <th>Safe?</th>
+                  <th>Has Body?</th>
+                  <th>Example Use</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>GET</strong></td>
+                  <td>Read / fetch a resource</td>
+                  <td>✅ Yes</td>
+                  <td>✅ Yes</td>
+                  <td>No</td>
+                  <td>Fetch user profile</td>
+                </tr>
+                <tr>
+                  <td><strong>POST</strong></td>
+                  <td>Create a new resource</td>
+                  <td>❌ No</td>
+                  <td>❌ No</td>
+                  <td>Yes</td>
+                  <td>Submit a comment</td>
+                </tr>
+                <tr>
+                  <td><strong>PUT</strong></td>
+                  <td>Replace a resource entirely</td>
+                  <td>✅ Yes</td>
+                  <td>❌ No</td>
+                  <td>Yes</td>
+                  <td>Replace user profile</td>
+                </tr>
+                <tr>
+                  <td><strong>PATCH</strong></td>
+                  <td>Partially update a resource</td>
+                  <td>Depends</td>
+                  <td>❌ No</td>
+                  <td>Yes</td>
+                  <td>Update just the email field</td>
+                </tr>
+                <tr>
+                  <td><strong>DELETE</strong></td>
+                  <td>Remove a resource</td>
+                  <td>✅ Yes</td>
+                  <td>❌ No</td>
+                  <td>No</td>
+                  <td>Delete a post</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Why Idempotency Matters in System Design</div>
+              <div class="insight-box__text">
+                Networks fail. Retries happen. If your payment API uses POST for a charge and the
+                network drops after the server processes the request but before the client gets the
+                response, a naive retry creates a double charge. Safe, idempotent APIs (using PUT
+                with an idempotency key, or GET) make retries harmless. Always design critical
+                mutations with idempotency in mind.
+              </div>
+            </div>
+          </div>
+
+          <h3>HTTP Status Codes — The Server's Reply</h3>
+          <p>
+            The three-digit status code is the server's primary way of communicating outcome.
+            The first digit tells you the class. Memorise these — they come up in debugging and
+            in interviews constantly.
+          </p>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="HTTP status codes reference">
+              <thead>
+                <tr><th>Code</th><th>Name</th><th>What It Means</th><th>Interview Note</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>200</strong></td><td>OK</td><td>Request succeeded, body has the result</td><td>Default success for GET/PUT/PATCH</td></tr>
+                <tr><td><strong>201</strong></td><td>Created</td><td>New resource created; Location header has its URL</td><td>Use after POST that creates a resource</td></tr>
+                <tr><td><strong>204</strong></td><td>No Content</td><td>Success, but no body (nothing to return)</td><td>Use for DELETE success</td></tr>
+                <tr><td><strong>301</strong></td><td>Moved Permanently</td><td>URL has changed forever; browser caches this</td><td>Old domain redirect — browser never re-checks</td></tr>
+                <tr><td><strong>302</strong></td><td>Found (Temp Redirect)</td><td>URL has moved temporarily; browser does NOT cache</td><td>URL shorteners — preserves analytics</td></tr>
+                <tr><td><strong>400</strong></td><td>Bad Request</td><td>Client sent malformed data (missing field, wrong type)</td><td>Validation failure — client's fault</td></tr>
+                <tr><td><strong>401</strong></td><td>Unauthorized</td><td>Not authenticated — who are you?</td><td>Missing/invalid JWT or session token</td></tr>
+                <tr><td><strong>403</strong></td><td>Forbidden</td><td>Authenticated but not allowed — we know who you are, you just can't</td><td>RBAC / permission check failure</td></tr>
+                <tr><td><strong>404</strong></td><td>Not Found</td><td>Resource does not exist at this URL</td><td>Also used to hide existence of private resources</td></tr>
+                <tr><td><strong>409</strong></td><td>Conflict</td><td>Request conflicts with current server state</td><td>Duplicate username, optimistic locking failure</td></tr>
+                <tr><td><strong>429</strong></td><td>Too Many Requests</td><td>Rate limit exceeded; Retry-After header says when</td><td>Rate limiting — always design this for public APIs</td></tr>
+                <tr><td><strong>500</strong></td><td>Internal Server Error</td><td>Something broke on the server — not the client's fault</td><td>Unhandled exception; alert your on-call</td></tr>
+                <tr><td><strong>502</strong></td><td>Bad Gateway</td><td>Upstream server (your backend) returned an invalid response</td><td>Usually means your app server is down</td></tr>
+                <tr><td><strong>503</strong></td><td>Service Unavailable</td><td>Server is overloaded or in maintenance</td><td>Return this during graceful degradation</td></tr>
+                <tr><td><strong>504</strong></td><td>Gateway Timeout</td><td>Upstream server did not respond in time</td><td>Downstream service is slow — check timeouts</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>HTTP Headers — Metadata That Controls Everything</h3>
+          <p>
+            Headers are key-value pairs that travel with every request and response. They are invisible
+            to most users but control caching, authentication, content negotiation, and security.
+          </p>
+          <ul>
+            <li><strong>Content-Type:</strong> Tells the receiver what format the body is in.
+              <code>application/json</code>, <code>text/html</code>, <code>multipart/form-data</code>.
+              Without this, the receiver would have to guess.</li>
+            <li><strong>Authorization:</strong> Carries authentication credentials.
+              Typically <code>Bearer &lt;JWT-token&gt;</code> or <code>Basic &lt;base64&gt;</code>.
+              This is how every API authenticates requests.</li>
+            <li><strong>Cache-Control:</strong> Tells browsers and CDNs how long to cache the response.
+              <code>max-age=3600</code> = cache for 1 hour. <code>no-cache</code> = always revalidate.
+              <code>no-store</code> = never cache (for sensitive data).</li>
+            <li><strong>ETag:</strong> A unique fingerprint (hash) of the resource content. The server
+              sends this with a response. On the next request, the client sends
+              <code>If-None-Match: &lt;etag&gt;</code>. If the resource hasn't changed, the server
+              returns 304 Not Modified with no body — saving bandwidth.</li>
+          </ul>
+
+          <h3>HTTPS = HTTP + TLS</h3>
+          <p>
+            Plain HTTP sends everything as readable text — like sending a postcard. Anyone who can
+            intercept the network traffic (your ISP, a coffee shop WiFi operator) can read your
+            passwords. <strong>HTTPS</strong> wraps HTTP inside <strong>TLS (Transport Layer Security)</strong>
+            — like putting your postcard in a sealed, tamper-evident envelope that only the recipient
+            can open.
+          </p>
+          <p>The TLS handshake (simplified) works like this:</p>
+          <ol>
+            <li><strong>Client Hello:</strong> Browser says "I want to talk securely. Here are the
+              encryption algorithms I support."</li>
+            <li><strong>Server Hello + Certificate:</strong> Server picks an algorithm and sends its
+              SSL certificate (issued by a Certificate Authority like DigiCert, Let's Encrypt).</li>
+            <li><strong>Certificate Validation:</strong> Browser verifies the certificate was signed by
+              a trusted CA and matches the domain. If not, you see the scary "Not Secure" warning.</li>
+            <li><strong>Key Exchange:</strong> Browser and server use asymmetric cryptography (RSA or
+              ECDHE) to agree on a shared secret without sending it over the wire.</li>
+            <li><strong>Symmetric Encryption:</strong> All subsequent data is encrypted with that
+              shared secret using AES — fast symmetric encryption. Asymmetric was only used to
+              securely bootstrap the symmetric key.</li>
+          </ol>
+
+          <h3>HTTP/1.1 vs HTTP/2 vs HTTP/3</h3>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="HTTP version comparison">
+              <thead>
+                <tr><th>Feature</th><th>HTTP/1.1</th><th>HTTP/2</th><th>HTTP/3</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Transport</td>
+                  <td>TCP</td>
+                  <td>TCP</td>
+                  <td>QUIC (UDP-based)</td>
+                </tr>
+                <tr>
+                  <td>Multiplexing</td>
+                  <td>❌ One request at a time per connection (head-of-line blocking)</td>
+                  <td>✅ Multiple requests on one connection simultaneously</td>
+                  <td>✅ Per-stream multiplexing without TCP head-of-line blocking</td>
+                </tr>
+                <tr>
+                  <td>Header compression</td>
+                  <td>❌ None — headers repeat every request</td>
+                  <td>✅ HPACK — headers sent as binary, delta-encoded</td>
+                  <td>✅ QPACK (improved for QUIC)</td>
+                </tr>
+                <tr>
+                  <td>Connection setup</td>
+                  <td>TCP 3-way handshake + optional TLS (2 round trips)</td>
+                  <td>TCP 3-way handshake + TLS 1.3 (2 round trips)</td>
+                  <td>0-RTT or 1-RTT — connection + TLS in one step</td>
+                </tr>
+                <tr>
+                  <td>Server push</td>
+                  <td>❌ No</td>
+                  <td>✅ Server can proactively send resources</td>
+                  <td>✅ Yes (rarely used in practice)</td>
+                </tr>
+                <tr>
+                  <td>Adoption</td>
+                  <td>Universal legacy support</td>
+                  <td>~65% of websites</td>
+                  <td>~30% of websites (growing)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="insight-box insight-box--warning">
+            <div class="insight-box__icon">⚠️</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Interview Tip: HTTP/2 Matters for Microservices</div>
+              <div class="insight-box__text">
+                gRPC (Google's internal RPC framework used at scale) runs on HTTP/2 and gets
+                bidirectional streaming and multiplexing for free. When an interviewer asks
+                "why gRPC over REST?", one answer is: HTTP/2 multiplexing means a single connection
+                handles thousands of concurrent RPCs without head-of-line blocking.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 2: DNS
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="dns" aria-labelledby="dns-title">
+        <h2 class="content-section__title" id="dns-title">
+          <span class="content-section__title-icon" aria-hidden="true">📖</span>
+          DNS Resolution — Step by Step
+        </h2>
+        <div class="content-section__body">
+          <p>
+            <strong>DNS (Domain Name System)</strong> is the internet's phonebook. You know a person's
+            name (google.com), but computers need their phone number (IP address: 142.250.80.46) to
+            actually call them. DNS translates human-readable names into machine-readable IP addresses.
+          </p>
+          <p>
+            Without DNS, you would need to memorise <code>142.250.80.46</code> to visit Google.
+            With DNS, you type <code>google.com</code> and your computer figures out the IP
+            automatically — typically in 20–120ms for a cold lookup.
+          </p>
+
+          <h3>The 8-Step DNS Resolution Walk-through</h3>
+          <p>
+            When you type <code>api.github.com</code> in your browser for the first time (cold
+            start — no cache), here is exactly what happens:
+          </p>
+
+          <!-- DNS Diagram SVG -->
+          <div style="overflow-x:auto;margin:var(--space-6) 0">
+            <svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" aria-label="DNS resolution 8-step flow diagram" role="img" style="max-width:100%;height:auto;font-family:Inter,sans-serif">
+              <!-- Background -->
+              <rect width="760" height="420" fill="#0f172a" rx="12"/>
+
+              <!-- Nodes -->
+              <!-- Browser -->
+              <rect x="20" y="170" width="110" height="50" rx="8" fill="#1e40af" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="75" y="191" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Browser</text>
+              <text x="75" y="207" text-anchor="middle" fill="#94a3b8" font-size="9">Your machine</text>
+
+              <!-- OS Cache -->
+              <rect x="160" y="170" width="110" height="50" rx="8" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="215" y="191" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">OS Cache</text>
+              <text x="215" y="207" text-anchor="middle" fill="#94a3b8" font-size="9">/etc/hosts</text>
+
+              <!-- Recursive Resolver -->
+              <rect x="300" y="170" width="120" height="50" rx="8" fill="#7c2d12" stroke="#f97316" stroke-width="1.5"/>
+              <text x="360" y="188" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Recursive</text>
+              <text x="360" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Resolver</text>
+              <text x="360" y="214" text-anchor="middle" fill="#94a3b8" font-size="9">ISP DNS</text>
+
+              <!-- Root NS -->
+              <rect x="450" y="50" width="110" height="50" rx="8" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/>
+              <text x="505" y="71" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Root NS</text>
+              <text x="505" y="87" text-anchor="middle" fill="#94a3b8" font-size="9">13 root servers</text>
+
+              <!-- TLD NS -->
+              <rect x="450" y="185" width="110" height="50" rx="8" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+              <text x="505" y="206" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">TLD NS</text>
+              <text x="505" y="222" text-anchor="middle" fill="#94a3b8" font-size="9">.com, .org, .io</text>
+
+              <!-- Authoritative NS -->
+              <rect x="450" y="320" width="110" height="50" rx="8" fill="#1e3a5f" stroke="#60a5fa" stroke-width="1.5"/>
+              <text x="505" y="338" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Authoritative</text>
+              <text x="505" y="352" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">NS</text>
+              <text x="505" y="364" text-anchor="middle" fill="#94a3b8" font-size="9">github.com NS</text>
+
+              <!-- Step labels -->
+              <!-- 1: Browser → OS Cache -->
+              <line x1="130" y1="195" x2="160" y2="195" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <text x="145" y="187" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="700">①</text>
+
+              <!-- 2: OS Cache → Recursive (miss) -->
+              <line x1="270" y1="195" x2="300" y2="195" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <text x="285" y="187" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="700">②</text>
+
+              <!-- 3: Recursive → Root NS -->
+              <line x1="420" y1="185" x2="450" y2="95" stroke="#f97316" stroke-width="1.5"/>
+              <text x="430" y="140" fill="#f59e0b" font-size="9" font-weight="700">③</text>
+
+              <!-- 4: Root NS → Recursive (reply TLD) -->
+              <line x1="450" y1="80" x2="390" y2="185" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5,3"/>
+              <text x="408" y="120" fill="#a78bfa" font-size="9" font-weight="700">④ TLD addr</text>
+
+              <!-- 5: Recursive → TLD NS -->
+              <line x1="420" y1="200" x2="450" y2="205" stroke="#f97316" stroke-width="1.5"/>
+              <text x="433" y="196" fill="#f59e0b" font-size="9" font-weight="700">⑤</text>
+
+              <!-- 6: TLD NS → Recursive (reply auth NS) -->
+              <line x1="450" y1="220" x2="420" y2="215" stroke="#34d399" stroke-width="1.5" stroke-dasharray="5,3"/>
+              <text x="430" y="232" fill="#34d399" font-size="9" font-weight="700">⑥ Auth NS addr</text>
+
+              <!-- 7: Recursive → Auth NS -->
+              <line x1="420" y1="215" x2="450" y2="330" stroke="#f97316" stroke-width="1.5"/>
+              <text x="428" y="285" fill="#f59e0b" font-size="9" font-weight="700">⑦</text>
+
+              <!-- 8: Auth NS → Recursive → Browser (IP) -->
+              <line x1="450" y1="345" x2="380" y2="220" stroke="#60a5fa" stroke-width="2" stroke-dasharray="5,3"/>
+              <text x="390" y="300" fill="#60a5fa" font-size="9" font-weight="700">⑧ IP addr</text>
+
+              <!-- Response back to browser -->
+              <line x1="300" y1="205" x2="130" y2="205" stroke="#60a5fa" stroke-width="2" stroke-dasharray="5,3"/>
+              <text x="215" y="220" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="700">IP → browser</text>
+
+              <!-- Legend -->
+              <text x="20" y="390" fill="#94a3b8" font-size="9">→ Query</text>
+              <line x1="60" y1="388" x2="90" y2="388" stroke="#f97316" stroke-width="1.5"/>
+              <text x="100" y="390" fill="#94a3b8" font-size="9">→ Response</text>
+              <line x1="148" y1="388" x2="178" y2="388" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="5,3"/>
+              <text x="188" y="390" fill="#94a3b8" font-size="9">Dashed = cached result returned early</text>
+
+              <!-- Title -->
+              <text x="380" y="25" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="700">DNS Resolution — 8-Step Flow</text>
+            </svg>
+          </div>
+
+          <p>Breaking down each step:</p>
+          <ol>
+            <li><strong>Browser Cache:</strong> Chrome/Firefox maintain their own DNS cache.
+              If you visited github.com in the last few hours, the IP is cached here. Cache hit = done instantly.</li>
+            <li><strong>OS Cache (/etc/hosts):</strong> The OS checks its local DNS cache and the
+              <code>/etc/hosts</code> file. This is how developers point <code>localhost</code> to
+              <code>127.0.0.1</code>.</li>
+            <li><strong>Recursive Resolver:</strong> On a cache miss, your device asks your ISP's
+              recursive resolver (or Google's 8.8.8.8 / Cloudflare's 1.1.1.1). This resolver does
+              the heavy lifting on your behalf.</li>
+            <li><strong>Root Nameserver:</strong> The recursive resolver asks one of the 13 root
+              nameservers (operated by ICANN, Verisign, etc.). The root server doesn't know the
+              IP — but it knows who handles <code>.com</code> domains. It replies with the TLD
+              nameserver address.</li>
+            <li><strong>TLD Nameserver:</strong> The resolver asks the <code>.com</code> TLD server.
+              It knows who is authoritative for <code>github.com</code> and returns that nameserver's
+              address.</li>
+            <li><strong>Authoritative Nameserver:</strong> The resolver asks GitHub's own nameserver.
+              This is the source of truth — it has the actual A record mapping
+              <code>api.github.com → 140.82.121.6</code>.</li>
+            <li><strong>Response to Resolver:</strong> Authoritative NS returns the IP with a TTL
+              (Time To Live). The resolver caches this for TTL seconds.</li>
+            <li><strong>Response to Browser:</strong> Resolver returns the IP to your browser, which
+              now opens a TCP connection to that IP on port 443 (HTTPS).</li>
+          </ol>
+
+          <h3>DNS Record Types</h3>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="DNS record types">
+              <thead>
+                <tr><th>Record</th><th>Maps</th><th>Example</th><th>System Design Use</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>A</strong></td><td>Domain → IPv4</td><td><code>api.github.com → 140.82.121.6</code></td><td>Standard web traffic routing</td></tr>
+                <tr><td><strong>AAAA</strong></td><td>Domain → IPv6</td><td><code>google.com → 2607:f8b0::200e</code></td><td>IPv6 support for modern networks</td></tr>
+                <tr><td><strong>CNAME</strong></td><td>Domain → Domain (alias)</td><td><code>www.github.com → github.com</code></td><td>CDN mapping: your domain → CDN domain</td></tr>
+                <tr><td><strong>MX</strong></td><td>Domain → Mail server</td><td><code>github.com → aspmx.l.google.com</code></td><td>Email infrastructure routing</td></tr>
+                <tr><td><strong>TXT</strong></td><td>Domain → Text string</td><td><code>github.com → "v=spf1 include:..."</code></td><td>Domain ownership verification (SSL certs, Google)</td></tr>
+                <tr><td><strong>NS</strong></td><td>Domain → Nameserver</td><td><code>github.com NS → ns1.p16.dynect.net</code></td><td>Delegation — who is authoritative for this domain</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>TTL, Caching, and Why DNS Changes Take Time</h3>
+          <p>
+            Every DNS record has a <strong>TTL (Time To Live)</strong> — a number in seconds that
+            tells every resolver how long to cache the answer. If <code>api.stripe.com</code>
+            has a TTL of 300 seconds (5 minutes), then for 5 minutes after resolution, every
+            resolver in the world that has cached it will serve the old IP without re-querying.
+          </p>
+          <p>
+            This is why changing DNS takes time: even after you update your A record, the old
+            record is cached everywhere until TTL expires. For critical migrations, engineers
+            lower the TTL to 60 seconds a few days before the change, perform the change, then
+            raise it back to 3600 after traffic has shifted.
+          </p>
+
+          <h3>GeoDNS — Route Users to the Nearest Datacenter</h3>
+          <p>
+            GeoDNS (also called latency-based routing) returns different IP addresses based on
+            where the DNS query originated. If a user in India queries <code>api.netflix.com</code>,
+            the authoritative nameserver returns the IP of the Mumbai datacenter instead of the
+            US datacenter. This reduces latency from ~200ms to ~15ms. AWS Route 53's latency-based
+            routing and Cloudflare's Anycast both use this principle.
+          </p>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon">🎯</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Interview Takeaway: DNS + Load Balancer Together</div>
+              <div class="insight-box__text">
+                In real systems, the DNS A record points to a load balancer IP, not individual server
+                IPs. The load balancer then distributes traffic. This gives you geo-routing at the
+                DNS level AND granular health-check routing at the load balancer level — two layers
+                of intelligent traffic management.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 3: TCP vs UDP
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="tcp-udp" aria-labelledby="tcp-udp-title">
+        <h2 class="content-section__title" id="tcp-udp-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          TCP vs UDP
+        </h2>
+        <div class="content-section__body">
+          <p>
+            At the transport layer, every internet communication uses one of two protocols: TCP or UDP.
+            The choice affects reliability, latency, and complexity of your system.
+          </p>
+
+          <h3>TCP — The Reliable, Careful Protocol</h3>
+          <p>
+            Think of TCP like a certified postal service. Before sending anything, sender and receiver
+            perform a handshake to establish the connection. Every packet sent is acknowledged; if an
+            ack doesn't arrive, the packet is retransmitted. Packets are delivered <em>in order</em>
+            — if packet 5 arrives before packet 4, TCP buffers packet 5 until packet 4 arrives.
+            This is what <strong>connection-oriented, reliable, ordered</strong> delivery means.
+          </p>
+
+          <p><strong>TCP 3-Way Handshake</strong> (establishing a connection):</p>
+          <ol>
+            <li><strong>SYN:</strong> Client sends a SYN (synchronize) packet. "I want to connect. My starting sequence number is X."</li>
+            <li><strong>SYN-ACK:</strong> Server replies with SYN-ACK. "Acknowledged your X. My starting sequence number is Y."</li>
+            <li><strong>ACK:</strong> Client sends ACK. "Acknowledged your Y. Connection established."</li>
+          </ol>
+          <p>
+            This handshake takes 1 full round-trip before any data is sent. For a client in New York
+            connecting to a server in London (100ms RTT), you lose 100ms just establishing the
+            connection — before a single byte of HTTP data flows. This is why connection pooling
+            and HTTP keep-alive matter at scale.
+          </p>
+
+          <p>
+            TCP also implements <strong>flow control</strong> (receiver tells sender how much buffer
+            space it has, preventing overflow) and <strong>congestion control</strong> (sender slows
+            down if the network is congested, preventing packet storms).
+          </p>
+
+          <h3>UDP — The Fast, Unreliable Protocol</h3>
+          <p>
+            UDP is like dropping a postcard in a mailbox. You don't know if it arrived. You don't
+            know if it arrived in the right order. There is no handshake. This makes UDP much faster
+            (no setup cost, no retransmission overhead) but you get no guarantees.
+          </p>
+          <p>
+            For many applications, this tradeoff is exactly right: if you are streaming video and
+            frame 1000 is lost, you don't want to pause playback to retransmit it — you'd rather
+            skip it and show frame 1001. A slightly degraded video is better than a frozen one.
+          </p>
+
+          <h3>TCP vs UDP Comparison</h3>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="TCP vs UDP comparison">
+              <thead>
+                <tr><th>Property</th><th>TCP</th><th>UDP</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Connection</td><td>Connection-oriented (3-way handshake)</td><td>Connectionless (fire-and-forget)</td></tr>
+                <tr><td>Reliability</td><td>✅ Guaranteed delivery, retransmits lost packets</td><td>❌ Best-effort, packets may be dropped</td></tr>
+                <tr><td>Ordering</td><td>✅ Guaranteed in-order delivery</td><td>❌ Packets may arrive out of order</td></tr>
+                <tr><td>Speed</td><td>Slower — overhead of ACKs, handshake, retransmission</td><td>Faster — minimal overhead</td></tr>
+                <tr><td>Header size</td><td>20–60 bytes</td><td>8 bytes</td></tr>
+                <tr><td>Flow control</td><td>✅ Yes (receiver window)</td><td>❌ No</td></tr>
+                <tr><td>Congestion control</td><td>✅ Yes (CUBIC, BBR)</td><td>❌ No (application must implement)</td></tr>
+                <tr><td>Use when</td><td>Data integrity matters: HTTP, email, file transfer, databases, SSH</td><td>Speed matters: video streams, gaming, DNS, VoIP, WebRTC</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Java Code: Simple TCP Server/Client</h3>
+          <p>
+            The clearest way to understand TCP's connection model is to see it in code. The
+            <code>ServerSocket.accept()</code> call blocks until a client connects — this is the
+            TCP handshake completing. Only after that can you read/write data.
+          </p>
+
+          <pre><code class="language-java">// TCP Server — listens for one client, echoes what it receives
+import java.io.*;
+import java.net.*;
+
+public class TcpEchoServer {
+
+    private static final int PORT = 8080;
+    private static final int MAX_BUFFER_BYTES = 1024;
+
+    public static void main(String[] args) throws IOException {
+        // ServerSocket binds to port 8080 — OS queues incoming connections
+        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+            System.out.println("[Server] Listening on port " + PORT);
+
+            // accept() BLOCKS until a client completes the TCP 3-way handshake
+            // Each call returns one connected Socket — spawn a thread per client in prod
+            try (Socket clientSocket = serverSocket.accept()) {
+                System.out.println("[Server] Client connected: "
+                    + clientSocket.getInetAddress());
+
+                BufferedReader inputReader = new BufferedReader(
+                    new InputStreamReader(clientSocket.getInputStream()));
+                PrintWriter outputWriter = new PrintWriter(
+                    clientSocket.getOutputStream(), true /* autoFlush */);
+
+                String receivedLine;
+                // Read lines until client closes connection (null return = EOF)
+                while ((receivedLine = inputReader.readLine()) != null) {
+                    System.out.println("[Server] Received: " + receivedLine);
+                    outputWriter.println("ECHO: " + receivedLine); // write back
+                }
+            }
+        } // ServerSocket auto-closes — OS releases port binding
+    }
+}
+
+// TCP Client — connects to server, sends a message, reads the echo
+public class TcpEchoClient {
+
+    private static final String SERVER_HOST = "localhost";
+    private static final int SERVER_PORT = 8080;
+
+    public static void main(String[] args) throws IOException {
+        // new Socket() triggers the TCP 3-way handshake immediately
+        // Throws ConnectException if server is not running
+        try (Socket socket = new Socket(SERVER_HOST, SERVER_PORT)) {
+            System.out.println("[Client] Connected to " + SERVER_HOST + ":" + SERVER_PORT);
+
+            PrintWriter outputWriter = new PrintWriter(
+                socket.getOutputStream(), true);
+            BufferedReader inputReader = new BufferedReader(
+                new InputStreamReader(socket.getInputStream()));
+
+            outputWriter.println("Hello, TCP Server!"); // send data
+            String serverReply = inputReader.readLine(); // wait for echo
+            System.out.println("[Client] Server replied: " + serverReply);
+        } // Socket auto-closes — sends TCP FIN to begin 4-way teardown
+    }
+}</code></pre>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Real-World: HTTP/3 Uses UDP via QUIC</div>
+              <div class="insight-box__text">
+                Google invented QUIC (now standardized as HTTP/3) to get the best of both worlds:
+                reliability and ordering (like TCP) with lower latency (like UDP). QUIC implements
+                its own reliability layer on top of UDP at the application level, plus it combines
+                the TLS handshake with the connection setup into a single round-trip. It also avoids
+                TCP's head-of-line blocking: if packet 5 is lost, only stream 5 is blocked, not all streams.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 4: 3-TIER ARCHITECTURE
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="architecture" aria-labelledby="arch-title">
+        <h2 class="content-section__title" id="arch-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          Client-Server &amp; 3-Tier Architecture
+        </h2>
+        <div class="content-section__body">
+          <p>
+            <strong>Client-server</strong> is the foundational model of the internet: one party
+            (the client) makes requests, and another party (the server) fulfils them. The server
+            is stateless by default — it does not remember previous client interactions unless it
+            explicitly stores state (in a session or database).
+          </p>
+          <p>
+            As systems grow, the single "server" becomes multiple layers, each with a distinct
+            responsibility. This separation is what "N-tier architecture" means.
+          </p>
+
+          <!-- Architecture Diagram SVG -->
+          <div style="overflow-x:auto;margin:var(--space-6) 0">
+            <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" aria-label="1-tier vs 2-tier vs 3-tier vs microservices architecture diagram" role="img" style="max-width:100%;height:auto;font-family:Inter,sans-serif">
+              <rect width="760" height="340" fill="#0f172a" rx="12"/>
+
+              <!-- Labels row -->
+              <text x="85" y="24" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700">1-TIER</text>
+              <text x="245" y="24" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700">2-TIER</text>
+              <text x="430" y="24" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700">3-TIER</text>
+              <text x="645" y="24" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700">MICROSERVICES</text>
+
+              <!-- Dividers -->
+              <line x1="170" y1="10" x2="170" y2="330" stroke="#1e293b" stroke-width="1"/>
+              <line x1="340" y1="10" x2="340" y2="330" stroke="#1e293b" stroke-width="1"/>
+              <line x1="530" y1="10" x2="530" y2="330" stroke="#1e293b" stroke-width="1"/>
+
+              <!-- 1-TIER: single box -->
+              <rect x="30" y="110" width="110" height="110" rx="8" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+              <text x="85" y="155" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">All-in-One</text>
+              <text x="85" y="170" text-anchor="middle" fill="#94a3b8" font-size="9">UI + Logic + DB</text>
+              <text x="85" y="185" text-anchor="middle" fill="#64748b" font-size="9">Desktop app</text>
+              <text x="85" y="200" text-anchor="middle" fill="#64748b" font-size="9">e.g. Notepad</text>
+
+              <!-- 2-TIER -->
+              <rect x="185" y="80" width="110" height="50" rx="8" fill="#1e40af" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="240" y="103" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Client App</text>
+              <text x="240" y="117" text-anchor="middle" fill="#94a3b8" font-size="9">UI + Logic</text>
+              <line x1="240" y1="130" x2="240" y2="160" stroke="#475569" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <rect x="185" y="160" width="110" height="50" rx="8" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="240" y="183" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Database</text>
+              <text x="240" y="197" text-anchor="middle" fill="#94a3b8" font-size="9">Direct connection</text>
+              <text x="240" y="245" text-anchor="middle" fill="#64748b" font-size="9">e.g. MS Access app</text>
+
+              <!-- 3-TIER -->
+              <rect x="365" y="50" width="110" height="40" rx="8" fill="#1e40af" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="420" y="66" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Presentation</text>
+              <text x="420" y="80" text-anchor="middle" fill="#94a3b8" font-size="9">Browser / Mobile</text>
+              <line x1="420" y1="90" x2="420" y2="115" stroke="#475569" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <rect x="365" y="115" width="110" height="40" rx="8" fill="#7c2d12" stroke="#f97316" stroke-width="1.5"/>
+              <text x="420" y="131" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Application</text>
+              <text x="420" y="145" text-anchor="middle" fill="#94a3b8" font-size="9">API servers</text>
+              <line x1="420" y1="155" x2="420" y2="180" stroke="#475569" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <rect x="365" y="180" width="110" height="40" rx="8" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="420" y="196" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Data</text>
+              <text x="420" y="210" text-anchor="middle" fill="#94a3b8" font-size="9">DB + Cache</text>
+              <text x="420" y="255" text-anchor="middle" fill="#64748b" font-size="9">e.g. Twitter, Uber</text>
+
+              <!-- Microservices -->
+              <rect x="545" y="40" width="80" height="35" rx="6" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/>
+              <text x="585" y="62" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">User Service</text>
+              <rect x="645" y="40" width="80" height="35" rx="6" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/>
+              <text x="685" y="62" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Auth Service</text>
+              <rect x="545" y="100" width="80" height="35" rx="6" fill="#7c2d12" stroke="#f97316" stroke-width="1.5"/>
+              <text x="585" y="122" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Order Service</text>
+              <rect x="645" y="100" width="80" height="35" rx="6" fill="#7c2d12" stroke="#f97316" stroke-width="1.5"/>
+              <text x="685" y="122" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Payment Svc</text>
+              <rect x="545" y="160" width="80" height="35" rx="6" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+              <text x="585" y="182" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">User DB</text>
+              <rect x="645" y="160" width="80" height="35" rx="6" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+              <text x="685" y="182" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Order DB</text>
+              <text x="635" y="255" text-anchor="middle" fill="#64748b" font-size="9">e.g. Netflix, Amazon</text>
+
+              <!-- API Gateway arrow for microservices -->
+              <rect x="585" y="210" width="90" height="28" rx="6" fill="#1e293b" stroke="#60a5fa" stroke-width="1.5"/>
+              <text x="630" y="228" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="600">API Gateway</text>
+              <line x1="630" y1="238" x2="630" y2="295" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <rect x="590" y="295" width="80" height="28" rx="6" fill="#1e40af" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="630" y="313" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Browser/App</text>
+            </svg>
+          </div>
+
+          <h3>Why 3-Tier? Separation of Concerns</h3>
+          <ul>
+            <li><strong>Presentation layer</strong> (browser, mobile app): Renders UI. Knows nothing
+              about how data is stored. You can rebuild the entire frontend without touching the backend.</li>
+            <li><strong>Application layer</strong> (API servers): Contains business logic — authentication,
+              validation, orchestration. Horizontally scalable: add more API servers when traffic grows.
+              Stateless by design so any server can handle any request.</li>
+            <li><strong>Data layer</strong> (database, cache): Persistent storage. This is the hardest
+              to scale and the most critical to protect. The separation prevents the application layer
+              from being a bottleneck to data access patterns.</li>
+          </ul>
+
+          <h3>When to Use Microservices</h3>
+          <p>
+            Microservices split each business domain into its own independently deployable service
+            with its own database. The benefits: independent scaling (scale the payment service without
+            scaling user service), independent deployments (ship features faster), fault isolation
+            (a crash in recommendations doesn't crash checkout). The costs: distributed system
+            complexity, network latency between services, harder debugging, eventual consistency
+            challenges.
+          </p>
+          <p>
+            <strong>Start with a monolith. Extract services when you feel the pain.</strong>
+            Amazon, Netflix, and Uber all started as monoliths and extracted microservices when
+            specific components needed independent scaling.
+          </p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 5: LOAD BALANCERS
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="load-balancers" aria-labelledby="lb-title">
+        <h2 class="content-section__title" id="lb-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Load Balancers — L4 vs L7
+        </h2>
+        <div class="content-section__body">
+          <p>
+            A <strong>load balancer</strong> is a traffic cop sitting in front of your servers.
+            When 100,000 requests arrive per second and you have 10 servers, the load balancer
+            decides which server handles which request. Without a load balancer, all 100,000
+            requests would hit server #1, which would collapse under the load while servers
+            #2–#10 sit idle.
+          </p>
+          <p>
+            Load balancers operate at different layers of the network stack. The two most important
+            for system design are <strong>Layer 4 (Transport)</strong> and
+            <strong>Layer 7 (Application)</strong>.
+          </p>
+
+          <!-- L4 vs L7 SVG Diagram -->
+          <div style="overflow-x:auto;margin:var(--space-6) 0">
+            <svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" aria-label="L4 vs L7 load balancer comparison diagram" role="img" style="max-width:100%;height:auto;font-family:Inter,sans-serif">
+              <rect width="760" height="300" fill="#0f172a" rx="12"/>
+
+              <!-- Title -->
+              <text x="380" y="25" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="700">L4 vs L7 Load Balancer Routing</text>
+
+              <!-- L4 Side (left) -->
+              <text x="185" y="55" text-anchor="middle" fill="#f97316" font-size="12" font-weight="700">L4 — Transport Layer</text>
+              <text x="185" y="70" text-anchor="middle" fill="#94a3b8" font-size="10">Routes by IP:Port only</text>
+
+              <!-- Client -->
+              <rect x="20" y="120" width="70" height="40" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+              <text x="55" y="144" text-anchor="middle" fill="#e2e8f0" font-size="10">Client</text>
+
+              <!-- L4 LB -->
+              <rect x="120" y="110" width="80" height="60" rx="8" fill="#7c2d12" stroke="#f97316" stroke-width="2"/>
+              <text x="160" y="137" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">L4 LB</text>
+              <text x="160" y="151" text-anchor="middle" fill="#94a3b8" font-size="9">IP + Port</text>
+              <text x="160" y="163" text-anchor="middle" fill="#64748b" font-size="8">can't see URL</text>
+
+              <!-- Servers L4 -->
+              <rect x="240" y="90" width="70" height="35" rx="6" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="275" y="112" text-anchor="middle" fill="#e2e8f0" font-size="10">Server 1</text>
+              <rect x="240" y="135" width="70" height="35" rx="6" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="275" y="157" text-anchor="middle" fill="#e2e8f0" font-size="10">Server 2</text>
+              <rect x="240" y="180" width="70" height="35" rx="6" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="275" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10">Server 3</text>
+
+              <!-- L4 arrows -->
+              <line x1="90" y1="140" x2="120" y2="140" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowGrey)"/>
+              <line x1="200" y1="127" x2="240" y2="107" stroke="#22c55e" stroke-width="1.5"/>
+              <line x1="200" y1="140" x2="240" y2="152" stroke="#22c55e" stroke-width="1.5"/>
+              <line x1="200" y1="153" x2="240" y2="197" stroke="#22c55e" stroke-width="1.5"/>
+
+              <!-- L4 label: all servers identical -->
+              <text x="275" y="250" text-anchor="middle" fill="#94a3b8" font-size="9">All servers identical</text>
+              <text x="275" y="263" text-anchor="middle" fill="#64748b" font-size="9">Round-robin routing</text>
+
+              <!-- Divider -->
+              <line x1="380" y1="40" x2="380" y2="290" stroke="#1e293b" stroke-width="2"/>
+
+              <!-- L7 Side (right) -->
+              <text x="565" y="55" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="700">L7 — Application Layer</text>
+              <text x="565" y="70" text-anchor="middle" fill="#94a3b8" font-size="10">Routes by URL, headers, cookies</text>
+
+              <!-- Client L7 -->
+              <rect x="400" y="120" width="70" height="40" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+              <text x="435" y="144" text-anchor="middle" fill="#e2e8f0" font-size="10">Client</text>
+
+              <!-- L7 LB -->
+              <rect x="495" y="105" width="85" height="70" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+              <text x="537" y="130" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">L7 LB</text>
+              <text x="537" y="145" text-anchor="middle" fill="#94a3b8" font-size="9">Reads HTTP</text>
+              <text x="537" y="158" text-anchor="middle" fill="#64748b" font-size="8">URL/headers/cookies</text>
+              <text x="537" y="169" text-anchor="middle" fill="#64748b" font-size="8">SSL termination</text>
+
+              <!-- Servers L7 with different purposes -->
+              <rect x="615" y="80" width="90" height="35" rx="6" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/>
+              <text x="660" y="97" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">API Cluster</text>
+              <text x="660" y="109" text-anchor="middle" fill="#94a3b8" font-size="8">/api/* → here</text>
+              <rect x="615" y="130" width="90" height="35" rx="6" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="660" y="147" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Image Cluster</text>
+              <text x="660" y="159" text-anchor="middle" fill="#94a3b8" font-size="8">/images/* → here</text>
+              <rect x="615" y="180" width="90" height="35" rx="6" fill="#7c2d12" stroke="#f97316" stroke-width="1.5"/>
+              <text x="660" y="197" text-anchor="middle" fill="#e2e8f0" font-size="9" font-weight="600">Legacy Cluster</text>
+              <text x="660" y="209" text-anchor="middle" fill="#94a3b8" font-size="8">/api/v1/* → here</text>
+
+              <!-- L7 arrows -->
+              <line x1="470" y1="140" x2="495" y2="140" stroke="#475569" stroke-width="1.5"/>
+              <line x1="580" y1="120" x2="615" y2="97" stroke="#a78bfa" stroke-width="1.5"/>
+              <line x1="580" y1="140" x2="615" y2="147" stroke="#22c55e" stroke-width="1.5"/>
+              <line x1="580" y1="155" x2="615" y2="197" stroke="#f97316" stroke-width="1.5"/>
+
+              <text x="660" y="250" text-anchor="middle" fill="#94a3b8" font-size="9">Specialized clusters</text>
+              <text x="660" y="263" text-anchor="middle" fill="#64748b" font-size="9">Content-aware routing</text>
+
+              <!-- Arrow marker -->
+              <defs>
+                <marker id="arrowGrey" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L8,3 z" fill="#475569"/>
+                </marker>
+              </defs>
+            </svg>
+          </div>
+
+          <h3>L4 Load Balancer — Transport Layer</h3>
+          <p>
+            An L4 load balancer operates at the <strong>TCP/UDP layer</strong>. It sees only IP
+            addresses and port numbers — it cannot read HTTP headers, URLs, or cookies. It is
+            essentially a very fast TCP proxy that forwards packets to backend servers.
+          </p>
+          <p>
+            Because it does not parse application-level data, it is <em>extremely fast</em> with
+            very low latency overhead. It is ideal for high-throughput, non-HTTP protocols:
+            database connections, SMTP, game servers. <strong>Examples:</strong> AWS Network Load
+            Balancer (NLB), HAProxy in TCP mode.
+          </p>
+
+          <h3>L7 Load Balancer — Application Layer</h3>
+          <p>
+            An L7 load balancer terminates the TCP/TLS connection, reads the full HTTP request
+            (URL path, headers, cookies, body), makes a routing decision, then opens a new
+            connection to the backend. This gives it powerful capabilities:
+          </p>
+          <ul>
+            <li><strong>URL-based routing:</strong> Send <code>/api/*</code> to the API cluster and
+              <code>/static/*</code> to the CDN or object store cluster.</li>
+            <li><strong>Header-based routing:</strong> Route requests with
+              <code>X-Version: v2</code> header to the v2 service — useful for canary deployments
+              and A/B testing.</li>
+            <li><strong>SSL termination:</strong> Decrypt HTTPS at the load balancer so backend
+              servers handle plain HTTP internally — simpler certificate management and faster
+              backend processing.</li>
+            <li><strong>Sticky sessions:</strong> Use the session cookie to route a specific user
+              to the same backend server — needed for legacy stateful apps.</li>
+            <li><strong>Content-based routing:</strong> Route to different clusters based on
+              Accept-Language header for geo-localized content.</li>
+          </ul>
+          <p><strong>Examples:</strong> AWS Application Load Balancer (ALB), Nginx, Traefik, HAProxy in HTTP mode.</p>
+
+          <h3>Load Balancing Algorithms</h3>
+          <ul>
+            <li><strong>Round-robin:</strong> Server 1, Server 2, Server 3, Server 1, … Equal distribution, ignores server load.</li>
+            <li><strong>Weighted round-robin:</strong> Server 1 gets 50% of traffic, Servers 2 and 3 get 25% each. Useful when servers have different capacities.</li>
+            <li><strong>Least connections:</strong> Send each new request to the server with the fewest active connections. Better than round-robin when requests have variable processing times.</li>
+            <li><strong>IP hash:</strong> Hash the client's IP address and mod by the number of servers. The same client always hits the same server. Provides sticky sessions without cookies.</li>
+            <li><strong>Random:</strong> Pick a server randomly. Surprisingly effective with enough servers (law of large numbers).</li>
+          </ul>
+
+          <h3>Health Checks — How Load Balancers Know a Server is Down</h3>
+          <p>
+            Every load balancer periodically sends a health check request to each backend server
+            (e.g., <code>GET /health</code> every 10 seconds). If a server fails to respond with
+            200 within the timeout (say, 5 seconds) for 3 consecutive checks, the load balancer
+            marks it as unhealthy and stops routing traffic to it. When it recovers and passes
+            health checks, it is added back automatically. This is the mechanism behind zero-downtime
+            deployments.
+          </p>
+
+          <h3>L4 vs L7 Trade-off Table</h3>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="L4 vs L7 load balancer comparison">
+              <thead>
+                <tr><th>Dimension</th><th>L4 Load Balancer</th><th>L7 Load Balancer</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>OSI Layer</td><td>Layer 4 — Transport (TCP/UDP)</td><td>Layer 7 — Application (HTTP/HTTPS)</td></tr>
+                <tr><td>Latency</td><td>✅ Very low — no HTTP parsing</td><td>❌ Slightly higher — parses full request</td></tr>
+                <tr><td>SSL termination</td><td>❌ Pass-through only (TCP proxy)</td><td>✅ Yes — decrypt at LB, HTTP to backends</td></tr>
+                <tr><td>URL routing</td><td>❌ Cannot — no HTTP awareness</td><td>✅ Yes — full path, header, cookie routing</td></tr>
+                <tr><td>Protocol support</td><td>✅ Any TCP/UDP protocol</td><td>HTTP/HTTPS only</td></tr>
+                <tr><td>Cost (AWS)</td><td>✅ Lower (NLB)</td><td>❌ Higher (ALB)</td></tr>
+                <tr><td>A/B testing</td><td>❌ No</td><td>✅ Yes (header/cookie based)</td></tr>
+                <tr><td>Best for</td><td>Databases, SMTP, game servers, extreme throughput</td><td>Web traffic, APIs, microservices, CDN routing</td></tr>
+                <tr><td>Examples</td><td>AWS NLB, HAProxy TCP mode</td><td>AWS ALB, Nginx, Traefik, HAProxy HTTP mode</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon">🎯</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Interview Answer: Which Load Balancer?</div>
+              <div class="insight-box__text">
+                When asked "what load balancer would you use?" in a system design, the safe default
+                is L7 for web/API traffic. Justify it: "I'd use an L7 load balancer (like AWS ALB)
+                because it lets me route <code>/api/*</code> to the application cluster and
+                <code>/static/*</code> to S3/CloudFront, handle SSL termination in one place, and
+                implement health checks at the HTTP level. If I needed to load-balance raw TCP
+                connections to a database cluster or needed sub-millisecond overhead, I'd use L4."
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 6: PORTS & PROTOCOLS
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="ports" aria-labelledby="ports-title">
+        <h2 class="content-section__title" id="ports-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          Ports &amp; Protocols Quick Reference
+        </h2>
+        <div class="content-section__body">
+          <p>
+            A <strong>port</strong> is a number (0–65535) that identifies which application on a
+            server should receive a packet. Think of an IP address as the building address and the
+            port as the apartment number. When your browser connects to
+            <code>https://github.com</code>, it connects to IP 140.82.121.4 on port 443 —
+            the HTTPS apartment.
+          </p>
+          <p>
+            Ports 0–1023 are "well-known ports" reserved for standard protocols. Ports 1024–49151
+            are registered (like Redis on 6379). Ports 49152–65535 are ephemeral — the OS assigns
+            them dynamically to client connections.
+          </p>
+
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="Common ports and protocols reference">
+              <thead>
+                <tr><th>Port</th><th>Protocol</th><th>Layer</th><th>Use In System Design</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>22</strong></td><td>SSH</td><td>App (TCP)</td><td>Secure server access, tunnels, SCP file transfer</td></tr>
+                <tr><td><strong>80</strong></td><td>HTTP</td><td>App (TCP)</td><td>Unencrypted web traffic; redirect to 443 in production</td></tr>
+                <tr><td><strong>443</strong></td><td>HTTPS</td><td>App (TCP/TLS)</td><td>All production web traffic; SSL terminated here</td></tr>
+                <tr><td><strong>3306</strong></td><td>MySQL</td><td>App (TCP)</td><td>MySQL database connections from app servers</td></tr>
+                <tr><td><strong>5432</strong></td><td>PostgreSQL</td><td>App (TCP)</td><td>Postgres connections; never expose to public internet</td></tr>
+                <tr><td><strong>6379</strong></td><td>Redis</td><td>App (TCP)</td><td>Cache and pub/sub; requires auth + VPC isolation</td></tr>
+                <tr><td><strong>9092</strong></td><td>Kafka</td><td>App (TCP)</td><td>Kafka broker connections from producers/consumers</td></tr>
+                <tr><td><strong>27017</strong></td><td>MongoDB</td><td>App (TCP)</td><td>MongoDB connections; use 27018 for replicas</td></tr>
+                <tr><td><strong>2181</strong></td><td>ZooKeeper</td><td>App (TCP)</td><td>Kafka coordinator, service discovery (being replaced)</td></tr>
+                <tr><td><strong>53</strong></td><td>DNS</td><td>App (UDP/TCP)</td><td>DNS queries — UDP for small, TCP for large responses</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>The OSI Model — Simplified to What Matters</h3>
+          <p>
+            The OSI model has 7 layers but for system design interviews, you need to understand
+            4 practical layers and how they compose:
+          </p>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="OSI model simplified">
+              <thead>
+                <tr><th>Practical Layer</th><th>OSI Layers</th><th>Protocols</th><th>What It Does</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Application</strong></td>
+                  <td>5, 6, 7</td>
+                  <td>HTTP, HTTPS, DNS, SMTP, gRPC, WebSocket</td>
+                  <td>The protocol your application speaks. What you build on.</td>
+                </tr>
+                <tr>
+                  <td><strong>Transport</strong></td>
+                  <td>4</td>
+                  <td>TCP, UDP</td>
+                  <td>End-to-end data delivery. Reliability (TCP) vs speed (UDP). Ports live here.</td>
+                </tr>
+                <tr>
+                  <td><strong>Network</strong></td>
+                  <td>3</td>
+                  <td>IP, ICMP</td>
+                  <td>Routing packets across networks. IP addresses live here. Routers operate here.</td>
+                </tr>
+                <tr>
+                  <td><strong>Link + Physical</strong></td>
+                  <td>1, 2</td>
+                  <td>Ethernet, WiFi, Fiber</td>
+                  <td>Moving bits over physical media. MAC addresses. You rarely interact with this.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="insight-box insight-box--warning">
+            <div class="insight-box__icon">⚠️</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Security: Never Expose Database Ports to the Internet</div>
+              <div class="insight-box__text">
+                In production, database ports (3306, 5432, 6379, 27017) must only be accessible
+                within a private VPC subnet. Only your application servers (in the app layer subnet)
+                should be able to connect to the database. Load balancers expose only port 443 to
+                the internet. This is enforced with security groups / firewall rules. Any architecture
+                that exposes a database port to <code>0.0.0.0/0</code> is a critical vulnerability.
+              </div>
+            </div>
+          </div>
+
+          <h3>Interview Takeaways for Each Topic</h3>
+          <div class="tradeoff-table__container">
+            <table class="tradeoff-table" aria-label="Interview expectations for networking topics">
+              <thead>
+                <tr><th>Topic</th><th>What Interviewers Expect You to Know</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>HTTP/HTTPS</strong></td>
+                  <td>Stateless request-response. When to use GET vs POST vs PUT vs PATCH. What 4xx vs 5xx means. How TLS establishes encrypted sessions. HTTP/2 multiplexing for gRPC.</td>
+                </tr>
+                <tr>
+                  <td><strong>DNS</strong></td>
+                  <td>Browser → recursive resolver → root → TLD → authoritative resolution chain. TTL and why DNS changes are slow. GeoDNS for multi-region routing. CNAME for CDN mapping.</td>
+                </tr>
+                <tr>
+                  <td><strong>TCP vs UDP</strong></td>
+                  <td>TCP = reliable, ordered, slower (HTTP, databases, email). UDP = unreliable, fast (gaming, video, DNS, WebRTC). 3-way handshake adds 1 RTT overhead. QUIC is UDP with reliability built in.</td>
+                </tr>
+                <tr>
+                  <td><strong>Architecture tiers</strong></td>
+                  <td>3-tier is the default model: presentation + application + data. Application layer must be stateless for horizontal scaling. Microservices = tradeoff between independent scaling and operational complexity.</td>
+                </tr>
+                <tr>
+                  <td><strong>Load balancers</strong></td>
+                  <td>L7 (AWS ALB) for web/API — URL routing, SSL termination, health checks. L4 (AWS NLB) for non-HTTP, extreme throughput. Algorithms: round-robin for simplicity, least connections for variable load. Health checks enable zero-downtime deployments.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SECTION 7: QUIZ
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-section-title">
+        <h2 class="content-section__title" id="quiz-section-title">
+          <span class="content-section__title-icon" aria-hidden="true">✅</span>
+          Knowledge Check
+        </h2>
+
+        <div class="quiz" data-quiz-id="module-00b-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title">
+              <span aria-hidden="true">🧠</span> Networking Fundamentals Quiz
+            </div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 5</div>
+            <div class="quiz__question-text">An HTTP 302 redirect is returned when a user visits bit.ly/xyz. Which browser behavior correctly describes what happens next?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+
+          <!-- Question data — hidden, consumed by shared.js quiz engine -->
+          <div data-question="An HTTP 302 redirect is returned when a user visits bit.ly/xyz. Which browser behavior correctly describes what happens next?"
+               data-options='["The browser displays a 302 error page","The browser sends a new GET request to the Location header URL, and caches this redirect permanently","The browser sends a new GET request to the Location header URL, but does NOT cache this redirect permanently","The browser retries the same URL up to 3 times"]'
+               data-correct="2"
+               data-explanation="302 Found is a temporary redirect. The browser follows the Location header with a new GET request but does NOT cache it — so future requests to the short URL still hit the server (important for analytics). A 301 would be cached by the browser, breaking analytics."
+               style="display:none"></div>
+
+          <div data-question="You are designing a multiplayer game that sends 60 position updates per second from each client. Which transport protocol should you use and why?"
+               data-options='["TCP — because it guarantees reliable delivery of all 60 updates per second","UDP — because the overhead of TCP reliability mechanisms would add unacceptable latency, and a slightly stale position is better than a delayed one","HTTP — because it works over TCP and is the standard protocol for web applications","WebSocket — because it provides full-duplex communication unlike TCP"]'
+               data-correct="1"
+               data-explanation="UDP is correct. For real-time games, a position update that arrives 50ms late is useless — you would rather render the last good position and receive the next one. TCP retransmission on loss would stall the stream. UDP is used by Quake, Counter-Strike, and most real-time games."
+               style="display:none"></div>
+
+          <div data-question="An L7 load balancer is receiving requests. Which of the following routing decisions can ONLY be made by an L7 load balancer and NOT by an L4 load balancer?"
+               data-options='["Route traffic to the least-loaded server","Route requests to /api/v2/* to the v2 service cluster and /api/v1/* to the v1 cluster","Route traffic based on the client IP address","Distribute traffic in a round-robin pattern across servers"]'
+               data-correct="1"
+               data-explanation="URL path-based routing requires inspecting the HTTP request content — only possible at Layer 7. An L4 load balancer sees only IP addresses and ports, not HTTP paths. URL routing, header-based routing, and cookie-based sticky sessions all require L7."
+               style="display:none"></div>
+
+          <div data-question="A user types 'google.com' in their browser for the first time (cold start, no cache). In what order does DNS resolution proceed?"
+               data-options='["Recursive resolver → Root NS → TLD NS → Authoritative NS → browser","Browser cache → OS cache → Recursive resolver → Root NS → TLD NS → Authoritative NS","Root NS → TLD NS → Authoritative NS → Recursive resolver → browser cache","OS cache → Browser cache → ISP DNS → Root NS → Authoritative NS"]'
+               data-correct="1"
+               data-explanation="DNS resolution goes: browser cache (miss) → OS /etc/hosts + local resolver cache (miss) → recursive resolver (your ISP DNS) → root nameserver (knows which NS handles .com) → TLD nameserver (knows which NS handles google.com) → authoritative nameserver (returns the A record IP). Each step caches the result for the TTL duration."
+               style="display:none"></div>
+
+          <div data-question="You are designing a system where clients connect and maintain state across multiple requests (e.g., a shopping cart in a session). HTTP is stateless by default. What is the correct approach to maintain session state?"
+               data-options='["Use HTTP PUT instead of GET — PUT is stateful by design","Store session data server-side (Redis) keyed by a session ID stored in a cookie, OR use JWTs in the Authorization header that carry self-contained state","HTTP/2 is stateful — upgrade to HTTP/2 to solve this","Use a dedicated stateful protocol like FTP instead of HTTP"]'
+               data-correct="1"
+               data-explanation="HTTP is stateless by design — each request is independent. State is maintained externally: (1) Server-side sessions: generate a session ID, store data in Redis, send session ID as cookie. (2) Client-side tokens: JWT contains encoded state (user ID, roles) — signed so it cannot be tampered with. JWT is stateless on the server."
+               style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button" aria-label="Next question">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../01-fundamentals/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Navigation -->
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="../00-framework/index.html" class="btn btn--outline">← Module 00: Framework</a>
+        <a href="../01-fundamentals/index.html" class="btn btn--primary">Module 01: Fundamentals →</a>
+      </div>
+
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 00-B</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

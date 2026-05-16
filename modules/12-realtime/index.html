@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master real-time communication for MAANG system design: Short Polling, Long Polling, Server-Sent Events, and WebSocket — with trade-offs, Java code, and scaling patterns.">
+  <title>Real-time Communication: WebSocket, SSE, Long Polling — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/12-realtime/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#why-realtime" class="module-toc__link">Why Real-time Matters</a></li>
+          <li><a href="#short-polling" class="module-toc__link">Short Polling</a></li>
+          <li><a href="#long-polling" class="module-toc__link">Long Polling</a></li>
+          <li><a href="#sse" class="module-toc__link">Server-Sent Events</a></li>
+          <li><a href="#websocket" class="module-toc__link">WebSocket</a></li>
+          <li><a href="#comparison" class="module-toc__link">Comparison Table</a></li>
+          <li><a href="#scaling" class="module-toc__link">Scaling Real-time Systems</a></li>
+          <li><a href="#decision" class="module-toc__link">Decision Framework</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-12" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 12</span>
+        </nav>
+        <div class="module-header__number">Module 12</div>
+        <h1 class="module-header__title">Real-time Communication</h1>
+        <p class="module-header__desc">HTTP is request-response — the server cannot push without being asked. This module covers the four real-time techniques interviewers expect you to compare: Short Polling, Long Polling, Server-Sent Events, and WebSocket — with Java implementations and the Redis Pub/Sub scaling pattern.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <!-- ── SECTION 1: Why Real-time ── -->
+      <section id="why-realtime" class="content-section">
+        <h2>Why Real-time Communication Is a System Design Staple</h2>
+        <p>Standard HTTP is pull-based: the client asks, the server answers, the connection closes. This works for loading a webpage or fetching a user profile. It breaks down the moment the server needs to push data to the client without being explicitly asked.</p>
+
+        <table class="trade-off-table">
+          <caption>Use Cases That Require Server Push</caption>
+          <thead>
+            <tr><th>Use Case</th><th>What makes it real-time</th><th>Best technique</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Live chat (WhatsApp, Slack)</td><td>Messages arrive without the recipient clicking refresh</td><td>WebSocket</td></tr>
+            <tr><td>Live sports scores</td><td>Scores update every 30s, 1M simultaneous viewers</td><td>SSE</td></tr>
+            <tr><td>Collaborative editing (Google Docs)</td><td>Both sides send and receive keystrokes in real time</td><td>WebSocket</td></tr>
+            <tr><td>Notification bell</td><td>Server pushes badge count on events like new messages</td><td>SSE or Long Polling</td></tr>
+            <tr><td>Stock price ticker</td><td>Price changes pushed every second to subscribed clients</td><td>SSE or WebSocket</td></tr>
+            <tr><td>Multiplayer game state</td><td>Each player's moves must appear on all others' screens instantly</td><td>WebSocket</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ── SECTION 2: Short Polling ── -->
+      <section id="short-polling" class="content-section">
+        <h2>Option 1: Short Polling</h2>
+        <p>The client sends an HTTP request on a fixed timer (every N seconds). The server responds immediately with whatever is available — even if that is an empty "no updates" response.</p>
+
+        <figure class="diagram-container" aria-label="Short polling sequence diagram">
+          <svg viewBox="0 0 560 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Short polling request-response timeline">
+            <title>Short Polling: Periodic Requests</title>
+            <!-- Timeline labels -->
+            <text x="80" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Client</text>
+            <text x="480" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Server</text>
+            <line x1="80" y1="30" x2="80" y2="175" stroke="#3b82f6" stroke-width="1.5"/>
+            <line x1="480" y1="30" x2="480" y2="175" stroke="#3b82f6" stroke-width="1.5"/>
+            <!-- Request 1 -->
+            <line x1="80" y1="50" x2="480" y2="50" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="280" y="45" text-anchor="middle" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">GET /updates (t=0)</text>
+            <line x1="480" y1="65" x2="80" y2="65" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-grey)"/>
+            <text x="280" y="61" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif">200 OK — no updates (empty)</text>
+            <!-- Wait label -->
+            <text x="80" y="90" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">wait N sec</text>
+            <!-- Request 2 -->
+            <line x1="80" y1="105" x2="480" y2="105" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="280" y="100" text-anchor="middle" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">GET /updates (t=N)</text>
+            <line x1="480" y1="120" x2="80" y2="120" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="280" y="116" text-anchor="middle" fill="#f59e0b" font-size="10" font-family="Inter,sans-serif">200 OK — { event: "score_update" }</text>
+            <!-- Request 3 -->
+            <line x1="80" y1="150" x2="480" y2="150" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="280" y="145" text-anchor="middle" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">GET /updates (t=2N)</text>
+            <!-- Arrow defs -->
+            <defs>
+              <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#22c55e"/>
+              </marker>
+              <marker id="arrow-grey" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+              </marker>
+              <marker id="arrow-yellow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/>
+              </marker>
+              <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/>
+              </marker>
+            </defs>
+          </svg>
+          <figcaption>Short Polling: client requests on a fixed timer. Empty responses are sent when nothing has changed.</figcaption>
+        </figure>
+
+        <table class="trade-off-table">
+          <caption>Short Polling Trade-offs</caption>
+          <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+          <tbody>
+            <tr><td>Trivially simple — any HTTP client works</td><td>Latency up to N seconds before client sees an update</td></tr>
+            <tr><td>Stateless — any server handles any request</td><td>Constant request load even when no updates exist</td></tr>
+            <tr><td>Works through all proxies and firewalls</td><td>Wasted bandwidth on empty responses</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>When to use:</strong> Updates that happen less often than every 30 seconds (e.g., "check for new email every minute"). The simplicity justifies the inefficiency at low update frequency.</p>
+
+        <pre><code class="language-java">// ── Short Polling — Spring REST endpoint ─────────────────────────
+@RestController
+@RequestMapping("/api/v1")
+public class ShortPollingController {
+
+    private final UpdateStore updateStore; // injected — holds pending updates
+
+    public ShortPollingController(UpdateStore updateStore) {
+        this.updateStore = updateStore;
+    }
+
+    /**
+     * Client calls this every N seconds.
+     * Returns immediately with whatever updates are available (possibly empty).
+     */
+    @GetMapping("/updates")
+    public ResponseEntity&lt;List&lt;UpdateEvent&gt;&gt; getUpdates(
+            @RequestParam String userId,
+            @RequestParam long sinceTimestamp) {
+        List&lt;UpdateEvent&gt; updates = updateStore.getUpdatesSince(userId, sinceTimestamp);
+        return ResponseEntity.ok(updates); // empty list = no updates, client retries
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 3: Long Polling ── -->
+      <section id="long-polling" class="content-section">
+        <h2>Option 2: Long Polling (Comet)</h2>
+        <p>The client sends an HTTP request, but the server holds the connection open — blocking until either an update is available or a timeout (typically 30 seconds) expires. On response (or timeout), the client immediately re-issues the request.</p>
+
+        <div class="insight-box">
+          <strong>The critical insight:</strong> Long polling simulates server push using HTTP. The server holds the thread (or async context) open instead of responding immediately. This works through firewalls because it looks like a slow HTTP response, not a persistent connection.
+        </div>
+
+        <table class="trade-off-table">
+          <caption>Long Polling Trade-offs</caption>
+          <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+          <tbody>
+            <tr><td>Near-real-time: client gets update within one RTT of it being available</td><td>Server holds threads/async contexts — resource intensive at scale</td></tr>
+            <tr><td>Works through most firewalls and proxies</td><td>Reconnect latency after each response (one RTT gap)</td></tr>
+            <tr><td>Compatible with HTTP/1.1 — no protocol upgrade required</td><td>Complex reconnection and timeout handling logic on the client</td></tr>
+            <tr><td>Good fallback when WebSocket is blocked by corporate proxies</td><td>Each request still carries full HTTP headers (overhead)</td></tr>
+          </tbody>
+        </table>
+
+        <pre><code class="language-java">// ── Long Polling — Spring async endpoint ─────────────────────────
+@RestController
+@RequestMapping("/api/v1")
+public class LongPollingController {
+
+    private static final long TIMEOUT_MS = 30_000; // 30-second server timeout
+
+    private final UpdateStore updateStore;
+
+    public LongPollingController(UpdateStore updateStore) {
+        this.updateStore = updateStore;
+    }
+
+    /**
+     * Server holds the request open until an update is available or TIMEOUT_MS passes.
+     * Uses DeferredResult so the Tomcat thread is NOT blocked — this scales to
+     * thousands of concurrent connections without exhausting the thread pool.
+     *
+     * Why DeferredResult over CompletableFuture? DeferredResult integrates directly
+     * with Spring MVC's async processing and handles timeout natively.
+     */
+    @GetMapping("/updates/long-poll")
+    public DeferredResult&lt;ResponseEntity&lt;UpdateEvent&gt;&gt; longPoll(
+            @RequestParam String userId,
+            @RequestParam long sinceTimestamp) {
+
+        DeferredResult&lt;ResponseEntity&lt;UpdateEvent&gt;&gt; deferredResult =
+            new DeferredResult&lt;&gt;(TIMEOUT_MS);
+
+        // On timeout: return 204 No Content — client immediately re-polls
+        deferredResult.onTimeout(() -&gt;
+            deferredResult.setResult(ResponseEntity.noContent().build()));
+
+        // Register the deferred result — update store notifies it when data arrives
+        updateStore.subscribe(userId, sinceTimestamp, updateEvent -&gt; {
+            deferredResult.setResult(ResponseEntity.ok(updateEvent));
+        });
+
+        return deferredResult;
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 4: SSE ── -->
+      <section id="sse" class="content-section">
+        <h2>Option 3: Server-Sent Events (SSE)</h2>
+        <p>A single long-lived HTTP connection where the server continuously streams events as <code>text/event-stream</code>. The browser has a built-in <code>EventSource</code> API. Unlike WebSocket, SSE is <strong>unidirectional</strong> — server to client only.</p>
+
+        <figure class="diagram-container" aria-label="SSE connection lifecycle diagram">
+          <svg viewBox="0 0 560 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SSE persistent connection with multiple events">
+            <title>Server-Sent Events: One Connection, Multiple Server-Pushed Events</title>
+            <text x="80" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Client</text>
+            <text x="480" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Server</text>
+            <line x1="80" y1="30" x2="80" y2="200" stroke="#3b82f6" stroke-width="1.5"/>
+            <line x1="480" y1="30" x2="480" y2="200" stroke="#3b82f6" stroke-width="1.5"/>
+            <!-- Connection open -->
+            <line x1="80" y1="50" x2="480" y2="50" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="280" y="45" text-anchor="middle" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">GET /events  Accept: text/event-stream</text>
+            <!-- Connection held open indicator -->
+            <rect x="460" y="55" width="40" height="140" rx="3" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3,2"/>
+            <text x="480" y="130" text-anchor="middle" fill="#64748b" font-size="8" font-family="Inter,sans-serif" transform="rotate(-90 480 130)">connection held open</text>
+            <!-- Event 1 -->
+            <line x1="460" y1="75" x2="80" y2="75" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="270" y="70" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">id: 1\ndata: {"score": "2-1"}</text>
+            <!-- Event 2 -->
+            <line x1="460" y1="110" x2="80" y2="110" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="270" y="105" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">id: 2\ndata: {"score": "3-1"}</text>
+            <!-- Event 3 -->
+            <line x1="460" y1="145" x2="80" y2="145" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="270" y="140" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">id: 3\ndata: {"score": "3-2"}</text>
+            <!-- Reconnect -->
+            <text x="80" y="175" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">network blip</text>
+            <line x1="80" y1="185" x2="480" y2="185" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow-green)"/>
+            <text x="280" y="200" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">auto-reconnect: Last-Event-ID: 3</text>
+          </svg>
+          <figcaption>SSE: one persistent connection; server streams events. On reconnect, EventSource sends Last-Event-ID so the server can replay missed events.</figcaption>
+        </figure>
+
+        <table class="trade-off-table">
+          <caption>SSE Trade-offs</caption>
+          <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+          <tbody>
+            <tr><td>Simpler than WebSocket — standard HTTP, no protocol upgrade</td><td>Unidirectional: server → client only; client must use separate POST for sends</td></tr>
+            <tr><td>Built-in auto-reconnect with Last-Event-ID replay</td><td>Text only (UTF-8) — no binary frames</td></tr>
+            <tr><td>HTTP/2 multiplexes many SSE streams over one TCP connection</td><td>HTTP/1.1 browsers: max 6 concurrent SSE connections per domain</td></tr>
+            <tr><td>Works through most proxies (standard HTTP GET)</td><td>Some corporate proxies buffer response bodies, breaking streaming</td></tr>
+          </tbody>
+        </table>
+
+        <pre><code class="language-java">// ── SSE — Spring endpoint using SseEmitter ────────────────────────
+@RestController
+@RequestMapping("/api/v1")
+public class SseController {
+
+    private static final long SSE_TIMEOUT_MS = 5 * 60 * 1000L; // 5 minutes
+
+    private final ScoreUpdatePublisher scoreUpdatePublisher;
+
+    public SseController(ScoreUpdatePublisher scoreUpdatePublisher) {
+        this.scoreUpdatePublisher = scoreUpdatePublisher;
+    }
+
+    /**
+     * Opens an SSE stream. The SseEmitter is registered with the publisher,
+     * which calls emitter.send() whenever a score update is available.
+     *
+     * SseEmitter vs WebFlux Flux: SseEmitter is simpler for servlet-based apps.
+     * If using Spring WebFlux, return Flux&lt;ServerSentEvent&gt; instead.
+     */
+    @GetMapping(value = "/scores/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamScores(@RequestParam String matchId) {
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+
+        emitter.onCompletion(() -&gt; scoreUpdatePublisher.removeEmitter(matchId, emitter));
+        emitter.onTimeout(()    -&gt; scoreUpdatePublisher.removeEmitter(matchId, emitter));
+        emitter.onError(error  -&gt; scoreUpdatePublisher.removeEmitter(matchId, emitter));
+
+        scoreUpdatePublisher.addEmitter(matchId, emitter);
+        return emitter;
+    }
+}
+
+// ── ScoreUpdatePublisher.java ─────────────────────────────────────
+@Component
+public class ScoreUpdatePublisher {
+
+    /** matchId → list of active emitters for that match */
+    private final Map&lt;String, List&lt;SseEmitter&gt;&gt; emitters = new ConcurrentHashMap&lt;&gt;();
+    private final AtomicLong eventIdCounter = new AtomicLong(0);
+
+    public void addEmitter(String matchId, SseEmitter emitter) {
+        emitters.computeIfAbsent(matchId, key -&gt; new CopyOnWriteArrayList&lt;&gt;()).add(emitter);
+    }
+
+    public void removeEmitter(String matchId, SseEmitter emitter) {
+        List&lt;SseEmitter&gt; matchEmitters = emitters.get(matchId);
+        if (matchEmitters != null) {
+            matchEmitters.remove(emitter);
+        }
+    }
+
+    /**
+     * Called when a score update arrives (e.g., from a Kafka consumer).
+     * Broadcasts to all clients watching this match.
+     * Removes dead emitters (client disconnected) silently.
+     */
+    public void publishScoreUpdate(String matchId, ScoreUpdate update) {
+        List&lt;SseEmitter&gt; matchEmitters = emitters.getOrDefault(matchId, List.of());
+        long eventId = eventIdCounter.incrementAndGet();
+
+        matchEmitters.forEach(emitter -&gt; {
+            try {
+                emitter.send(SseEmitter.event()
+                    .id(String.valueOf(eventId))
+                    .name("score-update")
+                    .data(update)
+                    .reconnectTime(3000)); // tell client to retry in 3s if disconnected
+            } catch (IOException sendError) {
+                removeEmitter(matchId, emitter); // dead connection — remove silently
+            }
+        });
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 5: WebSocket ── -->
+      <section id="websocket" class="content-section">
+        <h2>Option 4: WebSocket</h2>
+        <p>A persistent, full-duplex TCP connection established via an HTTP upgrade handshake (101 Switching Protocols). After the handshake, both client and server can send frames at any time — binary or text — with minimal per-message overhead (just framing bits, no HTTP headers).</p>
+
+        <figure class="diagram-container" aria-label="WebSocket handshake and message flow diagram">
+          <svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WebSocket upgrade handshake then bidirectional frames">
+            <title>WebSocket: HTTP Upgrade then Bidirectional Frames</title>
+            <text x="80" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Client</text>
+            <text x="480" y="20" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600" font-family="Inter,sans-serif">Server</text>
+            <line x1="80" y1="30" x2="80" y2="215" stroke="#3b82f6" stroke-width="1.5"/>
+            <line x1="480" y1="30" x2="480" y2="215" stroke="#3b82f6" stroke-width="1.5"/>
+            <!-- Handshake -->
+            <line x1="80" y1="48" x2="480" y2="48" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="280" y="43" text-anchor="middle" fill="#22c55e" font-size="9" font-family="JetBrains Mono,monospace">GET /ws  Upgrade: websocket</text>
+            <line x1="480" y1="65" x2="80" y2="65" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="280" y="61" text-anchor="middle" fill="#3b82f6" font-size="9" font-family="JetBrains Mono,monospace">101 Switching Protocols</text>
+            <!-- Persistent connection box -->
+            <rect x="85" y="72" width="390" height="125" rx="4" fill="#0f172a" stroke="#22c55e" stroke-width="1" stroke-dasharray="4,2"/>
+            <text x="280" y="86" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">Full-duplex TCP connection — frames fly both ways simultaneously</text>
+            <!-- Frames -->
+            <line x1="95" y1="100" x2="465" y2="100" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="280" y="95" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">→ TEXT: {"type":"msg","to":"B","body":"hi"}</text>
+            <line x1="465" y1="118" x2="95" y2="118" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-yellow)"/>
+            <text x="280" y="114" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">← TEXT: {"type":"msg","from":"B","body":"hey"}</text>
+            <line x1="95" y1="140" x2="465" y2="140" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-grey)"/>
+            <text x="280" y="135" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">→ PING frame</text>
+            <line x1="465" y1="157" x2="95" y2="157" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-grey)"/>
+            <text x="280" y="153" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">← PONG frame</text>
+            <line x1="95" y1="188" x2="465" y2="188" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+            <text x="280" y="183" text-anchor="middle" fill="#ef4444" font-size="9" font-family="JetBrains Mono,monospace">→ CLOSE frame (code: 1000 normal)</text>
+            <defs>
+              <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+              </marker>
+            </defs>
+          </svg>
+          <figcaption>WebSocket: HTTP upgrade to TCP full-duplex. After 101, both sides send frames independently with no headers per message.</figcaption>
+        </figure>
+
+        <table class="trade-off-table">
+          <caption>WebSocket Trade-offs</caption>
+          <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+          <tbody>
+            <tr><td>Lowest latency — no request overhead between messages</td><td>Stateful: server must track each connection (hard to scale horizontally)</td></tr>
+            <tr><td>Full-duplex — client and server both initiate messages</td><td>Does not work through all corporate proxies (not standard HTTP)</td></tr>
+            <tr><td>Binary and text frames — efficient for game state, media</td><td>No built-in reconnection — client must implement reconnect logic</td></tr>
+            <tr><td>No per-message HTTP header overhead after handshake</td><td>Requires sticky sessions or Redis Pub/Sub for horizontal scaling</td></tr>
+          </tbody>
+        </table>
+
+        <pre><code class="language-java">// ── WebSocket Server — Spring @ServerEndpoint (JSR-356) ───────────
+@ServerEndpoint(value = "/ws/chat/{userId}")
+@Component
+public class ChatWebSocketEndpoint {
+
+    // Thread-safe map: userId → session. Must be static so all endpoint
+    // instances (one per connection) share the same registry.
+    private static final Map&lt;String, Session&gt; activeSessions = new ConcurrentHashMap&lt;&gt;();
+
+    @OnOpen
+    public void onOpen(Session session, @PathParam("userId") String userId) {
+        activeSessions.put(userId, session);
+        System.out.println("[WebSocket] User connected: " + userId
+            + " | Total connections: " + activeSessions.size());
+    }
+
+    @OnMessage
+    public void onMessage(String messageJson, @PathParam("userId") String senderId) {
+        ChatMessage message = parseMessage(messageJson);
+        deliverToRecipient(senderId, message);
+    }
+
+    @OnClose
+    public void onClose(@PathParam("userId") String userId, CloseReason reason) {
+        activeSessions.remove(userId);
+        System.out.println("[WebSocket] User disconnected: " + userId
+            + " | Reason: " + reason.getReasonPhrase());
+    }
+
+    @OnError
+    public void onError(@PathParam("userId") String userId, Throwable error) {
+        System.err.println("[WebSocket] Error for user " + userId + ": " + error.getMessage());
+        activeSessions.remove(userId);
+    }
+
+    private void deliverToRecipient(String senderId, ChatMessage message) {
+        Session recipientSession = activeSessions.get(message.getRecipientId());
+        if (recipientSession != null &amp;&amp; recipientSession.isOpen()) {
+            try {
+                recipientSession.getBasicRemote().sendText(message.toJson());
+            } catch (IOException deliveryError) {
+                System.err.println("[WebSocket] Failed to deliver to "
+                    + message.getRecipientId() + ": " + deliveryError.getMessage());
+            }
+        } else {
+            // Recipient not connected — store for later delivery (offline inbox)
+            messageStore.saveOfflineMessage(message.getRecipientId(), message);
+        }
+    }
+
+    private ChatMessage parseMessage(String json) {
+        // JSON deserialization omitted for brevity — use Jackson ObjectMapper
+        return new ChatMessage(json);
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 6: Comparison Table ── -->
+      <section id="comparison" class="content-section">
+        <h2>Full Comparison: All Four Techniques</h2>
+
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table trade-off-table">
+            <caption>Real-time Communication Techniques — Complete Comparison</caption>
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>Short Polling</th>
+                <th>Long Polling</th>
+                <th>SSE</th>
+                <th>WebSocket</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Protocol</strong></td>
+                <td>HTTP/1.1+</td>
+                <td>HTTP/1.1+</td>
+                <td>HTTP/1.1+ (best with HTTP/2)</td>
+                <td>WS / WSS (upgrade from HTTP)</td>
+              </tr>
+              <tr>
+                <td><strong>Direction</strong></td>
+                <td>Client → Server (pull)</td>
+                <td>Client → Server (pull, held open)</td>
+                <td>Server → Client only</td>
+                <td>Full-duplex (both directions)</td>
+              </tr>
+              <tr>
+                <td><strong>Latency</strong></td>
+                <td>Up to N seconds</td>
+                <td>~1 RTT after update available</td>
+                <td>~1 RTT (sub-second)</td>
+                <td>Lowest — no request overhead</td>
+              </tr>
+              <tr>
+                <td><strong>Connection overhead</strong></td>
+                <td>New connection each poll</td>
+                <td>New connection per poll cycle</td>
+                <td>One persistent connection</td>
+                <td>One persistent connection</td>
+              </tr>
+              <tr>
+                <td><strong>Binary support</strong></td>
+                <td>Yes (Content-Type: binary)</td>
+                <td>Yes</td>
+                <td>No — text/UTF-8 only</td>
+                <td>Yes — text and binary frames</td>
+              </tr>
+              <tr>
+                <td><strong>Proxy / firewall friendly</strong></td>
+                <td>Yes — standard HTTP</td>
+                <td>Yes — looks like slow HTTP</td>
+                <td>Mostly yes — some proxies buffer</td>
+                <td>No — corporate proxies often block WS</td>
+              </tr>
+              <tr>
+                <td><strong>Auto-reconnect</strong></td>
+                <td>N/A (client retries on timer)</td>
+                <td>Client re-issues request manually</td>
+                <td>Yes — EventSource built-in</td>
+                <td>No — must implement in client code</td>
+              </tr>
+              <tr>
+                <td><strong>Scaling difficulty</strong></td>
+                <td>Easy — stateless, any server</td>
+                <td>Medium — held connections, async</td>
+                <td>Medium — stateful connections</td>
+                <td>Hard — sticky sessions or pub/sub</td>
+              </tr>
+              <tr>
+                <td><strong>Best for</strong></td>
+                <td>Infrequent updates (&gt;30s interval)</td>
+                <td>Fallback when WS/SSE blocked</td>
+                <td>Live dashboards, notifications, feeds</td>
+                <td>Chat, games, collaborative editing</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── SECTION 7: Scaling ── -->
+      <section id="scaling" class="content-section">
+        <h2>Scaling Real-time Systems — The Hard Part</h2>
+        <p>Short polling and long polling are stateless — any server handles any request. SSE and WebSocket are <strong>stateful</strong>: a user's connection is pinned to one server instance. This creates a fundamental fan-out problem when you scale horizontally.</p>
+
+        <p><strong>The problem:</strong> User A is connected to Server 1. User B is connected to Server 3. User A sends a message to User B. Server 1 does not have User B's WebSocket connection. How does Server 3 know to push the message to User B?</p>
+
+        <figure class="diagram-container" aria-label="Redis Pub/Sub fan-out architecture for WebSocket scaling">
+          <svg viewBox="0 0 640 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WebSocket scaling via Redis Pub/Sub">
+            <title>WebSocket Horizontal Scaling via Redis Pub/Sub</title>
+            <!-- Client A -->
+            <rect x="10" y="90" width="90" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="55" y="115" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Client A</text>
+            <!-- Server 1 -->
+            <rect x="140" y="70" width="110" height="70" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="195" y="98" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Server 1</text>
+            <text x="195" y="115" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">WS: Client A</text>
+            <text x="195" y="130" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">WS: Client C</text>
+            <!-- Redis -->
+            <rect x="280" y="85" width="80" height="50" rx="6" fill="#451a03" stroke="#f59e0b" stroke-width="2"/>
+            <text x="320" y="107" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Redis</text>
+            <text x="320" y="123" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace">Pub/Sub</text>
+            <!-- Server 2 -->
+            <rect x="400" y="70" width="110" height="70" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="455" y="98" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Server 2</text>
+            <text x="455" y="115" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">WS: Client B</text>
+            <text x="455" y="130" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">WS: Client D</text>
+            <!-- Client B -->
+            <rect x="540" y="90" width="90" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="585" y="115" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Client B</text>
+            <!-- Arrows -->
+            <line x1="100" y1="110" x2="140" y2="110" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+            <text x="120" y="104" text-anchor="middle" fill="#3b82f6" font-size="8" font-family="Inter,sans-serif">msg to B</text>
+            <line x1="250" y1="110" x2="280" y2="110" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow-yellow)"/>
+            <text x="265" y="104" text-anchor="middle" fill="#f59e0b" font-size="8" font-family="Inter,sans-serif">PUBLISH</text>
+            <line x1="360" y1="110" x2="400" y2="110" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow-yellow)"/>
+            <text x="380" y="104" text-anchor="middle" fill="#f59e0b" font-size="8" font-family="Inter,sans-serif">SUBSCRIBE</text>
+            <line x1="510" y1="110" x2="540" y2="110" stroke="#22c55e" stroke-width="2" marker-end="url(#arrow-green)"/>
+            <text x="525" y="104" text-anchor="middle" fill="#22c55e" font-size="8" font-family="Inter,sans-serif">push</text>
+            <!-- Step labels -->
+            <text x="120" y="155" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">① message arrives</text>
+            <text x="265" y="155" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">② Server 1 publishes</text>
+            <text x="380" y="155" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">③ all servers receive</text>
+            <text x="525" y="155" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">④ Server 2 pushes</text>
+          </svg>
+          <figcaption>Redis Pub/Sub enables fan-out across stateful WebSocket servers. Server 1 publishes to Redis; all servers (including Server 2) receive and push to their connected clients.</figcaption>
+        </figure>
+
+        <pre><code class="language-java">// ── Redis Pub/Sub WebSocket fan-out (Spring + Lettuce) ───────────
+
+// ── WebSocketMessageRouter.java — publishes to Redis ─────────────
+@Component
+public class WebSocketMessageRouter {
+
+    private static final String CHANNEL_PREFIX = "ws:messages:";
+
+    private final RedisTemplate&lt;String, String&gt; redisTemplate;
+
+    public WebSocketMessageRouter(RedisTemplate&lt;String, String&gt; redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * Called when a WebSocket message arrives on this server.
+     * Publishes to Redis so ALL server instances receive it.
+     * The current server also receives its own publish (via subscription).
+     */
+    public void route(ChatMessage message) {
+        String channel = CHANNEL_PREFIX + message.getRecipientId();
+        redisTemplate.convertAndSend(channel, message.toJson());
+    }
+}
+
+// ── RedisMessageListener.java — receives from Redis, pushes to WS ──
+@Component
+public class RedisWebSocketListener implements MessageListener {
+
+    private final WebSocketSessionRegistry sessionRegistry;
+
+    public RedisWebSocketListener(WebSocketSessionRegistry sessionRegistry) {
+        this.sessionRegistry = sessionRegistry;
+    }
+
+    /**
+     * Every server instance subscribes to ALL user channels.
+     * When a message arrives, only the server that has the recipient's
+     * WebSocket session actually pushes it — others discard silently.
+     */
+    @Override
+    public void onMessage(Message redisMessage, byte[] pattern) {
+        String messageJson = new String(redisMessage.getBody());
+        ChatMessage message = ChatMessage.fromJson(messageJson);
+
+        Session recipientSession = sessionRegistry.getSession(message.getRecipientId());
+        if (recipientSession != null &amp;&amp; recipientSession.isOpen()) {
+            try {
+                recipientSession.getBasicRemote().sendText(messageJson);
+            } catch (IOException deliveryError) {
+                System.err.println("[Redis→WS] Failed to deliver: " + deliveryError.getMessage());
+            }
+        }
+        // else: not connected to this server — another server will deliver
+    }
+}</code></pre>
+
+        <div class="insight-box">
+          <strong>Sticky sessions as an alternative:</strong> Configure the load balancer to route all requests from a given client to the same server (IP hash or cookie-based affinity). Simpler, but no failover — if the server goes down, all its connections are lost and clients must reconnect to a different server. Redis Pub/Sub handles server failures gracefully since any server can serve any client.
+        </div>
+      </section>
+
+      <!-- ── SECTION 8: Decision Framework ── -->
+      <section id="decision" class="content-section">
+        <h2>Decision Framework: Which to Choose</h2>
+
+        <figure class="diagram-container" aria-label="Real-time technology decision tree">
+          <svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Decision tree for choosing real-time communication technique">
+            <title>Decision Tree: Choosing a Real-time Communication Technique</title>
+            <!-- Root -->
+            <rect x="220" y="10" width="160" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="300" y="35" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Need real-time?</text>
+            <!-- Bidirectional? -->
+            <rect x="80" y="90" width="170" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="165" y="115" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Bi-directional needed?</text>
+            <!-- WebSocket -->
+            <rect x="10" y="180" width="120" height="40" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+            <text x="70" y="205" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="700" font-family="Inter,sans-serif">WebSocket</text>
+            <!-- Server push only -->
+            <rect x="330" y="90" width="160" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="410" y="108" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Updates every</text>
+            <text x="410" y="123" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">30s or less?</text>
+            <!-- SSE -->
+            <rect x="460" y="175" width="120" height="40" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+            <text x="520" y="200" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="700" font-family="Inter,sans-serif">SSE</text>
+            <!-- Short Polling -->
+            <rect x="460" y="235" width="120" height="35" rx="6" fill="#451a03" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="520" y="257" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Short Polling</text>
+            <!-- Proxy blocked? -->
+            <rect x="160" y="175" width="160" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="240" y="193" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">WS blocked by</text>
+            <text x="240" y="208" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">proxy?</text>
+            <!-- Long Polling fallback -->
+            <rect x="160" y="240" width="120" height="35" rx="6" fill="#451a03" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="220" y="262" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600" font-family="Inter,sans-serif">Long Polling</text>
+            <!-- Arrows -->
+            <line x1="300" y1="50" x2="165" y2="90" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="210" y="72" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">Yes</text>
+            <line x1="300" y1="50" x2="410" y2="90" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="375" y="72" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">No</text>
+            <line x1="165" y1="130" x2="70" y2="180" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="90" y="157" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">Yes</text>
+            <line x1="165" y1="130" x2="240" y2="175" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="220" y="154" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">No</text>
+            <line x1="410" y1="130" x2="520" y2="175" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="488" y="153" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">Yes</text>
+            <line x1="410" y1="130" x2="520" y2="235" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="490" y="192" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">No</text>
+            <line x1="240" y1="215" x2="240" y2="240" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+            <text x="256" y="232" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">Yes</text>
+          </svg>
+          <figcaption>Real-time technology decision tree. Start with the bidirectional question — WebSocket is only needed when the client also sends messages.</figcaption>
+        </figure>
+
+        <table class="trade-off-table">
+          <caption>Quick Decision Rules</caption>
+          <thead>
+            <tr><th>Scenario</th><th>Choose</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Live chat, multiplayer game, collaborative editor</td><td>WebSocket</td><td>Client and server both send messages — full-duplex required</td></tr>
+            <tr><td>Live dashboard, score feed, notification bell</td><td>SSE</td><td>Server-push only; HTTP/2 scales it; auto-reconnect built in</td></tr>
+            <tr><td>Enterprise app behind corporate proxy that blocks WS/SSE</td><td>Long Polling</td><td>Looks like slow HTTP — passes all proxies; near-real-time</td></tr>
+            <tr><td>Email client checking for new mail every 5 minutes</td><td>Short Polling</td><td>Update frequency is low; simplicity beats all other concerns</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ── SECTION 9: Quiz ── -->
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-12-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Real-time Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">A live sports score dashboard needs to push score updates to 1 million simultaneous viewers. Scores update every 30 seconds. Which technology is most appropriate?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A live sports score dashboard needs to push score updates to 1 million simultaneous viewers. Scores update every 30 seconds. Which technology is most appropriate?" data-options='["WebSocket — bidirectional communication ensures fastest delivery","Short Polling every 30 seconds — matches update frequency, simple to implement and scale","Server-Sent Events — server-push only (no client messages needed), HTTP/2 multiplexed, auto-reconnect, simpler to scale than WebSocket","Long Polling — lowest latency for infrequent updates"]' data-correct="2" data-explanation="SSE is ideal: server-push only (scores flow one way), HTTP/2 handles millions of SSE streams efficiently, auto-reconnect is built in, and no sticky session problem. WebSocket adds bidirectional complexity that is not needed. Short polling at 30s would also work but wastes resources on empty responses between updates." style="display:none"></div>
+          <div data-question="You are scaling a WebSocket-based chat application from 1 server to 10 servers. User A (on server 1) sends a message to User B (on server 3). What is the standard solution for delivering this message?" data-options='["Reject the request and ask the client to reconnect to the correct server","Use DNS round-robin to ensure both users always land on the same server","Use Redis Pub/Sub: server 1 publishes the message to a Redis channel, all servers subscribe and push to their connected clients — server 3 delivers to user B","Use a shared database — server 3 polls the DB for new messages every 100ms"]' data-correct="2" data-explanation="Redis Pub/Sub is the standard pattern for WebSocket fan-out across servers. Server 1 publishes to Redis, all servers (including 3) receive it, and server 3 knows user B is connected and pushes the frame. This avoids sticky sessions and allows any server to handle any message." style="display:none"></div>
+          <div data-question="Long polling is described as 'near-real-time.' What causes the irreducible latency compared to WebSocket?" data-options='["Long polling uses UDP which has higher latency","After receiving a response, the client must initiate a new HTTP request — this round-trip adds at minimum one network RTT of latency before the next message can be received","Long polling compresses responses which adds processing time","Long polling uses HTTP/1.0 which is slower"]' data-correct="1" data-explanation="Every time the server sends a response (either with data or a timeout), the connection closes. The client must then initiate a new HTTP request. This costs one network RTT minimum before the client is listening again. WebSocket has no such gap — both sides can send frames any time on the persistent connection." style="display:none"></div>
+          <div data-question="An application uses SSE (Server-Sent Events) and the client disconnects due to a network blip. How does the client know which events it missed and request them?" data-options='["SSE has no replay mechanism — missed events are lost permanently","The client stores a Last-Event-ID header sent with each event; on reconnect, the EventSource automatically sends Last-Event-ID and the server replays events from that ID onward","The server buffers all events and replays the entire stream on reconnect","The client must implement its own event ID tracking in application code"]' data-correct="1" data-explanation="SSE has a built-in replay mechanism: the server includes 'id: {eventId}' in each event. The browser's EventSource stores the last received ID. On reconnect, it automatically sends 'Last-Event-ID: 42' — the server queries its event store for events after ID 42 and replays them. This is a native SSE feature requiring no custom client code." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../../index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Back to Home →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../11-ood/index.html" class="btn btn--outline">← Module 11: OOD</a>
+        <a href="../../index.html" class="btn btn--primary">Course Home →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 12</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

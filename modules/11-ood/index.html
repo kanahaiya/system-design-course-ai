@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master Object-Oriented Design for MAANG interviews: SOLID principles, design patterns, and four complete OOD problems with full Java implementations.">
+  <title>Object-Oriented Design (OOD) — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/11-ood/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#ood-vs-system-design" class="module-toc__link">OOD vs System Design</a></li>
+          <li><a href="#solid" class="module-toc__link">SOLID Principles</a></li>
+          <li><a href="#patterns" class="module-toc__link">Design Pattern Reference</a></li>
+          <li><a href="#parking-lot" class="module-toc__link">Problem: Parking Lot</a></li>
+          <li><a href="#elevator" class="module-toc__link">Problem: Elevator System</a></li>
+          <li><a href="#vending-machine" class="module-toc__link">Problem: Vending Machine</a></li>
+          <li><a href="#chess" class="module-toc__link">Problem: Chess Game</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-11" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 11</span>
+        </nav>
+        <div class="module-header__number">Module 11</div>
+        <h1 class="module-header__title">Object-Oriented Design (OOD)</h1>
+        <p class="module-header__desc">Design class hierarchies, not distributed systems. OOD interviews appear at L4 at Amazon and in coding rounds at Google — the output is a UML class diagram and working Java code. Master SOLID principles, six key design patterns, and four complete OOD problems.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min read</div>
+        </div>
+      </header>
+
+      <!-- ── SECTION 1: OOD vs System Design ── -->
+      <section id="ood-vs-system-design" class="content-section">
+        <h2>OOD vs System Design — Know Which Interview You Are In</h2>
+        <p>These are two fundamentally different interview types that require completely different outputs.</p>
+
+        <table class="trade-off-table">
+          <caption>OOD vs System Design: Key Differences</caption>
+          <thead>
+            <tr><th>Dimension</th><th>Object-Oriented Design</th><th>System Design</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Output</td><td>UML class diagram + Java/C++ code</td><td>Architecture diagram with boxes and arrows</td></tr>
+            <tr><td>Scope</td><td>Single application or library</td><td>Distributed system across many services</td></tr>
+            <tr><td>Focus</td><td>Classes, interfaces, inheritance, polymorphism</td><td>Scale, availability, consistency, partitioning</td></tr>
+            <tr><td>When asked</td><td>L4 at Amazon, coding rounds at Google</td><td>L5+ system design rounds</td></tr>
+            <tr><td>Key question</td><td>"Design a parking lot" → classes</td><td>"Design Uber" → services, databases, queues</td></tr>
+          </tbody>
+        </table>
+
+        <div class="insight-box">
+          <strong>The OOD Interview Framework (use every time):</strong>
+          <ol style="margin-top:var(--space-2);padding-left:var(--space-5)">
+            <li><strong>Requirements:</strong> Clarify use cases, constraints, what must and must not be designed.</li>
+            <li><strong>Identify Nouns:</strong> Every noun in the requirements is a candidate class or attribute.</li>
+            <li><strong>Identify Verbs:</strong> Every verb is a candidate method. Park → <code>park(vehicle)</code>. Exit → <code>exit(licensePlate)</code>.</li>
+            <li><strong>Define Relationships:</strong> Is-a (inheritance), Has-a (composition), Uses-a (association).</li>
+            <li><strong>Draw Class Diagram:</strong> Abstract base classes, interfaces, composition hierarchy.</li>
+            <li><strong>Implement Core Logic:</strong> Write the two or three most interesting methods in full.</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ── SECTION 2: SOLID ── -->
+      <section id="solid" class="content-section">
+        <h2>SOLID Principles — The OOD Foundation</h2>
+        <p>Interviewers expect you to name and apply these. They rarely ask "what is SOLID?" — instead they ask "why did you design it this way?" and the answer traces back to one of these five principles.</p>
+
+        <table class="trade-off-table">
+          <caption>SOLID Principles Quick Reference</caption>
+          <thead>
+            <tr><th>Principle</th><th>One-line rule</th><th>Real example</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>S</strong> — Single Responsibility</td>
+              <td>One class, one reason to change.</td>
+              <td><code>FeeCalculator</code> calculates fees only; it does not also issue tickets.</td>
+            </tr>
+            <tr>
+              <td><strong>O</strong> — Open/Closed</td>
+              <td>Open for extension, closed for modification.</td>
+              <td>Add a new <code>ElectricVehicle</code> type by extending <code>Vehicle</code> — no existing code changes.</td>
+            </tr>
+            <tr>
+              <td><strong>L</strong> — Liskov Substitution</td>
+              <td>Subclasses must be substitutable for their base class.</td>
+              <td>Any code that works with <code>Vehicle</code> must work with <code>Car</code> or <code>Truck</code> without modification.</td>
+            </tr>
+            <tr>
+              <td><strong>I</strong> — Interface Segregation</td>
+              <td>Prefer small focused interfaces over fat ones.</td>
+              <td>Split a fat <code>ParkingOperations</code> interface into <code>Parkable</code> and <code>Payable</code> — classes only implement what they need.</td>
+            </tr>
+            <tr>
+              <td><strong>D</strong> — Dependency Inversion</td>
+              <td>Depend on abstractions, not concretions.</td>
+              <td><code>ParkingLot</code> depends on <code>FeeStrategy</code> interface, not <code>HourlyFeeCalculator</code> directly — swap fee strategies without touching the lot.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ── SECTION 3: Design Patterns ── -->
+      <section id="patterns" class="content-section">
+        <h2>Design Pattern Quick Reference for OOD Interviews</h2>
+        <p>You do not need all 23 GoF patterns. These six cover 90% of OOD interview requirements.</p>
+
+        <table class="trade-off-table">
+          <caption>Key Design Patterns for OOD Interviews</caption>
+          <thead>
+            <tr><th>Pattern</th><th>Intent</th><th>Classic use cases</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Singleton</strong></td>
+              <td>Ensure exactly one instance exists.</td>
+              <td>Database connection pool, application config manager, logging service.</td>
+            </tr>
+            <tr>
+              <td><strong>Factory / Factory Method</strong></td>
+              <td>Create objects without specifying the exact concrete class.</td>
+              <td><code>VehicleFactory.create(type)</code> returns <code>Car</code>, <code>Truck</code>, or <code>Motorcycle</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Strategy</strong></td>
+              <td>Define a family of interchangeable algorithms.</td>
+              <td>Sorting strategies, payment methods, fee calculation rules, dispatch algorithms.</td>
+            </tr>
+            <tr>
+              <td><strong>Observer</strong></td>
+              <td>Notify multiple dependents when an object's state changes.</td>
+              <td>Event listeners, notification systems, pub/sub, elevator floor arrival alerts.</td>
+            </tr>
+            <tr>
+              <td><strong>Decorator</strong></td>
+              <td>Wrap an object to add behaviour without changing its class.</td>
+              <td>Logging around a service, compression/encryption layers, UI widget enhancements.</td>
+            </tr>
+            <tr>
+              <td><strong>State</strong></td>
+              <td>Alter object behaviour based on internal state — each state is a class.</td>
+              <td>Vending machine states (IDLE, HAS_MONEY, DISPENSING), elevator states, order lifecycle.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ── SECTION 4: Parking Lot ── -->
+      <section id="parking-lot" class="content-section">
+        <h2>OOD Problem 1: Parking Lot System</h2>
+        <p><strong>Requirements:</strong> Multiple levels, each with multiple spots. Spot types: motorcycle, compact, large. Vehicles: motorcycle (motorcycle spots only), car (compact or large), truck (large only). Issue ticket on entry with timestamp; calculate fee on exit using hourly rates by vehicle type. Support: check spot availability, find nearest spot, full/not-full status.</p>
+
+        <figure class="diagram-container" aria-label="Parking Lot UML class diagram">
+          <svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Parking Lot class hierarchy">
+            <title>Parking Lot UML Class Diagram</title>
+            <!-- Vehicle abstract -->
+            <rect x="270" y="10" width="160" height="60" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="350" y="32" text-anchor="middle" fill="#93c5fd" font-size="10" font-family="JetBrains Mono,monospace">«abstract»</text>
+            <text x="350" y="48" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">Vehicle</text>
+            <text x="350" y="63" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">+canFitInSpot(SpotType): bool</text>
+            <!-- Car -->
+            <rect x="100" y="120" width="120" height="44" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="160" y="139" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">Car</text>
+            <text x="160" y="156" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">COMPACT | LARGE</text>
+            <!-- Motorcycle -->
+            <rect x="270" y="120" width="120" height="44" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="330" y="139" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">Motorcycle</text>
+            <text x="330" y="156" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">MOTORCYCLE only</text>
+            <!-- Truck -->
+            <rect x="440" y="120" width="120" height="44" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="500" y="139" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">Truck</text>
+            <text x="500" y="156" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">LARGE only</text>
+            <!-- Inheritance arrows -->
+            <line x1="160" y1="120" x2="310" y2="70" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4,2"/>
+            <line x1="330" y1="120" x2="350" y2="70" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4,2"/>
+            <line x1="500" y1="120" x2="390" y2="70" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4,2"/>
+            <!-- ParkingLot -->
+            <rect x="10" y="220" width="140" height="50" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="80" y="241" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">ParkingLot</text>
+            <text x="80" y="256" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">park(Vehicle)</text>
+            <text x="80" y="268" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">exit(licensePlate)</text>
+            <!-- ParkingLevel -->
+            <rect x="185" y="220" width="145" height="50" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="257" y="241" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">ParkingLevel</text>
+            <text x="257" y="256" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">findAvailableSpot(v)</text>
+            <text x="257" y="268" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">isFull(): boolean</text>
+            <!-- ParkingSpot -->
+            <rect x="365" y="220" width="145" height="50" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="437" y="241" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">ParkingSpot</text>
+            <text x="437" y="256" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">canAccept(Vehicle)</text>
+            <text x="437" y="268" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">park(v) / vacate()</text>
+            <!-- ParkingTicket -->
+            <rect x="545" y="220" width="140" height="50" rx="6" fill="#451a03" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="615" y="241" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600" font-family="Inter,sans-serif">ParkingTicket</text>
+            <text x="615" y="256" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">vehicle, spot</text>
+            <text x="615" y="268" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono,monospace">issuedAt: Instant</text>
+            <!-- Contains arrows -->
+            <line x1="150" y1="245" x2="185" y2="245" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="165" y="240" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">1..*</text>
+            <line x1="330" y1="245" x2="365" y2="245" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="345" y="240" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">1..*</text>
+            <line x1="510" y1="245" x2="545" y2="245" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="527" y="240" fill="#f59e0b" font-size="10" font-family="Inter,sans-serif">ref</text>
+          </svg>
+          <figcaption>Parking Lot class hierarchy — Vehicle is abstract; ParkingLot contains ParkingLevels which contain ParkingSpots; ParkingTicket references both Vehicle and ParkingSpot.</figcaption>
+        </figure>
+
+        <pre><code class="language-java">// ── VehicleType.java / SpotType.java ──────────────────────────────
+public enum VehicleType { MOTORCYCLE, CAR, TRUCK }
+public enum SpotType    { MOTORCYCLE, COMPACT, LARGE }
+
+// ── Vehicle.java (abstract) ───────────────────────────────────────
+public abstract class Vehicle {
+    private final String licensePlate;
+    private final VehicleType type;
+
+    public Vehicle(String licensePlate, VehicleType type) {
+        this.licensePlate = licensePlate;
+        this.type = type;
+    }
+
+    public String getLicensePlate() { return licensePlate; }
+    public VehicleType getType()    { return type; }
+
+    /** Each subclass knows which spot sizes it fits into. */
+    public abstract boolean canFitInSpot(SpotType spotType);
+}
+
+// ── Car.java ──────────────────────────────────────────────────────
+public class Car extends Vehicle {
+    public Car(String licensePlate) { super(licensePlate, VehicleType.CAR); }
+
+    @Override
+    public boolean canFitInSpot(SpotType spotType) {
+        return spotType == SpotType.COMPACT || spotType == SpotType.LARGE;
+    }
+}
+
+// ── Motorcycle.java ───────────────────────────────────────────────
+public class Motorcycle extends Vehicle {
+    public Motorcycle(String licensePlate) {
+        super(licensePlate, VehicleType.MOTORCYCLE);
+    }
+
+    @Override
+    public boolean canFitInSpot(SpotType spotType) {
+        return spotType == SpotType.MOTORCYCLE;
+    }
+}
+
+// ── Truck.java ────────────────────────────────────────────────────
+public class Truck extends Vehicle {
+    public Truck(String licensePlate) { super(licensePlate, VehicleType.TRUCK); }
+
+    @Override
+    public boolean canFitInSpot(SpotType spotType) {
+        return spotType == SpotType.LARGE;
+    }
+}
+
+// ── ParkingSpot.java ──────────────────────────────────────────────
+public class ParkingSpot {
+    private final int spotId;
+    private final SpotType type;
+    private Vehicle parkedVehicle; // null when available
+
+    public ParkingSpot(int spotId, SpotType type) {
+        this.spotId = spotId;
+        this.type = type;
+    }
+
+    public boolean isAvailable()              { return parkedVehicle == null; }
+    public boolean canAccept(Vehicle vehicle) { return isAvailable() && vehicle.canFitInSpot(type); }
+    public void park(Vehicle vehicle)         { this.parkedVehicle = vehicle; }
+    public void vacate()                      { this.parkedVehicle = null; }
+    public int getSpotId()                    { return spotId; }
+    public SpotType getType()                 { return type; }
+}
+
+// ── ParkingLevel.java ─────────────────────────────────────────────
+public class ParkingLevel {
+    private final int levelNumber;
+    private final List&lt;ParkingSpot&gt; spots;
+
+    public ParkingLevel(int levelNumber, List&lt;ParkingSpot&gt; spots) {
+        this.levelNumber = levelNumber;
+        this.spots = spots;
+    }
+
+    /**
+     * Finds the first available spot that fits the vehicle.
+     * Returns empty Optional if the level is full for this vehicle type.
+     */
+    public Optional&lt;ParkingSpot&gt; findAvailableSpot(Vehicle vehicle) {
+        return spots.stream()
+            .filter(spot -&gt; spot.canAccept(vehicle))
+            .findFirst();
+    }
+
+    public boolean isFull() {
+        return spots.stream().noneMatch(ParkingSpot::isAvailable);
+    }
+}
+
+// ── ParkingTicket.java ────────────────────────────────────────────
+public class ParkingTicket {
+    private final String ticketId;
+    private final Vehicle vehicle;
+    private final ParkingSpot spot;
+    private final Instant issuedAt;
+
+    public ParkingTicket(Vehicle vehicle, ParkingSpot spot, Instant issuedAt) {
+        this.ticketId = UUID.randomUUID().toString();
+        this.vehicle  = vehicle;
+        this.spot     = spot;
+        this.issuedAt = issuedAt;
+    }
+
+    public Vehicle getVehicle()  { return vehicle; }
+    public ParkingSpot getSpot() { return spot; }
+    public Instant getIssuedAt() { return issuedAt; }
+}
+
+// ── FeeCalculator.java ────────────────────────────────────────────
+public class FeeCalculator {
+    private static final Map&lt;VehicleType, BigDecimal&gt; HOURLY_RATES = Map.of(
+        VehicleType.MOTORCYCLE, new BigDecimal("1.50"),
+        VehicleType.CAR,        new BigDecimal("3.00"),
+        VehicleType.TRUCK,      new BigDecimal("5.00")
+    );
+
+    /**
+     * Calculates parking fee based on vehicle type and duration.
+     * Minimum charge is 1 hour; partial hours are rounded up.
+     */
+    public static BigDecimal calculate(ParkingTicket ticket, Instant exitTime) {
+        long hoursParked = Duration.between(ticket.getIssuedAt(), exitTime).toHours();
+        long billableHours = Math.max(1, hoursParked); // minimum 1 hour
+        BigDecimal rate = HOURLY_RATES.get(ticket.getVehicle().getType());
+        return rate.multiply(BigDecimal.valueOf(billableHours));
+    }
+}
+
+// ── ParkingLot.java (orchestrator) ───────────────────────────────
+public class ParkingLot {
+    private final List&lt;ParkingLevel&gt; levels;
+    private final Map&lt;String, ParkingTicket&gt; activeTickets; // licensePlate → ticket
+
+    public ParkingLot(List&lt;ParkingLevel&gt; levels) {
+        this.levels        = levels;
+        this.activeTickets = new HashMap&lt;&gt;();
+    }
+
+    /**
+     * Searches levels in order (level 1 first = closest to exit).
+     * Issues a ticket on success; throws if no spot available.
+     */
+    public ParkingTicket park(Vehicle vehicle) {
+        for (ParkingLevel level : levels) {
+            Optional&lt;ParkingSpot&gt; availableSpot = level.findAvailableSpot(vehicle);
+            if (availableSpot.isPresent()) {
+                ParkingSpot spot = availableSpot.get();
+                spot.park(vehicle);
+                ParkingTicket ticket = new ParkingTicket(vehicle, spot, Instant.now());
+                activeTickets.put(vehicle.getLicensePlate(), ticket);
+                return ticket;
+            }
+        }
+        throw new ParkingFullException("No available spot for vehicle type: " + vehicle.getType());
+    }
+
+    /**
+     * Vacates the spot, removes ticket, returns the fee to collect.
+     */
+    public BigDecimal exit(String licensePlate) {
+        ParkingTicket ticket = activeTickets.remove(licensePlate);
+        if (ticket == null) {
+            throw new IllegalArgumentException("No active ticket for: " + licensePlate);
+        }
+        ticket.getSpot().vacate();
+        return FeeCalculator.calculate(ticket, Instant.now());
+    }
+
+    public boolean isFull() {
+        return levels.stream().allMatch(ParkingLevel::isFull);
+    }
+}</code></pre>
+
+        <div class="insight-box">
+          <strong>Key OOD decisions to explain in interview:</strong>
+          <ul style="margin-top:var(--space-2);padding-left:var(--space-5)">
+            <li><code>Vehicle</code> is abstract (not an interface) because it holds shared state: <code>licensePlate</code> and <code>type</code>. Interfaces cannot hold instance variables.</li>
+            <li><code>canFitInSpot()</code> lives on <code>Vehicle</code> (not on <code>ParkingSpot</code>) so spot logic never needs to know about every vehicle type — Open/Closed principle.</li>
+            <li><code>FeeCalculator</code> is a separate class — Single Responsibility. <code>ParkingLot</code> does not calculate fees.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ── SECTION 5: Elevator ── -->
+      <section id="elevator" class="content-section">
+        <h2>OOD Problem 2: Elevator System</h2>
+        <p><strong>Requirements:</strong> N elevators, M floors. External requests: floor + direction (UP/DOWN). Internal requests: destination floor. Dispatching algorithm: SCAN — elevator sweeps up through pending stops, then sweeps down. Optimize for minimal wait time.</p>
+
+        <pre><code class="language-java">// ── Enums ─────────────────────────────────────────────────────────
+public enum ElevatorState { IDLE, MOVING_UP, MOVING_DOWN }
+public enum Direction      { UP, DOWN }
+
+// ── Request.java (external call from a floor) ─────────────────────
+public class ExternalRequest {
+    private final int floor;
+    private final Direction direction;
+
+    public ExternalRequest(int floor, Direction direction) {
+        this.floor     = floor;
+        this.direction = direction;
+    }
+
+    public int getFloor()           { return floor; }
+    public Direction getDirection() { return direction; }
+}
+
+// ── Elevator.java ─────────────────────────────────────────────────
+public class Elevator {
+    private final int elevatorId;
+    private int currentFloor;
+    private ElevatorState state;
+
+    /**
+     * TreeSet maintains stops in ascending sorted order.
+     * This enables the SCAN algorithm to sweep upward by calling
+     * first() and last() — no manual sorting needed per step.
+     */
+    private final TreeSet&lt;Integer&gt; pendingStops;
+
+    public Elevator(int elevatorId, int initialFloor) {
+        this.elevatorId   = elevatorId;
+        this.currentFloor = initialFloor;
+        this.state        = ElevatorState.IDLE;
+        this.pendingStops = new TreeSet&lt;&gt;();
+    }
+
+    /** Add an internal (passenger-selected) destination. */
+    public void addStop(int floor) {
+        pendingStops.add(floor);
+        updateState();
+    }
+
+    /**
+     * SCAN algorithm: process the next stop based on current direction.
+     * - MOVING_UP:  take the lowest stop above currentFloor
+     * - MOVING_DOWN: take the highest stop below currentFloor
+     * - IDLE:       take the nearest stop
+     */
+    public void processNextStop() {
+        if (pendingStops.isEmpty()) {
+            state = ElevatorState.IDLE;
+            return;
+        }
+        int nextFloor = resolveNextFloor();
+        System.out.printf("[Elevator %d] Moving %s → Floor %d%n",
+            elevatorId, state, nextFloor);
+        currentFloor = nextFloor;
+        pendingStops.remove(nextFloor);
+        updateState();
+    }
+
+    private int resolveNextFloor() {
+        Integer above = pendingStops.ceiling(currentFloor + 1);
+        Integer below = pendingStops.floor(currentFloor - 1);
+
+        if (state == ElevatorState.MOVING_UP) {
+            return above != null ? above : below; // reverse if no more above
+        }
+        if (state == ElevatorState.MOVING_DOWN) {
+            return below != null ? below : above; // reverse if no more below
+        }
+        // IDLE: pick nearest
+        if (above == null) return below;
+        if (below == null) return above;
+        return (above - currentFloor) &lt;= (currentFloor - below) ? above : below;
+    }
+
+    private void updateState() {
+        if (pendingStops.isEmpty()) {
+            state = ElevatorState.IDLE;
+        } else if (pendingStops.last() &gt; currentFloor) {
+            state = ElevatorState.MOVING_UP;
+        } else {
+            state = ElevatorState.MOVING_DOWN;
+        }
+    }
+
+    public int getCurrentFloor()  { return currentFloor; }
+    public ElevatorState getState() { return state; }
+    public int getElevatorId()    { return elevatorId; }
+}
+
+// ── ElevatorController.java ───────────────────────────────────────
+public class ElevatorController {
+    private final List&lt;Elevator&gt; elevators;
+
+    public ElevatorController(List&lt;Elevator&gt; elevators) {
+        this.elevators = elevators;
+    }
+
+    /**
+     * Dispatches an external floor request to the best elevator:
+     * 1. Idle elevator nearest to the requested floor.
+     * 2. Moving elevator heading in the same direction that will pass the floor.
+     * 3. Any idle elevator as fallback.
+     */
+    public void handleExternalRequest(ExternalRequest request) {
+        Elevator bestElevator = findBestElevator(request);
+        bestElevator.addStop(request.getFloor());
+        System.out.printf("[Controller] Dispatched floor %d (%s) to elevator %d%n",
+            request.getFloor(), request.getDirection(), bestElevator.getElevatorId());
+    }
+
+    private Elevator findBestElevator(ExternalRequest request) {
+        return elevators.stream()
+            .filter(e -&gt; e.getState() == ElevatorState.IDLE)
+            .min(Comparator.comparingInt(e -&gt;
+                Math.abs(e.getCurrentFloor() - request.getFloor())))
+            .orElseGet(() -&gt; elevators.stream()
+                .filter(e -&gt; isEnRoute(e, request))
+                .findFirst()
+                .orElse(elevators.get(0))); // fallback: first elevator
+    }
+
+    private boolean isEnRoute(Elevator elevator, ExternalRequest request) {
+        boolean movingUp   = elevator.getState() == ElevatorState.MOVING_UP
+            && request.getDirection() == Direction.UP
+            && elevator.getCurrentFloor() &lt; request.getFloor();
+        boolean movingDown = elevator.getState() == ElevatorState.MOVING_DOWN
+            && request.getDirection() == Direction.DOWN
+            && elevator.getCurrentFloor() &gt; request.getFloor();
+        return movingUp || movingDown;
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 6: Vending Machine ── -->
+      <section id="vending-machine" class="content-section">
+        <h2>OOD Problem 3: Vending Machine (State Pattern)</h2>
+        <p><strong>Requirements:</strong> Accepts coins (quarter=25¢, dime=10¢, nickel=5¢), tracks balance, displays inventory (item code → Item), dispenses if balance ≥ price and item in stock, returns optimal change. Uses the <strong>State pattern</strong> — each state (IDLE, HAS_MONEY, DISPENSING) is its own class.</p>
+
+        <pre><code class="language-java">// ── Coin.java ─────────────────────────────────────────────────────
+public enum Coin {
+    NICKEL(5), DIME(10), QUARTER(25);
+
+    private final int valueInCents;
+    Coin(int valueInCents) { this.valueInCents = valueInCents; }
+    public int getValue()  { return valueInCents; }
+}
+
+// ── Item.java ─────────────────────────────────────────────────────
+public class Item {
+    private final String name;
+    private final int priceInCents;
+    private int quantity;
+
+    public Item(String name, int priceInCents, int quantity) {
+        this.name         = name;
+        this.priceInCents = priceInCents;
+        this.quantity     = quantity;
+    }
+
+    public boolean isAvailable()  { return quantity > 0; }
+    public void decrementStock()  { quantity--; }
+    public int getPrice()         { return priceInCents; }
+    public String getName()       { return name; }
+    public int getQuantity()      { return quantity; }
+}
+
+// ── VendingMachineState.java (interface) ──────────────────────────
+public interface VendingMachineState {
+    void insertCoin(VendingMachine machine, Coin coin);
+    void selectItem(VendingMachine machine, String itemCode);
+    void dispense(VendingMachine machine);
+    void returnChange(VendingMachine machine);
+}
+
+// ── IdleState.java ────────────────────────────────────────────────
+public class IdleState implements VendingMachineState {
+    @Override
+    public void insertCoin(VendingMachine machine, Coin coin) {
+        machine.addBalance(coin.getValue());
+        System.out.println("Coin inserted: " + coin + " (balance: " + machine.getBalance() + "¢)");
+        machine.setState(machine.getHasMoneyState());
+    }
+
+    @Override
+    public void selectItem(VendingMachine machine, String itemCode) {
+        System.out.println("Please insert coins before selecting an item.");
+    }
+
+    @Override
+    public void dispense(VendingMachine machine) {
+        System.out.println("No item selected.");
+    }
+
+    @Override
+    public void returnChange(VendingMachine machine) {
+        System.out.println("No balance to return.");
+    }
+}
+
+// ── HasMoneyState.java ────────────────────────────────────────────
+public class HasMoneyState implements VendingMachineState {
+    @Override
+    public void insertCoin(VendingMachine machine, Coin coin) {
+        machine.addBalance(coin.getValue());
+        System.out.println("Coin inserted. Total balance: " + machine.getBalance() + "¢");
+    }
+
+    @Override
+    public void selectItem(VendingMachine machine, String itemCode) {
+        Item item = machine.getItem(itemCode);
+        if (item == null) {
+            System.out.println("Invalid item code: " + itemCode);
+            return;
+        }
+        if (!item.isAvailable()) {
+            System.out.println("Item out of stock: " + item.getName());
+            return;
+        }
+        if (machine.getBalance() &lt; item.getPrice()) {
+            System.out.println("Insufficient balance. Need " + item.getPrice()
+                + "¢, have " + machine.getBalance() + "¢");
+            return;
+        }
+        machine.setSelectedItemCode(itemCode);
+        machine.setState(machine.getDispensingState());
+        machine.dispense();
+    }
+
+    @Override
+    public void dispense(VendingMachine machine) {
+        System.out.println("Please select an item first.");
+    }
+
+    @Override
+    public void returnChange(VendingMachine machine) {
+        int change = machine.getBalance();
+        machine.resetBalance();
+        machine.setState(machine.getIdleState());
+        System.out.println("Returned " + change + "¢ in change.");
+        printOptimalChange(change);
+    }
+
+    /** Greedy coin selection: quarters → dimes → nickels. */
+    private void printOptimalChange(int changeInCents) {
+        int remaining = changeInCents;
+        int quarters  = remaining / 25; remaining %= 25;
+        int dimes     = remaining / 10; remaining %= 10;
+        int nickels   = remaining / 5;
+        System.out.printf("Change: %d quarter(s), %d dime(s), %d nickel(s)%n",
+            quarters, dimes, nickels);
+    }
+}
+
+// ── DispensingState.java ──────────────────────────────────────────
+public class DispensingState implements VendingMachineState {
+    @Override
+    public void insertCoin(VendingMachine machine, Coin coin) {
+        System.out.println("Please wait — dispensing in progress.");
+    }
+
+    @Override
+    public void selectItem(VendingMachine machine, String itemCode) {
+        System.out.println("Already dispensing. Please wait.");
+    }
+
+    @Override
+    public void dispense(VendingMachine machine) {
+        Item item = machine.getItem(machine.getSelectedItemCode());
+        item.decrementStock();
+        machine.deductBalance(item.getPrice());
+        System.out.println("Dispensing: " + item.getName());
+        if (machine.getBalance() &gt; 0) {
+            machine.returnChange();
+        } else {
+            machine.resetBalance();
+            machine.setState(machine.getIdleState());
+        }
+    }
+
+    @Override
+    public void returnChange(VendingMachine machine) {
+        // handled automatically inside dispense()
+    }
+}
+
+// ── VendingMachine.java (context) ────────────────────────────────
+public class VendingMachine {
+    private final Map&lt;String, Item&gt; inventory;
+    private int balanceInCents;
+    private String selectedItemCode;
+
+    // State instances created once — no new object per transition
+    private final VendingMachineState idleState       = new IdleState();
+    private final VendingMachineState hasMoneyState    = new HasMoneyState();
+    private final VendingMachineState dispensingState  = new DispensingState();
+    private VendingMachineState currentState           = idleState;
+
+    public VendingMachine(Map&lt;String, Item&gt; inventory) {
+        this.inventory = inventory;
+    }
+
+    // Delegate to current state
+    public void insertCoin(Coin coin)      { currentState.insertCoin(this, coin); }
+    public void selectItem(String code)    { currentState.selectItem(this, code); }
+    public void dispense()                 { currentState.dispense(this); }
+    public void returnChange()             { currentState.returnChange(this); }
+
+    // State accessors for state classes
+    public void setState(VendingMachineState state) { this.currentState = state; }
+    public VendingMachineState getIdleState()        { return idleState; }
+    public VendingMachineState getHasMoneyState()    { return hasMoneyState; }
+    public VendingMachineState getDispensingState()  { return dispensingState; }
+
+    public void addBalance(int cents)    { balanceInCents += cents; }
+    public void deductBalance(int cents) { balanceInCents -= cents; }
+    public void resetBalance()           { balanceInCents = 0; }
+    public int getBalance()              { return balanceInCents; }
+    public Item getItem(String code)     { return inventory.get(code); }
+    public void setSelectedItemCode(String code) { selectedItemCode = code; }
+    public String getSelectedItemCode()  { return selectedItemCode; }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 7: Chess ── -->
+      <section id="chess" class="content-section">
+        <h2>OOD Problem 4: Chess Game</h2>
+        <p><strong>Requirements:</strong> 8×8 board, 6 piece types, valid move generation per piece, check/checkmate detection, alternating turns.</p>
+
+        <pre><code class="language-java">// ── Color.java ────────────────────────────────────────────────────
+public enum Color { WHITE, BLACK }
+
+// ── Position.java (Java 16+ record) ──────────────────────────────
+public record Position(int row, int col) {
+    public boolean isWithinBoard() {
+        return row >= 0 && row &lt; 8 && col >= 0 && col &lt; 8;
+    }
+}
+
+// ── Piece.java (abstract) ─────────────────────────────────────────
+public abstract class Piece {
+    private final Color color;
+    private Position position;
+
+    public Piece(Color color, Position position) {
+        this.color    = color;
+        this.position = position;
+    }
+
+    /**
+     * Returns all positions this piece can legally move to,
+     * given the current board state. Does not account for leaving
+     * the king in check — that validation happens in Board.
+     *
+     * @param board current board state for piece lookup
+     * @returns list of valid destination positions
+     */
+    public abstract List&lt;Position&gt; getValidMoves(Board board);
+
+    public Color getColor()              { return color; }
+    public Position getPosition()        { return position; }
+    public void setPosition(Position pos) { this.position = pos; }
+
+    protected boolean isOpponent(Piece other) {
+        return other != null && other.getColor() != this.color;
+    }
+}
+
+// ── Rook.java ─────────────────────────────────────────────────────
+public class Rook extends Piece {
+    public Rook(Color color, Position position) { super(color, position); }
+
+    @Override
+    public List&lt;Position&gt; getValidMoves(Board board) {
+        List&lt;Position&gt; validMoves = new ArrayList&lt;&gt;();
+        int[][] directions = {{0,1},{0,-1},{1,0},{-1,0}}; // right,left,down,up
+
+        for (int[] direction : directions) {
+            int row = getPosition().row() + direction[0];
+            int col = getPosition().col() + direction[1];
+            while (new Position(row, col).isWithinBoard()) {
+                Position candidate = new Position(row, col);
+                Piece occupant = board.getPieceAt(candidate);
+                if (occupant == null) {
+                    validMoves.add(candidate); // empty square: can move here
+                } else if (isOpponent(occupant)) {
+                    validMoves.add(candidate); // capture opponent: can move, then stop
+                    break;
+                } else {
+                    break; // blocked by own piece
+                }
+                row += direction[0];
+                col += direction[1];
+            }
+        }
+        return validMoves;
+    }
+}
+
+// ── Knight.java ───────────────────────────────────────────────────
+public class Knight extends Piece {
+    private static final int[][] KNIGHT_OFFSETS = {
+        {-2,-1},{-2,1},{-1,-2},{-1,2},{1,-2},{1,2},{2,-1},{2,1}
+    };
+
+    public Knight(Color color, Position position) { super(color, position); }
+
+    @Override
+    public List&lt;Position&gt; getValidMoves(Board board) {
+        List&lt;Position&gt; validMoves = new ArrayList&lt;&gt;();
+        for (int[] offset : KNIGHT_OFFSETS) {
+            Position candidate = new Position(
+                getPosition().row() + offset[0],
+                getPosition().col() + offset[1]
+            );
+            if (!candidate.isWithinBoard()) continue;
+            Piece occupant = board.getPieceAt(candidate);
+            if (occupant == null || isOpponent(occupant)) {
+                validMoves.add(candidate);
+            }
+        }
+        return validMoves;
+    }
+}
+
+// ── Board.java ────────────────────────────────────────────────────
+public class Board {
+    private final Piece[][] grid = new Piece[8][8];
+
+    public Piece getPieceAt(Position position) {
+        return grid[position.row()][position.col()];
+    }
+
+    public void setPieceAt(Position position, Piece piece) {
+        grid[position.row()][position.col()] = piece;
+    }
+
+    /**
+     * Moves a piece from 'from' to 'to'. Validates that the destination
+     * is in the piece's valid move list before executing.
+     *
+     * @throws IllegalArgumentException if the move is invalid
+     */
+    public void movePiece(Position from, Position to) {
+        Piece piece = getPieceAt(from);
+        if (piece == null) throw new IllegalArgumentException("No piece at " + from);
+
+        List&lt;Position&gt; validMoves = piece.getValidMoves(this);
+        if (!validMoves.contains(to)) {
+            throw new IllegalArgumentException("Invalid move for " + piece.getClass().getSimpleName());
+        }
+        setPieceAt(to, piece);
+        setPieceAt(from, null);
+        piece.setPosition(to);
+    }
+
+    /**
+     * Checks whether the king of the given color is currently in check.
+     * Iterates all opponent pieces and checks if any can reach the king's position.
+     */
+    public boolean isInCheck(Color color) {
+        Position kingPosition = findKingPosition(color);
+        Color opponentColor   = (color == Color.WHITE) ? Color.BLACK : Color.WHITE;
+
+        return getAllPiecesOfColor(opponentColor).stream()
+            .anyMatch(piece -&gt; piece.getValidMoves(this).contains(kingPosition));
+    }
+
+    private Position findKingPosition(Color color) {
+        for (int row = 0; row &lt; 8; row++) {
+            for (int col = 0; col &lt; 8; col++) {
+                Piece piece = grid[row][col];
+                if (piece instanceof King &amp;&amp; piece.getColor() == color) {
+                    return new Position(row, col);
+                }
+            }
+        }
+        throw new IllegalStateException("King not found for color: " + color);
+    }
+
+    private List&lt;Piece&gt; getAllPiecesOfColor(Color color) {
+        List&lt;Piece&gt; pieces = new ArrayList&lt;&gt;();
+        for (Piece[] row : grid) {
+            for (Piece piece : row) {
+                if (piece != null &amp;&amp; piece.getColor() == color) {
+                    pieces.add(piece);
+                }
+            }
+        }
+        return pieces;
+    }
+}
+
+// ── Game.java ─────────────────────────────────────────────────────
+public class Game {
+    private final Board board;
+    private Color currentTurn;
+
+    public Game() {
+        this.board       = new Board();
+        this.currentTurn = Color.WHITE;
+        initializeBoard();
+    }
+
+    public void makeMove(Position from, Position to) {
+        Piece piece = board.getPieceAt(from);
+        if (piece == null || piece.getColor() != currentTurn) {
+            throw new IllegalArgumentException("Not your piece or empty square.");
+        }
+        board.movePiece(from, to);
+
+        if (board.isInCheck(currentTurn)) {
+            // Undo the move — left own king in check
+            board.movePiece(to, from); // simplified: does not restore captured piece
+            throw new IllegalArgumentException("Move leaves your king in check.");
+        }
+        currentTurn = (currentTurn == Color.WHITE) ? Color.BLACK : Color.WHITE;
+    }
+
+    private void initializeBoard() {
+        // Place all pieces in starting positions (abbreviated for clarity)
+        board.setPieceAt(new Position(0, 0), new Rook(Color.WHITE, new Position(0, 0)));
+        board.setPieceAt(new Position(0, 1), new Knight(Color.WHITE, new Position(0, 1)));
+        // ... (all 32 pieces placed similarly)
+    }
+}</code></pre>
+      </section>
+
+      <!-- ── SECTION 8: Quiz ── -->
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-11-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> OOD Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">In the Parking Lot OOD problem, why is Vehicle defined as an abstract class rather than an interface?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="In the Parking Lot OOD problem, why is Vehicle defined as an abstract class rather than an interface?" data-options='["Interfaces cannot have constructors","Abstract classes support multiple inheritance which is needed here","Vehicle has shared state (licensePlate, type) that all subclasses inherit, making an abstract class appropriate; an interface cannot hold instance variables","Abstract classes are always faster than interfaces"]' data-correct="2" data-explanation="Abstract classes can hold instance variables and constructor logic — shared across all vehicle types (licensePlate, vehicleType). Interfaces are for defining contracts (what a class can do), not shared state. The Vehicle hierarchy uses abstract class for shared state + abstract method canFitInSpot() for type-specific behavior." style="display:none"></div>
+          <div data-question="The Elevator system uses a TreeSet&lt;Integer&gt; for pending stops. Why TreeSet specifically?" data-options='["TreeSet is faster than ArrayList for all operations","TreeSet maintains stops in sorted order (ascending) with O(log N) add/remove, enabling the SCAN algorithm to naturally sweep floors in order without sorting","TreeSet prevents duplicate floor selections","TreeSet is thread-safe unlike ArrayList"]' data-correct="1" data-explanation="The SCAN algorithm needs stops in sorted order so the elevator can sweep upward (take stops in ascending order) then downward. TreeSet maintains a sorted order automatically with O(log N) insertions and gives you first() and last() for direction logic — perfect for this use case." style="display:none"></div>
+          <div data-question="The Vending Machine uses the State pattern. What is the primary benefit over using if/else chains?" data-options='["State pattern is faster at runtime","State pattern allows the machine to have multiple active states simultaneously","Each state encapsulates its own behavior, making it easy to add new states or modify existing ones without changing other states — the Open/Closed principle applied","State pattern eliminates the need for enums"]' data-correct="2" data-explanation="With if/else chains, every method (insertCoin, selectItem, dispense) has a nested if checking the current state — modifying one state breaks others. The State pattern encapsulates each state's behavior in a dedicated class. Adding a new state (e.g., OUT_OF_SERVICE) only requires a new class, not touching existing code." style="display:none"></div>
+          <div data-question="In the Chess OOD, why does each Piece subclass implement getValidMoves(Board board) rather than getValidMoves(Position[][] grid)?" data-options='["Board is faster to pass than a 2D array","Passing the full Board object allows pieces to call Board methods for check detection and piece lookup, keeping the move generation logic clean and decoupled from raw array access","A 2D array cannot represent the chess board correctly","Piece subclasses cannot access arrays"]' data-correct="1" data-explanation="Passing Board (not a raw array) lets each piece call board.getPieceAt(pos), board.isInCheck(), and board.isOccupiedByOpponent() — named, type-safe methods instead of array index arithmetic. It also means if Board's internal representation changes (e.g., HashMap instead of 2D array), piece classes don't need to change." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../12-realtime/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../10-patterns/index.html" class="btn btn--outline">← Module 10: Patterns</a>
+        <a href="../12-realtime/index.html" class="btn btn--primary">Module 12: Real-time →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 11</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

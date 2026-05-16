@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Live Comments System like YouTube/Twitch — full RESHADED walkthrough covering WebSocket fan-out, Kafka, Redis Pub/Sub, Cassandra time-series storage for MAANG interviews.">
+  <title>Design Live Comments System — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/live-comments/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-live-comments" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=live-comments" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Important</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Real-time / Fan-out</span>
+        </div>
+        <h1 class="module-header__title">Design a Live Comments System</h1>
+        <p class="module-header__desc">The core challenge: one comment posted to a stream with 100,000 viewers must reach all of them within 500ms. That's 100,000 push deliveries per comment — the fan-out problem defines this entire design.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> YouTube, Twitch, Meta, TikTok</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Write-amplification at scale</div>
+        </div>
+      </header>
+
+      <!-- R — Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Post a comment on a live stream (text, max 500 characters)</li>
+            <li>View real-time comment feed — new comments appear within 500ms for all viewers</li>
+            <li>React to comments (👍 ❤️) — lightweight, eventual consistency acceptable</li>
+            <li>Moderator can delete a comment; deleted comment disappears for all active viewers</li>
+          </ul>
+
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 100K concurrent viewers per popular stream; 1M concurrent viewers globally across all streams</li>
+            <li><strong>Throughput:</strong> 10K comments/minute per stream during peak = 167 write QPS per stream</li>
+            <li><strong>Latency:</strong> Comment must appear to all viewers within 500ms of posting</li>
+            <li><strong>Durability:</strong> Comments persisted for later VOD (Video On Demand) playback</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Fan-out calculation:</strong> 167 writes/s × 100K viewers = 16.7M message deliveries per second per stream. State this number explicitly to the interviewer — it frames the entire architectural challenge.
+          </div>
+        </div>
+      </section>
+
+      <!-- E — Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Active streams:</strong> 1M concurrent viewers ÷ 100K viewers/stream = ~10 popular live streams at peak</li>
+            <li><strong>Comment writes:</strong> 10 streams × 167 QPS = ~1,670 total comment writes/second globally</li>
+            <li><strong>Fan-out deliveries:</strong> 1,670 writes/s × 100K avg viewers = 167M deliveries/second — the dominant load</li>
+            <li><strong>Storage:</strong> 1,670 comments/s × 500B avg = ~835KB/s = ~72GB/day persisted to Cassandra</li>
+            <li><strong>WebSocket connections:</strong> 1M concurrent viewers requires ~10–100 WebSocket servers (each can hold 10K–100K connections)</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- S — Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">-- Cassandra schema (time-series, write-heavy)
+-- Partition key: (stream_id, time_bucket) — caps partition size for high-traffic streams
+-- Clustering key: comment_id DESC — newest comments first within partition
+
+CREATE TABLE comments (
+    stream_id    UUID,
+    time_bucket  TEXT,          -- e.g., '2024-01-15-14' (hour bucket)
+    comment_id   BIGINT,        -- Snowflake ID: sortable, globally unique
+    user_id      UUID,
+    username     TEXT,
+    content      TEXT,
+    is_deleted   BOOLEAN DEFAULT FALSE,
+    created_at   TIMESTAMP,
+    PRIMARY KEY ((stream_id, time_bucket), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC)
+  AND default_time_to_live = 2592000;  -- 30 day TTL
+
+-- streams table (PostgreSQL — small table, relational)
+CREATE TABLE streams (
+    stream_id   UUID PRIMARY KEY,
+    creator_id  UUID NOT NULL,
+    title       VARCHAR(255),
+    status      VARCHAR(10) DEFAULT 'LIVE',  -- LIVE, ENDED
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
+-- comment_reactions (Cassandra counter table)
+CREATE TABLE comment_reactions (
+    comment_id    BIGINT,
+    reaction_type TEXT,          -- 'LIKE', 'HEART', etc.
+    count         COUNTER,
+    PRIMARY KEY (comment_id, reaction_type)
+);</code></pre>
+          <div class="callout callout--info">
+            <strong>Why time_bucket?</strong> Without bucketing, a popular stream with 10K comments/min would put millions of rows in a single Cassandra partition — causing hot partition performance degradation. Bucketing by hour caps partition size.
+          </div>
+        </div>
+      </section>
+
+      <!-- H — High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Component Overview</h3>
+          <ul>
+            <li><strong>WebSocket Servers</strong> — maintain persistent connections with viewers; each server holds a subset of connections (shard by stream_id or random)</li>
+            <li><strong>Comment Service</strong> — receives new comments via HTTP; publishes to Kafka; persists to Cassandra</li>
+            <li><strong>Kafka</strong> — one topic per stream (or stream_id as partition key); buffers write spikes; enables replay</li>
+            <li><strong>Fan-out Workers</strong> — Kafka consumers; each worker reads from a Kafka partition and publishes to Redis Pub/Sub</li>
+            <li><strong>Redis Pub/Sub</strong> — lightweight message broker; WebSocket servers subscribe to channels for streams their clients are watching</li>
+          </ul>
+
+          <h3>Comment Post Flow</h3>
+          <pre><code class="language-java">// 1. Viewer posts comment → HTTP POST to Comment Service
+// 2. Comment Service:
+//    a. Rate limit check (Redis token bucket: 1 comment / 3s per user_id)
+//    b. Persist to Cassandra (async, don't block response)
+//    c. Publish to Kafka topic: stream-comments-{stream_id}
+//    d. Return 202 Accepted to poster
+//
+// 3. Fan-out Worker (Kafka consumer):
+//    a. Read comment from Kafka
+//    b. Publish to Redis Pub/Sub channel: live-comments-{stream_id}
+//
+// 4. WebSocket Server:
+//    a. Subscribed to Redis channel for active stream_ids on this server
+//    b. On Redis message: push JSON payload to all WebSocket connections watching that stream
+//
+// 5. Viewer receives comment via WebSocket push (target: &lt;500ms total)</code></pre>
+
+          <h3>Viewer Connect Flow (Initial State + Live)</h3>
+          <pre><code class="language-java">// On viewer connect:
+// 1. REST: GET /v1/streams/{id}/comments?limit=50 → fetch last 50 from Cassandra
+// 2. WebSocket: SUBSCRIBE stream/{id} → live comments pushed going forward
+// 3. Use timestamp of last fetched comment as cursor to avoid gap between step 1 and 2</code></pre>
+        </div>
+      </section>
+
+      <!-- A — APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Post a comment (HTTP)
+POST /v1/streams/{stream_id}/comments
+// Body: { content: "LET'S GOOO" }
+// Response: 202 Accepted { comment_id: "..." }
+
+// Get recent comments (for initial load on connect)
+GET /v1/streams/{stream_id}/comments?limit=50&amp;before_comment_id=...
+// Response: { comments: [...], has_more: true }
+
+// WebSocket: bidirectional (viewers + moderators)
+// Connect: ws://chat.example.com/streams/{stream_id}
+// Outbound (server → viewer): { type: "NEW_COMMENT", comment: {...} }
+// Outbound: { type: "DELETE_COMMENT", comment_id: "..." }
+// Inbound: (not used for comments — client sends via REST)
+
+// Moderator delete
+DELETE /v1/streams/{stream_id}/comments/{comment_id}
+// 200 OK → triggers DELETE_COMMENT event to all WebSocket connections
+
+// React to comment
+POST /v1/comments/{comment_id}/reactions
+// Body: { reaction_type: "LIKE" }
+// Response: 200 OK (fire-and-forget, eventually consistent counter)</code></pre>
+        </div>
+      </section>
+
+      <!-- D — Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="dive-title">
+        <h2 class="content-section__title" id="dive-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Scaling Fan-out to 1M Viewers
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>The Fan-out Problem at 1M Viewers</h3>
+          <p>One comment → 1M push deliveries. No single server can do this serially — it would take seconds just to iterate the connections. The solution: parallel fan-out via partitioning.</p>
+
+          <h3>Kafka → Redis Pub/Sub Fan-out Architecture</h3>
+          <pre><code class="language-java">// Comment published to Kafka: 10 partitions for popular stream
+//
+// 10 Fan-out Workers (one per Kafka partition) each:
+//   → Publish to Redis Pub/Sub: channel "live-{stream_id}"
+//
+// 100 WebSocket Servers, each holding 10K connections
+//   → All 100 servers subscribed to Redis channel "live-{stream_id}"
+//   → Each server pushes to its 10K connections in parallel
+//
+// Total: 1 Kafka write → 10 parallel workers → 100 Redis messages
+//        → 100 WebSocket servers × 10K pushes each = 1M deliveries
+//        All in parallel → sub-100ms fan-out time</code></pre>
+
+          <h3>Rate Limiting: Token Bucket per User</h3>
+          <pre><code class="language-java">// Redis token bucket per user_id (1 token refills every 3 seconds):
+// MULTI
+//   GET rate:comment:{user_id}
+//   SET rate:comment:{user_id} {tokens-1} EX 3
+// EXEC
+// If tokens == 0: return 429 Too Many Requests</code></pre>
+
+          <h3>WebSocket vs SSE Decision</h3>
+          <p>For read-only viewers, <strong>Server-Sent Events (SSE)</strong> over HTTP/2 is simpler: browsers handle reconnection natively, no WebSocket upgrade needed, and SSE is unidirectional (server → client) which matches viewer use case. Reserve WebSocket for streamers/moderators who need bidirectional communication.</p>
+        </div>
+      </section>
+
+      <!-- E — Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Latency:</strong> Kafka p99 ~10ms + Redis Pub/Sub ~1ms + WebSocket push ~5ms = well under 500ms for most viewers. Geographic distribution (regional WebSocket servers) handles global latency.</li>
+            <li><strong>Durability:</strong> Cassandra replication factor 3 ensures comment persistence. Kafka retention (7 days) allows replay for debugging or late-joining VOD consumers.</li>
+            <li><strong>Scale:</strong> Each component scales independently — more Kafka partitions → more fan-out workers → more WebSocket servers. Linear scaling.</li>
+            <li><strong>Moderation:</strong> Delete events published to the same Kafka topic → fan-out workers push DELETE_COMMENT to all WebSocket servers → comment removed from all active feeds in &lt;500ms.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- D — Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Write path:</strong> Comment Service → Kafka (per-stream topic) → Fan-out Workers → Redis Pub/Sub → WebSocket Servers → Viewers. Async, durable, scalable.</li>
+            <li><strong>Storage:</strong> Cassandra with (stream_id, time_bucket) partition key. Prevents hot partitions on popular streams. 30-day TTL for automatic cleanup.</li>
+            <li><strong>Fan-out scaling:</strong> Add Kafka partitions + fan-out workers + WebSocket servers independently. 1M viewers = 100 WebSocket servers × 10K connections each.</li>
+            <li><strong>Initial state on connect:</strong> Two-phase: REST fetch last 50 comments → WebSocket subscribe anchored at last fetched comment_id to prevent gaps.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚡</span>
+          Trade-offs
+        </h2>
+        <div class="content-section__body">
+          <div class="table-wrapper" role="region" aria-label="Trade-off comparison table" tabindex="0">
+            <table class="tradeoff-table">
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Option A</th>
+                  <th scope="col">Option B</th>
+                  <th scope="col">Choose When</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Push protocol</td>
+                  <td>WebSocket (bidirectional)</td>
+                  <td>SSE (server-sent events)</td>
+                  <td>WebSocket: moderators, streamers need to send. SSE: read-only viewers — simpler, browser auto-reconnect, works over HTTP/2 multiplexing.</td>
+                </tr>
+                <tr>
+                  <td>Message broker</td>
+                  <td>Kafka (durable, ordered, replayable)</td>
+                  <td>Redis Pub/Sub (simple, low-latency)</td>
+                  <td>Kafka: replay capability needed (VOD, debugging, auditing). Redis: lowest latency, acceptable to lose messages on broker restart.</td>
+                </tr>
+                <tr>
+                  <td>Kafka topic layout</td>
+                  <td>One topic per stream</td>
+                  <td>Single topic, stream_id as partition key</td>
+                  <td>One topic per stream: isolation (popular stream doesn't affect others). Single topic: simpler management, but topic creation overhead per stream start.</td>
+                </tr>
+                <tr>
+                  <td>Comment storage</td>
+                  <td>Cassandra (write-optimized)</td>
+                  <td>MySQL/PostgreSQL (relational)</td>
+                  <td>Cassandra: multi-region writes, time-series queries, high write QPS. MySQL: simpler schema, complex queries, moderate scale (&lt;1000 writes/s).</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPubSub;
+import javax.websocket.Session;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * LiveCommentService: three components working together.
+ *
+ * 1. CommentPublisher — accepts new comments, rate-limits, publishes to Kafka
+ * 2. CommentFanoutWorker — Kafka consumer, publishes to Redis Pub/Sub
+ * 3. WebSocketCommentServer — manages WebSocket connections, pushes to viewers
+ */
+
+// ── Component 1: Comment Publisher ────────────────────────────────
+
+public class CommentPublisher {
+
+    private static final String KAFKA_TOPIC_PREFIX = "stream-comments-";
+    private static final int RATE_LIMIT_SECONDS = 3;        // 1 comment per 3s per user
+    private static final String RATE_LIMIT_KEY_PREFIX = "rate:comment:";
+
+    private final KafkaProducer&lt;String, String&gt; kafkaProducer;
+    private final Jedis redisClient;
+    private final CommentRepository commentRepository;
+
+    public CommentPublisher(
+            KafkaProducer&lt;String, String&gt; kafkaProducer,
+            Jedis redisClient,
+            CommentRepository commentRepository) {
+        this.kafkaProducer = kafkaProducer;
+        this.redisClient = redisClient;
+        this.commentRepository = commentRepository;
+    }
+
+    /**
+     * Publishes a new comment to the stream.
+     * Returns the generated comment_id, or throws RateLimitException if user is rate-limited.
+     */
+    public String publishComment(String streamId, String userId, String content) {
+        if (isRateLimited(userId)) {
+            throw new RateLimitException("Post limit: 1 comment per " + RATE_LIMIT_SECONDS + "s");
+        }
+
+        long commentId = SnowflakeIdGenerator.nextId();  // globally unique, time-sortable
+        String timeBucket = computeTimeBucket();
+
+        Comment comment = new Comment(commentId, streamId, timeBucket, userId, content);
+
+        // Persist to Cassandra (async — don't block the response)
+        commentRepository.saveAsync(comment);
+
+        // Publish to Kafka for fan-out
+        String kafkaTopic = KAFKA_TOPIC_PREFIX + streamId;
+        String commentJson = comment.toJson();
+        kafkaProducer.send(new ProducerRecord&lt;&gt;(kafkaTopic, streamId, commentJson));
+
+        return String.valueOf(commentId);
+    }
+
+    private boolean isRateLimited(String userId) {
+        String rateLimitKey = RATE_LIMIT_KEY_PREFIX + userId;
+        // SET NX (set if not exists) with TTL — atomic rate limit token
+        String result = redisClient.set(rateLimitKey, "1", "NX", "EX", RATE_LIMIT_SECONDS);
+        // If SET returned null, key already exists → rate limited
+        return result == null;
+    }
+
+    private String computeTimeBucket() {
+        // Hour bucket: "2024-01-15-14" — caps Cassandra partition at ~10K rows/hour
+        return java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HH"));
+    }
+}
+
+// ── Component 2: Fan-out Worker (Kafka Consumer) ──────────────────
+
+public class CommentFanoutWorker implements Runnable {
+
+    private static final String KAFKA_TOPIC_PREFIX = "stream-comments-";
+    private static final String REDIS_CHANNEL_PREFIX = "live-comments-";
+
+    private final KafkaConsumer&lt;String, String&gt; kafkaConsumer;
+    private final Jedis redisPublisher;
+    private final String assignedStreamId;
+
+    public CommentFanoutWorker(
+            KafkaConsumer&lt;String, String&gt; kafkaConsumer,
+            Jedis redisPublisher,
+            String assignedStreamId) {
+        this.kafkaConsumer = kafkaConsumer;
+        this.redisPublisher = redisPublisher;
+        this.assignedStreamId = assignedStreamId;
+    }
+
+    @Override
+    public void run() {
+        String kafkaTopic = KAFKA_TOPIC_PREFIX + assignedStreamId;
+        kafkaConsumer.subscribe(java.util.Collections.singletonList(kafkaTopic));
+
+        while (true) {
+            var records = kafkaConsumer.poll(java.time.Duration.ofMillis(100));
+            for (var record : records) {
+                String redisChannel = REDIS_CHANNEL_PREFIX + assignedStreamId;
+                // Publish comment JSON to Redis — all subscribed WebSocket servers receive it
+                redisPublisher.publish(redisChannel, record.value());
+            }
+            kafkaConsumer.commitSync();
+        }
+    }
+}
+
+// ── Component 3: WebSocket Server ─────────────────────────────────
+
+public class WebSocketCommentServer {
+
+    private static final String REDIS_CHANNEL_PREFIX = "live-comments-";
+
+    // Map of streamId → set of WebSocket sessions watching that stream
+    private final Map&lt;String, Set&lt;Session&gt;&gt; streamViewers = new ConcurrentHashMap&lt;&gt;();
+    private final Jedis redisSubscriber;
+
+    public WebSocketCommentServer(Jedis redisSubscriber) {
+        this.redisSubscriber = redisSubscriber;
+    }
+
+    /** Called when a viewer connects and starts watching a stream. */
+    public void onViewerJoin(String streamId, Session viewerSession) {
+        streamViewers.computeIfAbsent(streamId, ignored -> ConcurrentHashMap.newKeySet())
+                     .add(viewerSession);
+
+        // Subscribe to Redis channel for this stream if not already subscribed
+        subscribeToStreamIfNeeded(streamId);
+    }
+
+    /** Called when a viewer disconnects. */
+    public void onViewerLeave(String streamId, Session viewerSession) {
+        Set&lt;Session&gt; viewers = streamViewers.get(streamId);
+        if (viewers != null) {
+            viewers.remove(viewerSession);
+        }
+    }
+
+    private void subscribeToStreamIfNeeded(String streamId) {
+        String redisChannel = REDIS_CHANNEL_PREFIX + streamId;
+        // Subscribe in a background thread — JedisPubSub.subscribe() is blocking
+        Thread.ofVirtual().start(() ->
+            redisSubscriber.subscribe(new JedisPubSub() {
+                @Override
+                public void onMessage(String channel, String commentJson) {
+                    pushToAllViewers(streamId, commentJson);
+                }
+            }, redisChannel)
+        );
+    }
+
+    /** Pushes a comment to all WebSocket sessions watching the given stream. */
+    private void pushToAllViewers(String streamId, String commentJson) {
+        Set&lt;Session&gt; viewers = streamViewers.getOrDefault(streamId, java.util.Collections.emptySet());
+        for (Session viewerSession : viewers) {
+            if (viewerSession.isOpen()) {
+                viewerSession.getAsyncRemote().sendText(commentJson);
+            }
+        }
+    }
+}
+</code></pre>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="content-section__body">
+          <div class="quiz" data-quiz-id="p-live-comments-quiz" role="region" aria-label="Live comments system quiz">
+            <div class="quiz__header">
+              <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+              <div class="quiz__score" aria-live="polite"></div>
+            </div>
+            <div class="quiz__question">
+              <div class="quiz__question-number">Question 1 of 4</div>
+              <div class="quiz__question-text"></div>
+              <div class="quiz__options" role="group" aria-label="Answer options"></div>
+              <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            </div>
+
+            <div data-question="A live stream has 100,000 concurrent viewers. When a comment is posted, what is the main architectural challenge?" data-options='["Storing the comment in the database is too slow","A single server cannot maintain 100,000 WebSocket connections","Fan-out: delivering one comment to 100,000 viewers requires 100,000 individual push operations — this must be distributed across multiple servers","Comments cannot be delivered in under 500ms over the internet"]' data-correct="2" data-explanation="The core challenge is fan-out: one write must trigger 100,000 deliveries. A single server can hold ~50K-100K WebSocket connections but pushing to all of them sequentially for every comment would be a bottleneck. The solution is distributed fan-out: Kafka distributes the work, multiple comment servers each hold a subset of connections and push in parallel." style="display:none"></div>
+
+            <div data-question="You use Cassandra to store live stream comments. Which partition key design is most appropriate?" data-options='["(comment_id) — unique per comment, perfectly distributed","(stream_id) — all comments for a stream in one partition","(stream_id, time_bucket) — e.g., bucket by hour — limits partition size while keeping stream comments together for efficient time-range queries","(user_id) — distribute by commenter for even load"]' data-correct="2" data-explanation="stream_id alone creates hot partitions for popular streams (all writes go to one node). comment_id alone makes it impossible to query &apos;latest comments for stream X&apos; efficiently. Bucketing by (stream_id, time_bucket) keeps related data together for efficient range queries (last 5 minutes of comments) while capping partition size — a Cassandra best practice for time-series data." style="display:none"></div>
+
+            <div data-question="A viewer joins a live stream 10 minutes after it started. They should see the last 50 comments as initial state, then receive new comments in real-time. How do you handle this?" data-options='["Send all historical comments since stream start via WebSocket — this is the most complete approach","On connect: REST call to fetch last 50 comments from Cassandra (historical), then subscribe to WebSocket/SSE for new real-time comments. Use the timestamp of the last historical comment as the cursor to avoid gaps","Historical comments are not needed — viewers only see comments posted after they join","Store all comments in Redis and send them on WebSocket connect"]' data-correct="1" data-explanation="The two-phase connect pattern: (1) Fetch recent history via REST/HTTP from Cassandra (fast, paginated). (2) Subscribe to WebSocket for new comments, anchored to the timestamp of the last fetched comment. This avoids gaps between historical fetch and live subscription. This is the same pattern used by Slack (fetch history → subscribe to WebSocket for new messages)." style="display:none"></div>
+
+            <div data-question="A popular streamer has 1 million concurrent viewers during a major event. How do you scale the comment fan-out?" data-options='["Use a single powerful server with 1 million WebSocket connections","Add more Kafka partitions for the stream&apos;s topic and more fan-out workers; each worker handles a shard of WebSocket connection servers — parallel fan-out scales linearly","Use UDP multicast to deliver the comment to all 1 million viewers simultaneously","Limit the stream to 100,000 viewers maximum"]' data-correct="1" data-explanation="Kafka partitions enable parallel fan-out: 10 partitions → 10 consumer workers. Each worker publishes to a Redis Pub/Sub channel for its assigned WebSocket servers. 100 WebSocket servers each hold 10K connections. One comment triggers: 1 Kafka write → 10 parallel workers → 100 Redis publishes → 100 WebSocket servers each push to 10K connections = 1M deliveries, all in parallel." style="display:none"></div>
+
+            <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+            <div class="quiz__actions">
+              <div></div>
+              <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+            </div>
+            <div class="quiz__result is-hidden" aria-live="polite">
+              <div class="quiz__result-score"></div>
+              <div class="quiz__result-label"></div>
+              <div style="margin-top:var(--space-4)">
+                <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+                <a href="../../problems/tier2/ecommerce-cart.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev / Next navigation -->
+      <nav class="module-nav" aria-label="Problem navigation">
+        <a href="../../problems/tier1/yelp.html" class="module-nav__btn module-nav__btn--prev">← Yelp / Proximity</a>
+        <a href="../../problems/tier2/ecommerce-cart.html" class="module-nav__btn module-nav__btn--next">E-commerce Cart →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course</p>
+      <nav class="site-footer__links">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design an E-commerce Cart and Checkout system — full RESHADED walkthrough covering optimistic locking, Saga pattern, idempotency keys, and inventory reservation for MAANG interviews.">
+  <title>Design E-commerce Cart &amp; Checkout — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/ecommerce-cart/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-ecommerce-cart" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=ecommerce-cart" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Important</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Transactions / Consistency</span>
+        </div>
+        <h1 class="module-header__title">Design E-commerce Cart &amp; Checkout</h1>
+        <p class="module-header__desc">Three hard problems in one: prevent overselling with two competing checkouts, make checkout idempotent against double-clicks, and roll back gracefully when payment fails. The Saga pattern and optimistic locking are non-negotiable here.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Amazon, Alibaba, Shopify</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Spike traffic (flash sales)</div>
+        </div>
+      </header>
+
+      <!-- R — Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Add, remove, and update item quantities in cart</li>
+            <li>View cart with current prices and total</li>
+            <li>Checkout: validate inventory → calculate total → apply coupon → process payment → confirm order</li>
+            <li>Order history and status tracking (PENDING → PAID → SHIPPED → DELIVERED)</li>
+          </ul>
+
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 10M DAU, 1M checkouts/day; peak 100× on flash sales (~1,200 checkout QPS)</li>
+            <li><strong>Cart latency:</strong> &lt;50ms retrieval (Redis)</li>
+            <li><strong>Inventory correctness:</strong> No overselling — must be strictly enforced, not eventually consistent</li>
+            <li><strong>Idempotency:</strong> Double-clicking checkout must not create duplicate orders or double-charge</li>
+            <li><strong>Payment atomicity:</strong> Payment failure = no order created; order should not exist in a half-paid state</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Flash sale scenario:</strong> 100,000 users try to buy the same item simultaneously when only 1,000 units are available. Ask the interviewer about this case — it defines whether you need pessimistic or optimistic inventory locking.
+          </div>
+        </div>
+      </section>
+
+      <!-- E — Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Cart writes:</strong> 10M DAU × 5 cart updates/day ÷ 86,400s = ~580 QPS normal, ~10× peak = 5,800 QPS</li>
+            <li><strong>Checkout QPS:</strong> 1M checkouts/day ÷ 86,400 = ~12 QPS normal; flash sale peak ~1,200 QPS</li>
+            <li><strong>Cart data size:</strong> 10M active carts × avg 5 items × 200B per item = ~10GB (fits in Redis with plenty of headroom)</li>
+            <li><strong>Order history:</strong> 1M orders/day × 1KB per order = 1GB/day → ~365GB/year (PostgreSQL handles this easily)</li>
+            <li><strong>Inventory contention:</strong> During a flash sale, potentially 100K writes/second to a single product_id row → this is the critical hot-spot to design around</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- S — Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">-- carts: use JSONB for flexible item list; user_id is the natural PK
+-- In Redis: HASH cart:{user_id} with field per product_id
+CREATE TABLE carts (
+    user_id     UUID        PRIMARY KEY,
+    items       JSONB       NOT NULL DEFAULT '[]',
+    -- Each item: { product_id, quantity, unit_price_snapshot, added_at }
+    -- Price snapshot: lock in price at cart-add time (show "price when added")
+    updated_at  TIMESTAMP   DEFAULT NOW()
+);
+
+-- products: inventory_count = available; reserved_count = pending checkout
+CREATE TABLE products (
+    product_id       UUID         PRIMARY KEY,
+    name             VARCHAR(255),
+    price            DECIMAL(10,2),
+    inventory_count  INT          NOT NULL DEFAULT 0,
+    reserved_count   INT          NOT NULL DEFAULT 0,
+    -- available = inventory_count - reserved_count
+    version          BIGINT       DEFAULT 0   -- optimistic lock version
+);
+
+-- orders: JSONB items snapshot + status machine
+CREATE TABLE orders (
+    order_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID         NOT NULL,
+    status           VARCHAR(20)  DEFAULT 'PENDING',
+    items            JSONB        NOT NULL,  -- snapshot of cart at checkout time
+    subtotal         DECIMAL(10,2),
+    discount_amount  DECIMAL(10,2) DEFAULT 0,
+    total            DECIMAL(10,2),
+    payment_id       VARCHAR(255),           -- Stripe/PayPal charge ID
+    idempotency_key  VARCHAR(255) UNIQUE,    -- prevents duplicate checkout submissions
+    created_at       TIMESTAMP    DEFAULT NOW()
+);
+
+-- coupons: track usage with max_uses ceiling
+CREATE TABLE coupons (
+    coupon_code     VARCHAR(50)  PRIMARY KEY,
+    discount_type   VARCHAR(10),   -- PERCENT or FIXED
+    discount_value  DECIMAL(10,2),
+    min_order       DECIMAL(10,2) DEFAULT 0,
+    max_uses        INT,
+    used_count      INT          DEFAULT 0,
+    expires_at      TIMESTAMP
+);</code></pre>
+        </div>
+      </section>
+
+      <!-- H — High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Services</h3>
+          <ul>
+            <li><strong>Cart Service</strong> — Redis (primary) + PostgreSQL (durability); HASH per user; TTL 30 days</li>
+            <li><strong>Product / Inventory Service</strong> — manages inventory_count and reserved_count; handles reservation and confirmation</li>
+            <li><strong>Order Service</strong> — orchestrates checkout saga; creates order record; idempotency gate</li>
+            <li><strong>Payment Service</strong> — integrates with Stripe/PayPal; returns payment_id on success</li>
+            <li><strong>Coupon Service</strong> — validates and applies discount codes; atomic increment of used_count</li>
+            <li><strong>Notification Service</strong> — sends confirmation email after successful checkout (async via Kafka)</li>
+          </ul>
+
+          <h3>Checkout Saga (Happy Path)</h3>
+          <pre><code class="language-java">// 1. Client sends POST /v1/checkout with idempotency_key (UUID generated client-side)
+//
+// 2. Order Service: idempotency gate
+//    → Redis SET NX idempotency:{key} → if exists, return cached order_id
+//
+// 3. Inventory Service: reserve items (two-phase)
+//    → UPDATE products SET reserved_count += qty WHERE inventory_count - reserved_count >= qty
+//    → If any item fails: return 409 Conflict "item out of stock"
+//
+// 4. Coupon Service: validate + apply coupon (if provided)
+//    → Check expiry, min_order, remaining uses
+//    → Return discount_amount
+//
+// 5. Order Service: create order record (status = PENDING)
+//    → Calculate total = subtotal - discount_amount
+//
+// 6. Payment Service: charge payment method
+//    → Stripe charge API → returns payment_id
+//    → On failure: trigger compensating transactions (see Deliver)
+//
+// 7. Order Service: mark order PAID, store payment_id
+//
+// 8. Inventory Service: confirm reservation → deduct from inventory_count
+//    UPDATE products SET inventory_count -= qty, reserved_count -= qty
+//
+// 9. Notification Service: async → send confirmation email (Kafka event)</code></pre>
+        </div>
+      </section>
+
+      <!-- A — APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// View cart
+GET /v1/cart
+// Response: { items: [{product_id, name, quantity, unit_price, subtotal}], cart_total }
+
+// Add or update item in cart (upsert by product_id)
+PUT /v1/cart/items/{product_id}
+// Body: { quantity: 2 }
+// Response: { cart_total }
+
+// Remove item from cart
+DELETE /v1/cart/items/{product_id}
+
+// Checkout — idempotency_key must be generated client-side and sent in header
+POST /v1/checkout
+// Header: Idempotency-Key: {uuid}
+// Body: { coupon_code: "SAVE20" (optional), payment_method_id: "pm_xxx" }
+// Response: 201 Created { order_id, status: "PENDING" }
+//           202 Accepted (if idempotency key already seen — returns cached result)
+
+// Get order status
+GET /v1/orders/{order_id}
+// Response: { order_id, status, items, total, created_at }
+
+// Get order history (paginated)
+GET /v1/orders?limit=20&amp;cursor=...
+// Response: { orders: [...], next_cursor }</code></pre>
+        </div>
+      </section>
+
+      <!-- D — Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="dive-title">
+        <h2 class="content-section__title" id="dive-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Preventing Overselling
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>The Race Condition</h3>
+          <p>Two users simultaneously check inventory (1 unit available). Both see "in stock". Both create orders. You've sold the same unit twice — overselling. You need atomic check-and-decrement.</p>
+
+          <h3>Option A: Pessimistic Locking (SELECT FOR UPDATE)</h3>
+          <pre><code class="language-java">BEGIN;
+SELECT inventory_count FROM products WHERE product_id = ? FOR UPDATE;
+-- ^ Acquires row-level lock. Other checkouts for same product block here.
+IF inventory_count >= qty:
+    UPDATE products SET inventory_count = inventory_count - qty;
+    COMMIT;
+ELSE:
+    ROLLBACK; -- out of stock</code></pre>
+          <p><strong>Works, but:</strong> serializes all checkouts for the same product. At 1,200 QPS flash sale, creates a queue. Lock holder crash can stall others.</p>
+
+          <h3>Option B: Optimistic Locking (Recommended)</h3>
+          <pre><code class="language-java">// Atomic conditional UPDATE — no lock held
+UPDATE products
+SET reserved_count = reserved_count + ?
+WHERE product_id = ?
+  AND (inventory_count - reserved_count) >= ?;
+-- If 0 rows affected: sold out (another checkout got the last unit)
+// rowsAffected == 0 → return "Out of stock" to user
+// rowsAffected == 1 → reservation succeeded, proceed to payment</code></pre>
+          <p><strong>Why this works:</strong> The database evaluates the <code>AND</code> condition atomically. Only one of two concurrent UPDATEs will satisfy <code>inventory - reserved >= qty</code>. No lock, no blocking.</p>
+
+          <h3>Option C: Redis Atomic Decrement (Flash Sale)</h3>
+          <pre><code class="language-java">// Pre-load inventory into Redis: SET inventory:{product_id} 1000
+// On each checkout attempt:
+Long remaining = jedis.decrBy("inventory:" + productId, requestedQty);
+if (remaining < 0) {
+    jedis.incrBy("inventory:" + productId, requestedQty);  // rollback
+    return "OUT_OF_STOCK";
+}
+// Asynchronously sync Redis count back to DB</code></pre>
+          <p><strong>For flash sales:</strong> DECR is O(1) and single-threaded in Redis. No DB contention at all during the hot spike. DB inventory updated async after the sale window closes.</p>
+        </div>
+      </section>
+
+      <!-- E — Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Overselling:</strong> Optimistic locking on reserved_count ensures exactly one thread wins the last unit. Redis DECR handles flash-sale spike traffic without DB contention.</li>
+            <li><strong>Idempotency:</strong> Redis SET NX on idempotency_key ensures double-click returns the same order_id, no second charge. Key TTL 24h covers all realistic retry windows.</li>
+            <li><strong>Payment failure rollback:</strong> Saga compensating transaction releases the reservation. No orphaned reserved inventory.</li>
+            <li><strong>Cart durability:</strong> Write-through to both Redis (fast) and PostgreSQL (persistent). Redis miss → load from PostgreSQL → re-warm Redis.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- D — Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Cart:</strong> Redis HASH as primary storage (O(1) per field access), write-through to PostgreSQL for durability. TTL 30 days on Redis keys.</li>
+            <li><strong>Inventory:</strong> Two-phase reservation (reserve on checkout start → confirm on payment success → release on payment failure). Optimistic locking via conditional UPDATE prevents overselling without holding locks.</li>
+            <li><strong>Idempotency:</strong> Client generates UUID per checkout intent. Server does Redis SET NX — first request processes, retries return cached result. Eliminates double-charge risk.</li>
+            <li><strong>Saga:</strong> Choreography-based saga. Payment failure publishes an event; Inventory Service subscribes and releases the reservation. No 2PC distributed transaction required.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚡</span>
+          Trade-offs
+        </h2>
+        <div class="content-section__body">
+          <div class="table-wrapper" role="region" aria-label="Trade-off comparison table" tabindex="0">
+            <table class="tradeoff-table">
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Option A</th>
+                  <th scope="col">Option B</th>
+                  <th scope="col">Choose When</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Cart storage</td>
+                  <td>Redis + PostgreSQL write-through</td>
+                  <td>DynamoDB (managed, auto-scaling)</td>
+                  <td>Redis+PG: lowest latency, familiar ops. DynamoDB: managed TTL, global tables for multi-region carts, no Redis ops overhead.</td>
+                </tr>
+                <tr>
+                  <td>Inventory locking</td>
+                  <td>Optimistic (conditional UPDATE)</td>
+                  <td>Redis DECR (atomic counter)</td>
+                  <td>Optimistic: general use, normal traffic, no extra infrastructure. Redis DECR: flash sales with extreme contention on a single product — offloads DB entirely.</td>
+                </tr>
+                <tr>
+                  <td>Checkout orchestration</td>
+                  <td>Synchronous saga (one service calls all others)</td>
+                  <td>Async saga via events (Kafka)</td>
+                  <td>Synchronous: simpler, immediate response, easier debugging. Async: better resilience if any service is slow, but harder to trace and return order_id immediately.</td>
+                </tr>
+                <tr>
+                  <td>Checkout service architecture</td>
+                  <td>Monolith checkout service (all in one)</td>
+                  <td>Microservices (one per domain: cart, inventory, order, payment)</td>
+                  <td>Monolith: start here; simpler transactions, fewer network hops. Microservices: scale each domain independently when bottlenecks emerge.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">import redis.clients.jedis.Jedis;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * CheckoutService: orchestrates the full checkout saga.
+ *
+ * Flow: idempotency gate → reserve inventory → validate coupon
+ *       → create order → charge payment → confirm inventory → notify
+ *
+ * Compensating transactions triggered on any failure after reservation.
+ */
+public class CheckoutService {
+
+    private static final String IDEMPOTENCY_KEY_PREFIX = "idempotency:checkout:";
+    private static final int IDEMPOTENCY_TTL_SECONDS = 86_400;   // 24 hours
+
+    private final Jedis redisClient;
+    private final InventoryRepository inventoryRepository;
+    private final OrderRepository orderRepository;
+    private final CouponService couponService;
+    private final PaymentGateway paymentGateway;
+    private final NotificationPublisher notificationPublisher;
+
+    public CheckoutService(
+            Jedis redisClient,
+            InventoryRepository inventoryRepository,
+            OrderRepository orderRepository,
+            CouponService couponService,
+            PaymentGateway paymentGateway,
+            NotificationPublisher notificationPublisher) {
+        this.redisClient = redisClient;
+        this.inventoryRepository = inventoryRepository;
+        this.orderRepository = orderRepository;
+        this.couponService = couponService;
+        this.paymentGateway = paymentGateway;
+        this.notificationPublisher = notificationPublisher;
+    }
+
+    // ── Public API ─────────────────────────────────────────────────
+
+    /**
+     * Processes a checkout request end-to-end.
+     * Returns the order ID (same value on duplicate submission).
+     *
+     * @param idempotencyKey UUID generated by client on checkout button click
+     * @param cartItems      items from the user's cart
+     * @param couponCode     optional coupon code (null if not used)
+     * @param paymentMethodId Stripe payment method ID
+     * @return CheckoutResult with order_id and final total
+     */
+    public CheckoutResult processCheckout(
+            String idempotencyKey,
+            List&lt;CartItem&gt; cartItems,
+            String couponCode,
+            String paymentMethodId) {
+
+        // Step 1: Idempotency gate — prevents duplicate checkout processing
+        String cachedOrderId = getIdempotencyCache(idempotencyKey);
+        if (cachedOrderId != null) {
+            return CheckoutResult.fromCachedOrderId(cachedOrderId);
+        }
+
+        // Step 2: Reserve inventory (two-phase reservation)
+        boolean reservationSucceeded = inventoryRepository.reserveItems(cartItems);
+        if (!reservationSucceeded) {
+            throw new OutOfStockException("One or more items are no longer available");
+        }
+
+        try {
+            // Step 3: Validate and apply coupon
+            BigDecimal subtotal = calculateSubtotal(cartItems);
+            BigDecimal discountAmount = (couponCode != null)
+                ? couponService.validateAndApply(couponCode, subtotal)
+                : BigDecimal.ZERO;
+            BigDecimal orderTotal = subtotal.subtract(discountAmount);
+
+            // Step 4: Create order record in PENDING state
+            String newOrderId = UUID.randomUUID().toString();
+            orderRepository.createOrder(newOrderId, cartItems, orderTotal, discountAmount);
+
+            // Step 5: Charge payment (external call — most likely failure point)
+            String paymentId = paymentGateway.charge(paymentMethodId, orderTotal);
+
+            // Step 6: Confirm order and reduce actual inventory
+            orderRepository.markOrderPaid(newOrderId, paymentId);
+            inventoryRepository.confirmReservation(cartItems);
+
+            // Step 7: Cache result for idempotency; publish notification
+            storeIdempotencyCache(idempotencyKey, newOrderId);
+            notificationPublisher.publishOrderConfirmation(newOrderId);
+
+            return new CheckoutResult(newOrderId, orderTotal, "PAID");
+
+        } catch (PaymentFailedException paymentError) {
+            // Compensating transaction: release the reservation we made in Step 2
+            inventoryRepository.releaseReservation(cartItems);
+            throw paymentError;
+
+        } catch (Exception unexpectedError) {
+            // Safety net: always release reservation on any unexpected failure
+            inventoryRepository.releaseReservation(cartItems);
+            throw new CheckoutException("Checkout failed unexpectedly", unexpectedError);
+        }
+    }
+
+    // ── Private helpers ────────────────────────────────────────────
+
+    private String getIdempotencyCache(String idempotencyKey) {
+        return redisClient.get(IDEMPOTENCY_KEY_PREFIX + idempotencyKey);
+    }
+
+    private void storeIdempotencyCache(String idempotencyKey, String orderId) {
+        redisClient.setex(IDEMPOTENCY_KEY_PREFIX + idempotencyKey, IDEMPOTENCY_TTL_SECONDS, orderId);
+    }
+
+    private BigDecimal calculateSubtotal(List&lt;CartItem&gt; cartItems) {
+        return cartItems.stream()
+            .map(item -> item.getUnitPriceSnapshot().multiply(
+                BigDecimal.valueOf(item.getQuantity())
+            ))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+}
+
+// ── Inventory Repository: optimistic locking ─────────────────────
+
+// SQL for reserving a single item (called per cart item):
+// UPDATE products
+// SET reserved_count = reserved_count + :qty
+// WHERE product_id = :product_id
+//   AND (inventory_count - reserved_count) >= :qty;
+//
+// Returns rowsAffected. If 0 → out of stock.
+// No lock acquired. Database evaluates condition atomically.
+
+// SQL for confirming reservation after payment success:
+// UPDATE products
+// SET inventory_count = inventory_count - :qty,
+//     reserved_count  = reserved_count  - :qty
+// WHERE product_id = :product_id;
+
+// SQL for releasing reservation after payment failure:
+// UPDATE products
+// SET reserved_count = reserved_count - :qty
+// WHERE product_id = :product_id;
+</code></pre>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="content-section__body">
+          <div class="quiz" data-quiz-id="p-ecommerce-cart-quiz" role="region" aria-label="E-commerce cart quiz">
+            <div class="quiz__header">
+              <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+              <div class="quiz__score" aria-live="polite"></div>
+            </div>
+            <div class="quiz__question">
+              <div class="quiz__question-number">Question 1 of 4</div>
+              <div class="quiz__question-text"></div>
+              <div class="quiz__options" role="group" aria-label="Answer options"></div>
+              <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            </div>
+
+            <div data-question="Two users simultaneously try to buy the last unit of a product. Your checkout code reads inventory (1), both see stock available, both create orders. How do you prevent this overselling?" data-options='["Use application-level mutex locks","Use optimistic locking: UPDATE products SET inventory_count = inventory_count - 1 WHERE product_id = ? AND inventory_count >= 1 — if 0 rows affected, the item is sold out","Check inventory twice — read-check-read pattern","Use eventual consistency and accept occasional overselling"]' data-correct="1" data-explanation="Optimistic locking pushes the race condition resolution to the database. The WHERE inventory_count >= 1 condition means only one concurrent UPDATE will succeed (atomically). The other user&apos;s UPDATE affects 0 rows, indicating sold-out. No locks held, no blocking. This is O(1) and scales well. The pessimistic alternative (SELECT FOR UPDATE) works but serializes checkouts for the same product." style="display:none"></div>
+
+            <div data-question="A user double-clicks the checkout button and two identical requests reach your server within 100ms. How do you ensure only one order is created?" data-options='["Reject the second request based on timestamp — if less than 1 second apart, discard","Accept only POST requests for checkout — GET requests are idempotent but POST is not","The client sends an idempotency key (UUID generated on checkout button click). The server stores SET idempotency_key:UUID order_id with 24h TTL in Redis (SET NX). If key already exists, return the cached order_id without processing again","Database unique constraints on (user_id, created_at) prevent duplicate orders"]' data-correct="2" data-explanation="Idempotency keys (used by Stripe, PayPal, and most payment APIs) are the standard solution. The client generates a UUID once per checkout intent. Server does: Redis SET NX idempotency:{key} → if SET succeeds, process the checkout → store result. If SET fails (key exists), return the stored result. This makes the checkout operation safe to retry or double-submit." style="display:none"></div>
+
+            <div data-question="A user&apos;s checkout fails at the payment step (card declined) after inventory was already reserved. What should happen to the reserved inventory?" data-options='["Inventory reservation is permanent — the user must contact support","The Saga pattern: payment failure triggers a compensating transaction that releases the reservation (UPDATE products SET reserved_count = reserved_count - 1, inventory_count = inventory_count + 1)","Keep the reservation for 24 hours as a pending order","Roll back the entire DB transaction using 2PC"]' data-correct="1" data-explanation="This is the Saga compensating transaction pattern. The checkout flow is: reserve inventory → charge payment → confirm. If payment fails, the saga triggers compensating actions in reverse: release inventory reservation. This restores inventory availability for other buyers. 2PC would work but requires all services to participate in a distributed transaction — too slow and fragile for high-throughput checkout." style="display:none"></div>
+
+            <div data-question="Your cart is stored in Redis with TTL=30 days. A user&apos;s Redis cart is lost when a Redis node crashes before replication. What is the correct durability strategy?" data-options='["Accept cart loss — users can re-add items","Enable Redis AOF (Append-Only File) persistence on all cart nodes to survive crashes","Use Redis as the write-through cache: every cart update writes to both Redis (primary, fast) and DynamoDB or PostgreSQL (persistent backup). On cache miss, load from the persistent store","Disable TTL on cart entries to prevent expiry"]' data-correct="2" data-explanation="Redis AOF writes every operation to disk — useful but still loses data between AOF flushes and doesn&apos;t survive total data loss. The write-through pattern is more robust: write to both Redis (for low-latency reads) and the persistent store (for durability). On Redis miss (node crash or TTL expiry), load from the DB and re-warm Redis. This is the standard cart durability pattern used by Amazon." style="display:none"></div>
+
+            <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+            <div class="quiz__actions">
+              <div></div>
+              <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+            </div>
+            <div class="quiz__result is-hidden" aria-live="polite">
+              <div class="quiz__result-score"></div>
+              <div class="quiz__result-label"></div>
+              <div style="margin-top:var(--space-4)">
+                <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+                <a href="../../index.html#problems" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">All Problems →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev / Next navigation -->
+      <nav class="module-nav" aria-label="Problem navigation">
+        <a href="../../problems/tier2/live-comments.html" class="module-nav__btn module-nav__btn--prev">← Live Comments</a>
+        <a href="../../index.html#problems" class="module-nav__btn module-nav__btn--next">All Problems →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course</p>
+      <nav class="site-footer__links">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

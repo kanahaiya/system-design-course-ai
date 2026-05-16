@@ -64,11 +64,11 @@
         </div>
         <div class="hero__stats animate-fade-in-up animate-delay-4">
           <div class="hero__stat">
-            <span class="hero__stat-value" id="js-total-modules">11</span>
+            <span class="hero__stat-value" id="js-total-modules">14</span>
             <div class="hero__stat-label">Core Modules</div>
           </div>
           <div class="hero__stat">
-            <span class="hero__stat-value">40</span>
+            <span class="hero__stat-value">44</span>
             <div class="hero__stat-label">Real Problems</div>
           </div>
           <div class="hero__stat">
@@ -98,7 +98,7 @@
             <div style="font-size:2rem;margin-bottom:var(--space-3)">📖</div>
             <h3 style="margin-bottom:var(--space-2);font-size:var(--text-lg)">Learn the Patterns</h3>
             <p style="color:var(--color-text-secondary);font-size:var(--text-sm);line-height:var(--leading-relaxed)">
-              11 structured modules covering every building block — from CAP theorem to event sourcing.
+              14 structured modules covering every building block — from networking basics and OOD to event sourcing and real-time systems.
               Each module has animated diagrams and full Java implementations.
             </p>
           </div>
@@ -154,9 +154,9 @@
       <div class="container--wide">
         <div class="section__header">
           <div class="section__label">Core Curriculum</div>
-          <h2 class="section__title" id="modules-title">11 Modules, Every Pattern</h2>
+          <h2 class="section__title" id="modules-title">14 Modules, Every Pattern</h2>
           <p class="section__desc">
-            From first principles to advanced distributed systems patterns.
+            From networking fundamentals and OOD to advanced distributed systems patterns and real-time communication.
             Each module builds on the previous.
           </p>
         </div>
@@ -264,6 +264,33 @@
               <div class="module-card__tags"><span class="tag">CQRS</span><span class="tag">Event Sourcing</span></div>
             </div>
           </a>
+          <a href="modules/11-ood/index.html" class="module-card" data-lesson-id="module-11">
+            <div class="module-card__number">Module 11</div>
+            <div class="module-card__icon">🏗️</div>
+            <div class="module-card__title">Object-Oriented Design</div>
+            <div class="module-card__desc">SOLID principles, design patterns, and 4 OOD problems with full Java class hierarchies: Parking Lot, Elevator (SCAN), Vending Machine (State pattern), Chess.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">SOLID</span><span class="tag">OOD</span><span class="tag">Amazon</span></div>
+            </div>
+          </a>
+          <a href="modules/12-realtime/index.html" class="module-card" data-lesson-id="module-12">
+            <div class="module-card__number">Module 12</div>
+            <div class="module-card__icon">⚡</div>
+            <div class="module-card__title">Real-time Communication</div>
+            <div class="module-card__desc">WebSocket vs Long Polling vs SSE vs Short Polling — when to use each, how to scale real-time systems with Redis Pub/Sub and Kafka fan-out.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">WebSocket</span><span class="tag">SSE</span><span class="tag">Redis Pub/Sub</span></div>
+            </div>
+          </a>
+          <a href="modules/00b-networking/index.html" class="module-card" data-lesson-id="module-00b">
+            <div class="module-card__number">Module 00-B</div>
+            <div class="module-card__icon">🌐</div>
+            <div class="module-card__title">Networking Fundamentals</div>
+            <div class="module-card__desc">HTTP/HTTPS, DNS resolution step-by-step, TCP vs UDP, 3-tier architecture, L4 vs L7 load balancers. Essential foundation for every other module.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Beginner</span><span class="tag">HTTP</span><span class="tag">DNS</span><span class="tag">TCP/UDP</span></div>
+            </div>
+          </a>
         </div>
       </div>
     </section>
@@ -272,7 +299,7 @@
     <section class="section" id="problems" aria-labelledby="problems-title">
       <div class="container--wide">
         <div class="section__header">
-          <div class="section__label">40 Real Problems</div>
+          <div class="section__label">44 Real Problems</div>
           <h2 class="section__title" id="problems-title">The Exact Problems Asked at MAANG</h2>
           <p class="section__desc">
             Tiered by frequency. Start with Tier 1. Each problem has a full RESHADED walkthrough + Java implementation.
@@ -437,6 +464,24 @@
             </div>
             <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
           </a>
+          <a href="problems/tier1/lru-cache.html" class="problem-card" data-lesson-id="p-lru-cache">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon • Google • Meta • Microsoft</div>
+            <div class="problem-card__title">Design an LRU Cache</div>
+            <div class="problem-card__meta">
+              <span class="tag">HashMap + DLL</span><span class="tag">Thread-safe</span><span class="tag">TTL</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/yelp.html" class="problem-card" data-lesson-id="p-yelp">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google • Amazon • Yelp • Uber</div>
+            <div class="problem-card__title">Design Yelp / Proximity Service</div>
+            <div class="problem-card__meta">
+              <span class="tag">Geohash</span><span class="tag">Geo-Index</span><span class="tag">Redis GEO</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
         </div>
 
         <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
@@ -458,6 +503,8 @@
           <a href="problems/tier2/google-docs.html" class="problem-card" data-lesson-id="p-google-docs"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Notion • Figma</div><div class="problem-card__title">Design Google Docs (Collaborative Editing)</div><div class="problem-card__meta"><span class="tag">OT / CRDT</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
           <a href="problems/tier2/metrics-dashboard.html" class="problem-card" data-lesson-id="p-metrics"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Datadog • New Relic</div><div class="problem-card__title">Design Metrics Dashboard</div><div class="problem-card__meta"><span class="tag">Time Series</span><span class="tag">Aggregation</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
           <a href="problems/tier2/leaderboard.html" class="problem-card" data-lesson-id="p-leaderboard"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Gaming • Gamification</div><div class="problem-card__title">Design a Gaming Leaderboard</div><div class="problem-card__meta"><span class="tag">Redis Sorted Set</span><span class="tag">Sharding</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/live-comments.html" class="problem-card" data-lesson-id="p-live-comments"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">YouTube • Twitch • Meta • TikTok</div><div class="problem-card__title">Design Live Comments System</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Kafka Fan-out</span><span class="tag">Cassandra</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/ecommerce-cart.html" class="problem-card" data-lesson-id="p-ecommerce-cart"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba • Shopify</div><div class="problem-card__title">Design E-commerce Cart & Checkout</div><div class="problem-card__meta"><span class="tag">Optimistic Lock</span><span class="tag">Idempotency</span><span class="tag">Saga</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
         </div>
 
         <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">

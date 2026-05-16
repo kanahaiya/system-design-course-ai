@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design an LRU Cache — full RESHADED walkthrough covering HashMap + DoublyLinkedList, thread safety with ReentrantReadWriteLock, TTL, and distributed caching for MAANG interviews.">
+  <title>Design an LRU Cache — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/lru-cache/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-lru-cache" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=lru-cache" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Data Structure + System Design</span>
+        </div>
+        <h1 class="module-header__title">Design an LRU Cache</h1>
+        <p class="module-header__desc">A hybrid problem: first implement the LRU Cache data structure in O(1) time, then scale it to a distributed cache handling 1M QPS across 10TB of data. Asked at every MAANG company.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Amazon, Google, Meta, Microsoft</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Read-heavy (90%+ reads)</div>
+        </div>
+      </header>
+
+      <!-- R — Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>This problem has two layers. Start with the data structure, then escalate to distributed design when the interviewer asks how you'd scale it.</p>
+
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><code>get(key)</code> → returns value, or <code>-1</code> if not found; moves accessed key to most-recently-used position</li>
+            <li><code>put(key, value)</code> → inserts or updates; if capacity is reached, evicts the least-recently-used key first</li>
+            <li>TTL (time-to-live) per key — expired keys return <code>-1</code> as if not found</li>
+          </ul>
+
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>O(1) time complexity</strong> for both <code>get</code> and <code>put</code> — this is the core constraint</li>
+            <li><strong>Thread-safe</strong> for concurrent access from multiple threads</li>
+            <li>For distributed scale: 1M QPS, 10TB total cache size, sub-millisecond latency</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Interview tip:</strong> When the interviewer says "design an LRU Cache", ask: "Are you looking for the data structure implementation first, or should I design it as a distributed cache service?" This shows you understand both dimensions of the problem.
+          </div>
+        </div>
+      </section>
+
+      <!-- E — Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>For the single-node problem, estimation is trivial (it's bounded by capacity). For the distributed version:</p>
+          <ul>
+            <li><strong>Scale:</strong> 1M QPS total, 10TB cache, average value size 1KB</li>
+            <li><strong>Entries:</strong> 10TB / 1KB = 10 billion entries total</li>
+            <li><strong>Nodes:</strong> With 10GB RAM per node → 10,000 entries per GB × 10,000 nodes... too many. Use 10GB/node usable → 10M entries/node → need 1,000 nodes</li>
+            <li><strong>QPS/node:</strong> 1M QPS / 1,000 nodes = 1,000 QPS/node — very manageable</li>
+            <li><strong>Network:</strong> 1M QPS × 1KB avg = 1GB/s total network bandwidth across the cluster</li>
+          </ul>
+          <div class="callout callout--info">
+            <strong>Key insight:</strong> 10TB fits in memory across 1,000 nodes. This is exactly how Redis Cluster and Memcached work — distribute the keyspace using consistent hashing.
+          </div>
+        </div>
+      </section>
+
+      <!-- S — Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema / Data Structures
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>LRU Cache has no database schema — it's an in-memory data structure. The "schema" is the internal structure design.</p>
+
+          <h3>Core Data Structure: HashMap + Doubly Linked List</h3>
+          <ul>
+            <li><strong>HashMap&lt;Key, Node&gt;</strong> — gives O(1) lookup of any node by key</li>
+            <li><strong>DoublyLinkedList</strong> — maintains access order; most-recently-used at <em>head</em>, least-recently-used at <em>tail</em></li>
+            <li><strong>Node</strong> — stores <code>key</code>, <code>value</code>, <code>prev</code> pointer, <code>next</code> pointer, and optional <code>expiryMs</code></li>
+          </ul>
+
+          <h3>Why both structures together?</h3>
+          <ul>
+            <li>HashMap alone: O(1) lookup, but no way to know the access order → can't find LRU entry</li>
+            <li>Linked list alone: access order maintained, but O(N) to find a key → can't do O(1) get</li>
+            <li>Together: HashMap gives O(1) direct pointer to the node in the list → O(1) move-to-front (relink prev/next)</li>
+          </ul>
+
+          <h3>Dummy Head and Tail Sentinels</h3>
+          <p>Use sentinel nodes (dummy head and tail) to eliminate null checks on boundary cases during insert/remove operations.</p>
+
+          <pre><code class="language-java">// Internal structure layout:
+// [dummy_head] ↔ [most_recent] ↔ ... ↔ [least_recent] ↔ [dummy_tail]
+//
+// HashMap: key → Node (direct pointer into the list)
+// On get(key): HashMap lookup → move node to front → return value
+// On put(key, val): HashMap lookup → update or insert at front; if over capacity → remove tail</code></pre>
+        </div>
+      </section>
+
+      <!-- H — High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Level 1: Single-Node LRU Cache</h3>
+          <p>One process, one HashMap + DoublyLinkedList. All operations O(1). Thread safety via ReentrantReadWriteLock (allow concurrent reads).</p>
+
+          <h3>Level 2: Distributed LRU Cache</h3>
+          <ul>
+            <li><strong>Consistent Hashing Ring</strong> — maps each key to a specific cache node; adding/removing nodes only remaps 1/N of keys</li>
+            <li><strong>Cache Nodes</strong> — each node runs an independent LRU cache (e.g., Memcached or a custom service)</li>
+            <li><strong>Cache Client Library</strong> — client-side library handles key routing via consistent hash ring; no central coordinator needed</li>
+            <li><strong>Replication</strong> — each key stored on N nodes (e.g., N=3) for fault tolerance; reads from any replica, writes to all</li>
+          </ul>
+
+          <h3>Architecture Diagram (text form)</h3>
+          <pre><code class="language-java">// Client → CacheClient (consistent hash ring)
+//              ↓
+//     ┌────────┬────────┬────────┐
+//   Node 0   Node 1   Node 2  ... Node 999
+//  (10GB)   (10GB)   (10GB)      (10GB)
+//   LRU      LRU      LRU         LRU
+//
+// Each node: HashMap + DLL, evicts LRU on capacity reached
+// Total: 1000 × 10GB = 10TB</code></pre>
+
+          <div class="callout callout--tip">
+            <strong>Mention Redis:</strong> In real systems this is Redis Cluster. Each shard is a Redis instance with its own LRU eviction policy (<code>maxmemory-policy: allkeys-lru</code>). You're essentially re-deriving how Redis Cluster works.
+          </div>
+        </div>
+      </section>
+
+      <!-- A — APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Single-Node Interface</h3>
+          <pre><code class="language-java">int get(int key)
+// Returns value for key, or -1 if not found or expired
+// Side effect: moves key to most-recently-used position
+
+void put(int key, int value)
+// Inserts or updates key. If at capacity, evicts LRU key first.
+
+void put(int key, int value, long ttlMillis)
+// Same as put() but sets expiry timestamp = now + ttlMillis</code></pre>
+
+          <h3>Typed Distributed Cache Interface</h3>
+          <pre><code class="language-java">Optional&lt;T&gt; get(String key, Class&lt;T&gt; type)
+// Deserializes value to type T; returns Optional.empty() on miss or expiry
+
+void put(String key, T value, long ttlSeconds)
+// Serializes value, routes to correct node via consistent hash ring
+
+void invalidate(String key)
+// Deletes key from all replicas</code></pre>
+        </div>
+      </section>
+
+      <!-- D — Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="dive-title">
+        <h2 class="content-section__title" id="dive-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Why Doubly Linked List (not Singly)?</h3>
+          <p>When <code>get(key)</code> is called, you must move the node to the front. Moving requires <em>removing</em> the node from its current position. With a doubly linked list and a direct pointer to the node:</p>
+          <pre><code class="language-java">node.prev.next = node.next;  // O(1) — we have both pointers
+node.next.prev = node.prev;</code></pre>
+          <p>With a singly linked list, you'd need to traverse from the head to find the predecessor node — O(N). The doubly linked list is not optional; it's what makes O(1) deletion possible.</p>
+
+          <h3>Thread Safety: ReadWriteLock vs synchronized</h3>
+          <p>Caches are read-heavy (90%+ reads in typical use). A <code>synchronized</code> method serializes all access — even concurrent reads block each other. <code>ReentrantReadWriteLock</code> allows multiple simultaneous readers as long as no writer holds the lock. Under read-heavy load, this dramatically improves throughput.</p>
+
+          <h3>TTL: Lazy vs Eager Expiry</h3>
+          <p><strong>Lazy expiry</strong> (what we implement): check expiry on access. Simple, no background threads. Downside: expired keys consume memory until accessed or LRU-evicted.</p>
+          <p><strong>Eager expiry</strong> (what Redis does): lazy expiry + a background thread that periodically samples random keys and deletes expired ones. This caps memory waste from never-accessed expired keys.</p>
+
+          <h3>LinkedHashMap Shortcut</h3>
+          <p>Java's <code>LinkedHashMap</code> maintains insertion or access order internally (it's the same HashMap + doubly linked list pattern). You can build a one-liner LRU by overriding <code>removeEldestEntry</code>. But: it's not thread-safe, doesn't support TTL, and interviewers expect you to know the underlying implementation.</p>
+        </div>
+      </section>
+
+      <!-- E — Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Correctness:</strong> get() and put() are O(1). Eviction always removes the true LRU entry (tail of list).</li>
+            <li><strong>Thread safety:</strong> ReadWriteLock ensures no data races. get() holds read lock (shared), put() holds write lock (exclusive).</li>
+            <li><strong>TTL correctness:</strong> Expired keys return -1 and are removed from both the list and HashMap, reclaiming memory on access.</li>
+            <li><strong>Distributed correctness:</strong> Consistent hashing ensures the same key always routes to the same node(s). A client-side ring avoids a coordinator bottleneck.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- D — Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>Summarize your design to the interviewer:</p>
+          <ul>
+            <li><strong>Data structure:</strong> HashMap + Doubly Linked List with sentinel head/tail. Both structures updated atomically on every get/put. O(1) guaranteed.</li>
+            <li><strong>Thread safety:</strong> ReentrantReadWriteLock — multiple concurrent reads, exclusive writes. For single-key hot-spot scenarios, striped locking (lock per hash bucket) further reduces contention.</li>
+            <li><strong>Distributed:</strong> Consistent hashing ring, each node an independent LRU cache. Client library routes keys — no central coordinator. Add replication factor N=3 for fault tolerance.</li>
+            <li><strong>TTL:</strong> Lazy expiry on access + optional background cleanup thread (Redis-style periodic sampling).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚡</span>
+          Trade-offs
+        </h2>
+        <div class="content-section__body">
+          <div class="table-wrapper" role="region" aria-label="Trade-off comparison table" tabindex="0">
+            <table class="tradeoff-table">
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Option A</th>
+                  <th scope="col">Option B</th>
+                  <th scope="col">Choose When</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Internal structure</td>
+                  <td>HashMap + DLL (custom)</td>
+                  <td>LinkedHashMap (built-in)</td>
+                  <td>Custom: need TTL, thread safety, or interviewer wants to see the internals. LinkedHashMap: prototype or non-concurrent usage.</td>
+                </tr>
+                <tr>
+                  <td>Thread safety strategy</td>
+                  <td>ReentrantReadWriteLock</td>
+                  <td>synchronized on all methods</td>
+                  <td>ReadWriteLock: read-heavy workloads (typical cache). synchronized: write-heavy or when simplicity > performance.</td>
+                </tr>
+                <tr>
+                  <td>TTL expiry</td>
+                  <td>Lazy (check on access)</td>
+                  <td>Background cleanup thread</td>
+                  <td>Lazy: simpler, no extra threads, acceptable if expired-but-unaccessed keys are rare. Background: bounded memory waste matters.</td>
+                </tr>
+                <tr>
+                  <td>Eviction policy</td>
+                  <td>LRU (evict least recently used)</td>
+                  <td>LFU (evict least frequently used)</td>
+                  <td>LRU: recency matters (e.g., news feed cache). LFU: frequency matters (e.g., popular product pages). ARC: adapts between both automatically.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">import java.util.HashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+/**
+ * Thread-safe LRU Cache with TTL support.
+ * get() and put() are both O(1).
+ *
+ * Internally: HashMap (O(1) lookup) + DoublyLinkedList (O(1) reorder).
+ * Sentinel head/tail nodes eliminate null-pointer edge cases.
+ */
+public class LRUCache {
+
+    // ── Inner classes ──────────────────────────────────────────────
+
+    private static class Node {
+        int key;
+        int value;
+        long expiryMs;   // 0 = no expiry
+        Node prev;
+        Node next;
+
+        Node(int key, int value, long ttlMillis) {
+            this.key = key;
+            this.value = value;
+            this.expiryMs = (ttlMillis > 0)
+                ? System.currentTimeMillis() + ttlMillis
+                : 0;
+        }
+    }
+
+    private static class DoublyLinkedList {
+        // Sentinel nodes: head.next = most recent, tail.prev = least recent
+        final Node head = new Node(0, 0, 0);
+        final Node tail = new Node(0, 0, 0);
+
+        DoublyLinkedList() {
+            head.next = tail;
+            tail.prev = head;
+        }
+
+        void addToFront(Node node) {
+            node.next = head.next;
+            node.prev = head;
+            head.next.prev = node;
+            head.next = node;
+        }
+
+        void remove(Node node) {
+            node.prev.next = node.next;
+            node.next.prev = node.prev;
+        }
+
+        /** Removes and returns the LRU node (tail.prev). Returns null if list is empty. */
+        Node removeLast() {
+            Node lruNode = tail.prev;
+            if (lruNode == head) {
+                return null;
+            }
+            remove(lruNode);
+            return lruNode;
+        }
+    }
+
+    // ── Fields ─────────────────────────────────────────────────────
+
+    private final int capacity;
+    private final HashMap&lt;Integer, Node&gt; nodeMap;
+    private final DoublyLinkedList accessList;
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
+    // ── Constructor ────────────────────────────────────────────────
+
+    public LRUCache(int capacity) {
+        if (capacity &lt;= 0) {
+            throw new IllegalArgumentException("Capacity must be positive");
+        }
+        this.capacity = capacity;
+        this.nodeMap = new HashMap&lt;&gt;(capacity);
+        this.accessList = new DoublyLinkedList();
+    }
+
+    // ── Public API ─────────────────────────────────────────────────
+
+    /**
+     * Returns value for key, or -1 if not found or expired.
+     * Moves accessed key to most-recently-used position.
+     * Uses read lock initially, upgrades to write lock on hit (must move node).
+     */
+    public int get(int key) {
+        // Note: we acquire write lock because even a read moves the node.
+        // A pure read lock would be invalid here since we mutate the list.
+        lock.writeLock().lock();
+        try {
+            Node node = nodeMap.get(key);
+            if (node == null) {
+                return -1;
+            }
+            if (isExpired(node)) {
+                evictNode(node);
+                return -1;
+            }
+            // Move to front (most recently used)
+            accessList.remove(node);
+            accessList.addToFront(node);
+            return node.value;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Inserts or updates the key. If at capacity, evicts the LRU key first.
+     * Optional TTL: 0 means no expiry.
+     */
+    public void put(int key, int value) {
+        put(key, value, 0);
+    }
+
+    public void put(int key, int value, long ttlMillis) {
+        lock.writeLock().lock();
+        try {
+            Node existingNode = nodeMap.get(key);
+            if (existingNode != null) {
+                existingNode.value = value;
+                existingNode.expiryMs = (ttlMillis &gt; 0)
+                    ? System.currentTimeMillis() + ttlMillis
+                    : 0;
+                accessList.remove(existingNode);
+                accessList.addToFront(existingNode);
+                return;
+            }
+            // Evict if at capacity
+            if (nodeMap.size() &gt;= capacity) {
+                Node evicted = accessList.removeLast();
+                if (evicted != null) {
+                    nodeMap.remove(evicted.key);
+                }
+            }
+            Node newNode = new Node(key, value, ttlMillis);
+            nodeMap.put(key, newNode);
+            accessList.addToFront(newNode);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    // ── Private helpers ────────────────────────────────────────────
+
+    private boolean isExpired(Node node) {
+        return node.expiryMs &gt; 0 &amp;&amp; System.currentTimeMillis() &gt; node.expiryMs;
+    }
+
+    private void evictNode(Node node) {
+        accessList.remove(node);
+        nodeMap.remove(node.key);
+    }
+}
+
+// ── LinkedHashMap one-liner alternative ───────────────────────────
+// Useful to mention: Java's LinkedHashMap IS the same pattern internally.
+// Override removeEldestEntry to auto-evict on put().
+// Limitation: not thread-safe, no TTL support.
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+class LRUCacheSimple&lt;K, V&gt; extends LinkedHashMap&lt;K, V&gt; {
+    private final int maxCapacity;
+
+    LRUCacheSimple(int maxCapacity) {
+        // accessOrder=true: get() moves entry to back (most recent = last)
+        super(maxCapacity, 0.75f, true);
+        this.maxCapacity = maxCapacity;
+    }
+
+    @Override
+    protected boolean removeEldestEntry(Map.Entry&lt;K, V&gt; eldest) {
+        return size() &gt; maxCapacity;
+    }
+}
+</code></pre>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="content-section__body">
+          <div class="quiz" data-quiz-id="p-lru-cache-quiz" role="region" aria-label="LRU Cache quiz">
+            <div class="quiz__header">
+              <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+              <div class="quiz__score" aria-live="polite"></div>
+            </div>
+            <div class="quiz__question">
+              <div class="quiz__question-number">Question 1 of 4</div>
+              <div class="quiz__question-text"></div>
+              <div class="quiz__options" role="group" aria-label="Answer options"></div>
+              <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            </div>
+
+            <div data-question="Why does the LRU Cache implementation use a Doubly Linked List rather than a Singly Linked List?" data-options='["Doubly linked lists have O(1) random access while singly linked lists have O(N)","Deleting a node from the middle of a doubly linked list is O(1) because we have a reference to both prev and next; in a singly linked list, we&apos;d need O(N) to find the predecessor","Doubly linked lists use less memory than singly linked lists","Java&apos;s standard library only provides DoublyLinkedList"]' data-correct="1" data-explanation="When we access a key, we need to move its node to the front of the list. This requires removing the node from its current position. With a doubly linked list and a direct reference to the node (from the HashMap), removal is O(1): node.prev.next = node.next; node.next.prev = node.prev. With a singly linked list, we&apos;d have to traverse from the head to find the predecessor — O(N)." style="display:none"></div>
+
+            <div data-question="The ThreadSafeLRUCache uses ReentrantReadWriteLock. Why use a ReadWriteLock instead of a simple synchronized keyword?" data-options='["ReentrantReadWriteLock is always faster than synchronized","ReadWriteLock allows multiple concurrent get() operations (read lock is shared) while put() operations are exclusive. Under read-heavy workloads (typical for cache), this dramatically improves throughput","synchronized only works on methods, not on blocks of code","ReentrantReadWriteLock has lower memory overhead than synchronized"]' data-correct="1" data-explanation="Caches are typically read-heavy (90%+ reads). With a simple synchronized block, only one thread can execute get() at a time. With ReadWriteLock: multiple threads can hold the read lock simultaneously (as long as no writer holds the write lock). This allows concurrent reads, dramatically improving throughput for read-heavy workloads." style="display:none"></div>
+
+            <div data-question="You implement TTL (time-to-live) for cache entries using lazy expiry: you check expiry only when the key is accessed. What is the main downside of this approach?" data-options='["Lazy expiry is always slower than eager expiry","Expired keys that are never accessed again will remain in memory until they are accessed or evicted by the LRU policy, potentially causing memory waste","Lazy expiry makes get() operations O(N)","Lazy expiry cannot support millisecond-precision TTLs"]' data-correct="1" data-explanation="With lazy expiry, a key that expires but is never accessed again occupies memory until: (1) another put() triggers LRU eviction and this key happens to be at the tail, or (2) it&apos;s accessed and detected as expired. The fix: run a background cleanup thread (like Redis&apos;s combination of lazy expiry + periodic random sampling and deletion of expired keys)." style="display:none"></div>
+
+            <div data-question="An interviewer asks: &apos;How would you scale your LRU Cache to handle 1 million QPS and 10TB of data?&apos; What is the correct approach?" data-options='["Use a larger machine with 10TB of RAM and a single LRU cache instance","Use consistent hashing to distribute keys across 1000 cache nodes, each holding ~10GB of data and handling ~1000 QPS; cache clients route keys to the correct node using the hash ring","Replicate the entire 10TB cache across 1000 servers for redundancy","Use a database with indexes as the cache layer"]' data-correct="1" data-explanation="10TB doesn&apos;t fit on one machine&apos;s RAM (typical max ~1-4TB). Distribute: consistent hash the key to select a node. 1000 nodes × 10GB RAM = 10TB total. 1M QPS / 1000 nodes = 1000 QPS/node — very manageable. This is exactly how Redis Cluster and Memcached work. Add replication (each key on N nodes) for fault tolerance." style="display:none"></div>
+
+            <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+            <div class="quiz__actions">
+              <div></div>
+              <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+            </div>
+            <div class="quiz__result is-hidden" aria-live="polite">
+              <div class="quiz__result-score"></div>
+              <div class="quiz__result-label"></div>
+              <div style="margin-top:var(--space-4)">
+                <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+                <a href="../../problems/tier1/yelp.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev / Next navigation -->
+      <nav class="module-nav" aria-label="Problem navigation">
+        <a href="../../problems/tier1/distributed-cache.html" class="module-nav__btn module-nav__btn--prev">← Distributed Cache</a>
+        <a href="../../problems/tier1/yelp.html" class="module-nav__btn module-nav__btn--next">Yelp / Proximity →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course</p>
+      <nav class="site-footer__links">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>
