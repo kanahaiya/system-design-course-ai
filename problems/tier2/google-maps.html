@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Google Maps — RESHADED walkthrough covering map tile storage, routing algorithms, real-time traffic, ETA calculation, and geocoding for MAANG interviews.">
+  <title>Design Google Maps — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-google-maps" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=google-maps" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Geo/Algorithms</span>
+        </div>
+        <h1 class="module-header__title">Design Google Maps</h1>
+        <p class="module-header__desc">Google Maps involves three distinct hard problems: storing a tile-based map efficiently, running shortest-path routing on a graph with billions of nodes, and incorporating real-time traffic without recomputing the whole graph.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Uber, Lyft</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🗺️</span> 1B+ users</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Display map tiles at any zoom level worldwide</li>
+            <li>Turn-by-turn routing between two points (driving, walking, transit)</li>
+            <li>Real-time traffic overlays and ETA recalculation</li>
+            <li>Search for places by name or address (geocoding)</li>
+            <li>Reverse geocoding: coordinates → human-readable address</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 1B users, 10M route calculations/day, 1B tile requests/day</li>
+            <li><strong>Latency:</strong> Route calculation &lt;2s; tile load &lt;100ms from CDN</li>
+            <li><strong>Map data:</strong> ~100TB total across all zoom levels</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>Zoom levels 0–22: total tiles = sum(4^z) for z=0..22 ≈ 22TB of tile data</li>
+            <li>With satellite imagery at max zoom: ~100TB total map storage</li>
+            <li>10M routes/day = ~115 QPS for routing; peaks around commute hours → 500 QPS</li>
+            <li>1B tile requests/day = ~11,600 tile QPS; CDN handles 99% → origin sees ~120 QPS</li>
+            <li>Road graph: 50M nodes, 120M edges for the entire world (compressed: ~100GB in memory)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Map tiles (object storage — S3/GCS)
+// Key format: tiles/{zoom}/{x}/{y}.png  (slippy map / XYZ standard)
+// Or quadkey: tiles/{quadkey}.png  (Microsoft Bing style — each char is 0/1/2/3)
+
+// Road graph (in-memory on routing servers, sourced from OpenStreetMap + proprietary)
+// Node: intersection (lat/lng)
+// Edge: road segment with distance_meters, speed_limit_kph, road_type
+// Graph stored as adjacency list, serialized to binary (Protocol Buffers)
+
+// Real-time traffic (Redis time-series)
+// Key: traffic:{segment_id}  Value: current_speed_kph with 60s TTL
+// Updated by GPS-reporting clients and traffic sensors
+
+// Places index (Elasticsearch)
+// Fields: place_id, name, address, lat, lng, category, rating
+// Geo-indexed for radius queries</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Tile Service:</strong> Tiles pre-rendered and stored in S3. CDN caches tiles with long TTL (months — tiles rarely change). Client requests tile by (zoom, x, y).</li>
+            <li><strong>Routing Service:</strong> Loads road graph into memory. Uses A* with a geographical heuristic (straight-line distance) — faster than Dijkstra on large graphs. Traffic data modifies edge weights at query time.</li>
+            <li><strong>Traffic Ingestion:</strong> GPS-reporting users send location every 15s. Aggregation service maps (lat/lng, speed) to road segment IDs, updates Redis TTL-keyed traffic speeds.</li>
+            <li><strong>Geocoding Service:</strong> Address → coordinates uses indexed address database (ElasticSearch). Coordinates → address uses reverse geocoding tree (hierarchical polygon containment).</li>
+            <li><strong>ETA Engine:</strong> Sum of (distance / current_speed) for each segment on route. Recalculates every 30s while navigating.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">GET /v1/tiles/{zoom}/{x}/{y}                      // map tile PNG
+GET /v1/route?origin={lat,lng}&dest={lat,lng}&mode=driving
+  // returns: { steps: [...], total_distance_m, eta_seconds, polyline }
+GET /v1/geocode?address={string}                  // → { lat, lng, formatted_address }
+GET /v1/reverse-geocode?lat={}&lng={}             // → { address }
+GET /v1/places?q={query}&lat={}&lng={}&radius={}  // nearby search
+POST /v1/location-update                          // GPS report from navigating user</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Tile Storage with Quadkeys<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p>The world map is divided into a hierarchical quadtree. At zoom 0: 1 tile covers the whole world. At zoom 1: 4 tiles. At zoom z: 4^z tiles. Each tile is 256×256 pixels.</p>
+          <p><strong>Quadkey encoding:</strong> At each zoom level, each tile's position in the quadrant (NW=0, NE=1, SW=2, SE=3) appends one digit. Zoom 3, tile at position (0,0) = "000". This encodes location + zoom in one string — great for object storage key prefix-based routing.</p>
+          <p><strong>Why quadkeys beat (zoom, x, y) for object storage:</strong> Spatially adjacent tiles share a key prefix. You can list all tiles in a region with a prefix scan. S3 partitions by key prefix — spatially related tiles end up on the same S3 partition, improving cache locality.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Routing at scale:</strong> Road graph for whole world is ~100GB. Not practical to load into one server's memory. Solution: partition graph by geographic region. Most routes are local — route within region, stitch at boundaries (contraction hierarchies).</li>
+            <li><strong>Traffic update latency:</strong> Redis TTL approach means traffic data is at most 60s stale. Acceptable for ETA accuracy.</li>
+            <li><strong>Tile freshness:</strong> Roads change rarely. Tiles can have months-long CDN TTL. When map data changes, use versioned tile keys (tile/v2/...) and deploy new CDN content.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed Google Maps handling 1B users, 100TB of map tile storage, and real-time routing. Key decisions: quadkey-encoded tiles on S3 with CDN (long TTL), A* routing with traffic-adjusted edge weights loaded in-memory, Redis for real-time traffic speeds with 60s TTL, and ElasticSearch for geocoding and place search.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Routing algorithm</td><td>A* with heuristic</td><td>Dijkstra</td><td>A* is faster when a good heuristic exists (straight-line distance). Dijkstra explores all nodes; A* focuses toward the destination.</td></tr>
+                <tr><td>Tile encoding</td><td>Quadkey prefix</td><td>(zoom, x, y) tuple</td><td>Spatial locality in object storage keys; prefix-based region queries; single string key simpler to CDN-cache</td></tr>
+                <tr><td>Traffic storage</td><td>Redis with TTL</td><td>Time-series DB</td><td>Redis provides sub-ms reads with automatic expiry; we only need current speed, not history</td></tr>
+                <tr><td>Graph partitioning</td><td>Contraction hierarchies</td><td>Single in-memory graph</td><td>World graph is too large for single node; CH allows efficient routing across partition boundaries</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TileServer — encodes map coordinates to quadkey format and generates
+ * CDN-friendly tile URLs for the slippy map tile system.
+ */
+public class TileServer {
+
+    private static final String CDN_BASE_URL = "https://tiles.maps.example.com";
+    private static final int MAX_ZOOM_LEVEL = 22;
+
+    /**
+     * Converts (zoom, x, y) tile coordinates to a quadkey string.
+     * Each character in the quadkey represents one zoom level's quadrant (0-3).
+     *
+     * @param zoomLevel zoom level (0 = whole world, 22 = street level)
+     * @param tileX     tile column (0 to 2^zoom - 1)
+     * @param tileY     tile row (0 to 2^zoom - 1)
+     * @return quadkey string of length == zoomLevel
+     */
+    public String encodeToQuadkey(int zoomLevel, int tileX, int tileY) {
+        if (zoomLevel &lt; 0 || zoomLevel &gt; MAX_ZOOM_LEVEL) {
+            throw new IllegalArgumentException("Zoom level must be 0–" + MAX_ZOOM_LEVEL);
+        }
+        StringBuilder quadkey = new StringBuilder();
+        for (int level = zoomLevel; level &gt; 0; level--) {
+            int digit = 0;
+            int mask = 1 &lt;&lt; (level - 1);
+            if ((tileX &amp; mask) != 0) {
+                digit++; // bit set in X → east half → +1
+            }
+            if ((tileY &amp; mask) != 0) {
+                digit += 2; // bit set in Y → south half → +2
+            }
+            quadkey.append(digit);
+        }
+        return quadkey.toString();
+    }
+
+    /**
+     * Generates the full CDN URL for a map tile.
+     * Tiles are immutable — URL includes zoom+quadkey for natural CDN caching.
+     */
+    public String buildTileUrl(int zoomLevel, int tileX, int tileY) {
+        String quadkey = encodeToQuadkey(zoomLevel, tileX, tileY);
+        return CDN_BASE_URL + "/tiles/" + zoomLevel + "/" + quadkey + ".png";
+    }
+
+    /**
+     * Converts latitude/longitude to tile coordinates at a given zoom level.
+     * Uses the standard Web Mercator (EPSG:3857) projection.
+     */
+    public int[] latLngToTile(double latitudeDegrees, double longitudeDegrees, int zoomLevel) {
+        int totalTiles = 1 &lt;&lt; zoomLevel;
+        double latitudeRadians = Math.toRadians(latitudeDegrees);
+        int tileX = (int) Math.floor((longitudeDegrees + 180.0) / 360.0 * totalTiles);
+        int tileY = (int) Math.floor(
+            (1.0 - Math.log(Math.tan(latitudeRadians) + 1.0 / Math.cos(latitudeRadians)) / Math.PI)
+            / 2.0 * totalTiles
+        );
+        return new int[]{tileX, tileY};
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-google-maps-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="At zoom level 3, how many map tiles cover the entire world?" data-options='["8 tiles","64 tiles (4^3)","16 tiles","256 tiles"]' data-correct="1" data-explanation="At zoom z, the world is divided into 4^z tiles. Zoom 0 = 1 tile (whole world). Zoom 1 = 4 tiles. Zoom 2 = 16. Zoom 3 = 64. Zoom 22 = over 17 trillion tiles (but most are ocean so not all are pre-rendered)." style="display:none"></div>
+          <div data-question="Why is A* preferred over Dijkstra for road routing on Google Maps?" data-options='["A* uses less memory because it only stores the current path","A* uses a geographical heuristic (straight-line distance to destination) to prioritize exploring nodes toward the destination, reducing the search space — Dijkstra explores nodes in all directions equally","A* can handle negative edge weights which appear in traffic models","Dijkstra requires the graph to be loaded into memory; A* can stream from disk"]' data-correct="1" data-explanation="Dijkstra explores all nodes up to the solution radius. A* uses the heuristic h(n) = straight-line distance to goal to skip exploring nodes that are going the wrong direction. On a road graph with billions of nodes, this dramatically reduces the nodes examined — often 10× fewer than Dijkstra." style="display:none"></div>
+          <div data-question="How does Google Maps incorporate real-time traffic without recomputing the full road graph?" data-options='["The entire graph is re-loaded from disk every minute with updated speeds","Traffic speeds are stored in Redis with TTL. At routing query time, A* looks up current speed for each edge from Redis, adjusting travel time without modifying graph structure","Road segments with traffic are removed from the graph and added as new edges","Traffic data is only used to display the overlay, not to affect route calculation"]' data-correct="1" data-explanation="The road graph structure (topology) doesn't change — roads don't appear/disappear. Only edge weights (travel time = distance / current_speed) change. Redis stores current_speed per segment with a short TTL. The routing engine reads these at query time to compute realistic ETAs without rebuilding the graph." style="display:none"></div>
+          <div data-question="What advantage do quadkey-encoded tile keys have over (zoom, x, y) tuples for object storage?" data-options='["Quadkeys are shorter strings, reducing storage costs","Spatially adjacent tiles share a key prefix in quadkey encoding, enabling spatial locality in object storage — adjacent tiles are partitioned together, improving cache performance and prefix scan queries","Quadkeys encode altitude information that (x,y) tuples lack","Object storage systems cannot index numeric tuples"]' data-correct="1" data-explanation="Quadkeys encode hierarchy — a tile's quadkey starts with its parent tile's quadkey. All tiles in a geographic region share a common prefix. This means object storage can cluster geographically related tiles together, prefix-scan returns a complete region, and CDN cache keys are naturally spatial." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="payment-system.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Payment System →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="netflix.html" class="btn btn--outline">← Netflix</a>
+        <a href="payment-system.html" class="btn btn--primary">Next: Payment System →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

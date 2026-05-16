@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master REST vs gRPC vs GraphQL trade-offs, rate limiting algorithms, API versioning strategies, idempotency keys, and API gateway patterns for MAANG system design interviews.">
+  <title>API Design — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/05-api-design/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#protocols" class="module-toc__link">REST vs gRPC vs GraphQL</a></li>
+          <li><a href="#rate-limiting" class="module-toc__link">Rate Limiting Algorithms</a></li>
+          <li><a href="#versioning" class="module-toc__link">API Versioning</a></li>
+          <li><a href="#idempotency" class="module-toc__link">Idempotency Keys</a></li>
+          <li><a href="#gateway" class="module-toc__link">API Gateway Pattern</a></li>
+          <li><a href="#code" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-off Table</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-05" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 05</span>
+        </nav>
+        <div class="module-header__number">Module 05</div>
+        <h1 class="module-header__title">API Design</h1>
+        <p class="module-header__desc">
+          APIs are the contracts between services. Choose the wrong protocol and you pay a performance
+          tax for the life of the system. Choose the wrong rate limiting algorithm and you either
+          let attackers through or block legitimate users. Get these right.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 38 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Intermediate</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> Very High Frequency</div>
+        </div>
+      </header>
+
+      <!-- Section: REST vs gRPC vs GraphQL -->
+      <section class="content-section" id="protocols" aria-labelledby="protocols-title">
+        <h2 class="content-section__title" id="protocols-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          REST vs gRPC vs GraphQL
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 180" class="content-section__diagram" role="img" aria-label="API protocol comparison: REST, gRPC, and GraphQL use cases">
+            <!-- REST -->
+            <rect x="10" y="10" width="140" height="130" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+            <text x="80" y="32" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" font-weight="700" fill="#16a34a">REST</text>
+            <text x="80" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">HTTP/1.1 + JSON</text>
+            <text x="80" y="66" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Cacheable (GET)</text>
+            <text x="80" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Human-readable</text>
+            <text x="80" y="94" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Stateless</text>
+            <text x="80" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#16a34a" font-weight="600">Public APIs</text>
+            <text x="80" y="128" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#16a34a" font-weight="600">Browser clients</text>
+            <!-- gRPC -->
+            <rect x="170" y="10" width="140" height="130" rx="8" fill="#eff6ff" stroke="#6366f1" stroke-width="2"/>
+            <text x="240" y="32" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" font-weight="700" fill="#6366f1">gRPC</text>
+            <text x="240" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">HTTP/2 + Protobuf</text>
+            <text x="240" y="66" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">~5× faster than REST</text>
+            <text x="240" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Bidirectional stream</text>
+            <text x="240" y="94" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Strict schema (.proto)</text>
+            <text x="240" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#6366f1" font-weight="600">Microservice RPC</text>
+            <text x="240" y="128" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#6366f1" font-weight="600">Low-latency internal</text>
+            <!-- GraphQL -->
+            <rect x="330" y="10" width="140" height="130" rx="8" fill="#fdf4ff" stroke="#a21caf" stroke-width="2"/>
+            <text x="400" y="32" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" font-weight="700" fill="#a21caf">GraphQL</text>
+            <text x="400" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">HTTP + JSON</text>
+            <text x="400" y="66" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Client-specified fields</text>
+            <text x="400" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">No over/under-fetch</text>
+            <text x="400" y="94" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#374151">Single endpoint</text>
+            <text x="400" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#a21caf" font-weight="600">Mobile clients</text>
+            <text x="400" y="128" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#a21caf" font-weight="600">BFF (Backend for Frontend)</text>
+          </svg>
+
+          <h3>REST</h3>
+          <p>
+            Representational State Transfer over HTTP. Resources identified by URLs, operations via
+            HTTP verbs (GET/POST/PUT/DELETE/PATCH). Stateless by design — each request contains all
+            context. GET responses are cacheable by default (CDN, browser, proxy).
+            <strong>Weakness:</strong> over-fetching (response includes unneeded fields) and under-fetching
+            (need multiple requests for related data). Both are solvable with good API design but require
+            discipline.
+          </p>
+          <h3>gRPC</h3>
+          <p>
+            Google's RPC framework. Contracts defined in Protocol Buffer (.proto) files, compiled to
+            strongly-typed client/server stubs in any language. Runs over HTTP/2 — multiplexed streams,
+            header compression, binary framing.
+            <strong>Performance:</strong> Protobuf serialization is 3–10× smaller and 2–5× faster than JSON.
+            HTTP/2 multiplexing eliminates head-of-line blocking.
+            <strong>Weakness:</strong> Not natively browser-supported (requires gRPC-Web proxy).
+            Hard to inspect without tooling. Schema changes require regenerating stubs.
+          </p>
+          <h3>GraphQL</h3>
+          <p>
+            Query language for APIs. Client specifies exactly which fields it needs, preventing over-fetching.
+            A single query can traverse related entities (posts → author → followers) — eliminating
+            multiple REST round trips.
+            <strong>Weakness:</strong> N+1 query problem — naively resolving nested entities causes
+            O(N) database queries. Solution: DataLoader pattern (batch + deduplicate DB calls per request).
+            Caching is harder because every query is unique. Not suitable for binary data streaming.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Rate Limiting -->
+      <section class="content-section" id="rate-limiting" aria-labelledby="rate-limiting-title">
+        <h2 class="content-section__title" id="rate-limiting-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚦</span>
+          Rate Limiting Algorithms
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 160" class="content-section__diagram" role="img" aria-label="Token bucket and sliding window rate limiting visualization">
+            <!-- Token Bucket -->
+            <text x="100" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#6366f1">Token Bucket</text>
+            <rect x="50" y="22" width="100" height="80" rx="6" fill="#f1f5f9" stroke="#6366f1" stroke-width="2"/>
+            <!-- Tokens inside bucket -->
+            <circle cx="75" cy="50" r="8" fill="#6366f1" opacity="0.8"/>
+            <circle cx="95" cy="50" r="8" fill="#6366f1" opacity="0.8"/>
+            <circle cx="115" cy="50" r="8" fill="#6366f1" opacity="0.8"/>
+            <circle cx="75" cy="70" r="8" fill="#6366f1" opacity="0.8"/>
+            <circle cx="95" cy="70" r="8" fill="#6366f1" opacity="0.3"/>
+            <text x="100" y="118" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Bucket capacity=5, 4 tokens</text>
+            <text x="100" y="128" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Refill: +1/sec. Request costs 1 token.</text>
+            <text x="100" y="140" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#6366f1">Allows bursts up to capacity.</text>
+            <!-- Animated token refill -->
+            <circle cx="140" cy="35" r="6" fill="#16a34a" opacity="0.8">
+              <animate attributeName="cy" from="20" to="40" dur="2s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" from="1" to="0" dur="2s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Sliding Window -->
+            <text x="350" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#e11d48">Sliding Window Log</text>
+            <rect x="240" y="22" width="220" height="80" rx="6" fill="#fff1f2" stroke="#e11d48" stroke-width="2"/>
+            <!-- Timeline -->
+            <line x1="255" y1="62" x2="445" y2="62" stroke="#e11d48" stroke-width="1.5"/>
+            <text x="255" y="80" font-family="Inter,sans-serif" font-size="8" fill="#64748b">t=0</text>
+            <text x="425" y="80" font-family="Inter,sans-serif" font-size="8" fill="#64748b">t=60s</text>
+            <!-- Window indicator -->
+            <rect x="310" y="45" width="130" height="35" rx="4" fill="#e11d48" opacity="0.1" stroke="#e11d48" stroke-width="1" stroke-dasharray="4,2"/>
+            <text x="375" y="58" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#e11d48">Sliding window (last 60s)</text>
+            <!-- Request dots in window -->
+            <circle cx="325" cy="62" r="4" fill="#e11d48"/>
+            <circle cx="345" cy="62" r="4" fill="#e11d48"/>
+            <circle cx="380" cy="62" r="4" fill="#e11d48"/>
+            <circle cx="415" cy="62" r="4" fill="#6366f1"/>
+            <text x="415" y="50" font-family="Inter,sans-serif" font-size="8" fill="#6366f1">new req</text>
+            <text x="350" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Count timestamps in [now-60s, now].</text>
+            <text x="350" y="127" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Allow if count &lt; limit. O(1) with Redis ZSET.</text>
+          </svg>
+
+          <h3>1. Token Bucket</h3>
+          <p>
+            A bucket holds up to N tokens. Tokens refill at rate R per second. Each request consumes one token.
+            If no tokens remain, the request is rejected (429 Too Many Requests).
+            <strong>Key property:</strong> allows bursts up to bucket capacity. A user with unused credits
+            can send a burst of N requests instantly, then is rate-limited.
+            Used by: AWS API Gateway, Stripe, most cloud providers.
+            <strong>Implementation:</strong> Redis: store <code>(tokens, lastRefillTime)</code> per user key.
+            Atomic Lua script to compute and update in one round trip.
+          </p>
+          <h3>2. Leaky Bucket</h3>
+          <p>
+            Requests enter a queue (bucket) and are processed at a fixed output rate (leak rate).
+            If the queue is full, new requests are dropped.
+            <strong>Difference from token bucket:</strong> leaky bucket enforces a smooth, constant output rate
+            regardless of bursts. Token bucket allows bursts as long as tokens exist.
+            Better for protecting backend services that can't handle burst load.
+          </p>
+          <h3>3. Sliding Window Log</h3>
+          <p>
+            Log each request's timestamp. On each new request, remove entries older than the window
+            (e.g., older than 60 seconds), count remaining entries, allow if below limit.
+            <strong>Pros:</strong> exact. No burst allowed at window boundary.
+            <strong>Cons:</strong> memory grows with request volume (must store all timestamps).
+            <strong>Implementation:</strong> Redis Sorted Set: <code>ZADD</code> per request,
+            <code>ZREMRANGEBYSCORE</code> to prune, <code>ZCARD</code> to count. Pipeline for atomicity.
+          </p>
+          <h3>4. Sliding Window Counter</h3>
+          <p>
+            Approximation of sliding window log. Divide time into fixed windows (e.g., 1-minute slots).
+            Count = current window count + (previous window count × overlap fraction).
+            <strong>Example:</strong> limit=100/min. At t=45s into the current minute:
+            overlap = (60-45)/60 = 25% of previous window.
+            Estimated count = 20 (current) + 80×0.25 (previous) = 40 → allowed.
+            <strong>Pros:</strong> O(1) memory (only 2 counters). Close enough for rate limiting.
+            Redis: two keys with 1-minute TTL.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: API Versioning -->
+      <section class="content-section" id="versioning" aria-labelledby="versioning-title">
+        <h2 class="content-section__title" id="versioning-title">
+          <span class="content-section__title-icon" aria-hidden="true">📌</span>
+          API Versioning Strategies
+        </h2>
+        <div class="content-section__body">
+          <h3>URI Versioning</h3>
+          <p>
+            <code>/api/v1/users</code> → <code>/api/v2/users</code>. Simplest, most visible.
+            Easy to route in API gateway. Easy to document separately. Easy for clients to control migration.
+            <strong>Downside:</strong> breaks REST's resource-location principle (same resource, different URL).
+            Used by: Twitter, Stripe, GitHub, Twilio.
+          </p>
+          <h3>Header Versioning</h3>
+          <p>
+            <code>Accept: application/vnd.myapp.v2+json</code> or custom <code>API-Version: 2</code> header.
+            Keeps URLs clean. Allows content negotiation.
+            <strong>Downside:</strong> harder to test in browser, not visible in URL (confusing to developers).
+            Used by: GitHub (Accept header), Microsoft Graph API.
+          </p>
+          <h3>Query Parameter Versioning</h3>
+          <p>
+            <code>/api/users?version=2</code>. Easy to implement.
+            <strong>Downside:</strong> pollutes URLs, can be accidentally cached without version, ambiguous semantics.
+            Generally considered worst practice.
+          </p>
+          <h3>Versioning Best Practices</h3>
+          <ul>
+            <li>Only version on breaking changes (removing fields, changing types, altering semantics). Additive changes (new optional fields) should not require a version bump.</li>
+            <li>Maintain N-1 versions at minimum. Communicate a deprecation timeline (6–12 months for external APIs).</li>
+            <li>Use semantic versioning for internal signaling; expose only major versions to clients.</li>
+            <li>API gateways (Kong, AWS API Gateway) can handle version routing centrally.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Idempotency Keys -->
+      <section class="content-section" id="idempotency" aria-labelledby="idempotency-title">
+        <h2 class="content-section__title" id="idempotency-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔑</span>
+          Idempotency Keys for Safe Retries
+        </h2>
+        <div class="content-section__body">
+          <p>
+            An idempotency key is a client-generated unique ID sent with each request.
+            The server stores the result of the first execution keyed by this ID.
+            On retry (same key), return the stored result — no re-execution.
+            This converts a non-idempotent operation (charge card) into a safe retry-able one.
+          </p>
+          <h3>Flow</h3>
+          <ol>
+            <li>Client generates a UUID idempotency key: <code>X-Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000</code></li>
+            <li>Server checks if key exists in idempotency store (Redis or DB) → if yes, return cached response</li>
+            <li>If not found: execute operation, store result with the key (TTL: 24 hours–7 days), return response</li>
+            <li>Client retries on network timeout → server returns cached result, no duplicate charge</li>
+          </ol>
+          <h3>Implementation Details</h3>
+          <ul>
+            <li><strong>Key storage:</strong> Redis SETNX with TTL (atomic check-and-set). For financial data: PostgreSQL with unique constraint on idempotency_key column.</li>
+            <li><strong>Concurrency:</strong> Two concurrent retries with the same key — use SELECT FOR UPDATE or Redis SETNX to ensure only one executes.</li>
+            <li><strong>TTL:</strong> Match to retry window. Stripe uses 24 hours. Longer TTLs consume more storage.</li>
+            <li><strong>Scope:</strong> Key must be scoped to the client (user + key, not just key) to prevent cross-user replay attacks.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: API Gateway -->
+      <section class="content-section" id="gateway" aria-labelledby="gateway-title">
+        <h2 class="content-section__title" id="gateway-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚪</span>
+          API Gateway Pattern
+        </h2>
+        <div class="content-section__body">
+          <p>
+            An API gateway is a reverse proxy that sits in front of all microservices and handles
+            cross-cutting concerns centrally: authentication, rate limiting, routing, request transformation,
+            SSL termination, caching, observability.
+          </p>
+          <h3>What the Gateway Handles</h3>
+          <ul>
+            <li><strong>Authentication / Authorization</strong> — JWT validation, OAuth token introspection, API key validation. Offloads auth from every service.</li>
+            <li><strong>Rate Limiting</strong> — Centralized rate limiting per API key, per IP, or per user. Prevents individual services from implementing it redundantly.</li>
+            <li><strong>Request/Response Transformation</strong> — Protocol translation (REST → gRPC), field mapping, response aggregation (backend for frontend pattern).</li>
+            <li><strong>Load Balancing</strong> — Distribute requests across service instances. Health checks, circuit breaking.</li>
+            <li><strong>Observability</strong> — Centralized logging, tracing (inject trace IDs), metrics (latency, error rate per endpoint).</li>
+            <li><strong>API Versioning Routing</strong> — Route <code>/v1/</code> to v1 service cluster, <code>/v2/</code> to v2 cluster. Enables zero-downtime migration.</li>
+          </ul>
+          <h3>Tradeoffs</h3>
+          <p>
+            <strong>Risk:</strong> The gateway is a potential single point of failure.
+            Mitigate: deploy in HA mode across multiple AZs, use managed gateways (AWS API Gateway, Kong, Apigee).
+            <strong>Latency:</strong> Every request passes through one extra hop (~1–5 ms for a warm in-memory gateway).
+            Acceptable for most services; consider service mesh (Envoy/Istio) for ultra-low-latency internal RPC.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Java Implementation -->
+      <section class="content-section" id="code" aria-labelledby="code-title">
+        <h2 class="content-section__title" id="code-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation: Token Bucket Rate Limiter
+        </h2>
+        <div class="content-section__body">
+          <p>
+            A thread-safe, Redis-backed token bucket rate limiter. The Lua script executes atomically
+            on the Redis server — no race conditions even with distributed application instances.
+            This is how production rate limiters (Stripe, Cloudflare) work at their core.
+          </p>
+          <pre><code class="language-java">import java.time.Instant;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Thread-safe in-process token bucket rate limiter.
+ * In production: replace in-process state with Redis Lua script
+ * for distributed rate limiting across multiple application instances.
+ *
+ * The Lua script (for Redis):
+ *   local key = KEYS[1]
+ *   local capacity = tonumber(ARGV[1])
+ *   local refillRate = tonumber(ARGV[2])   -- tokens per second
+ *   local now = tonumber(ARGV[3])
+ *   local requested = tonumber(ARGV[4])
+ *   local bucket = redis.call('HMGET', key, 'tokens', 'lastRefill')
+ *   ...atomic refill and consume logic...
+ *   redis.call('EXPIRE', key, math.ceil(capacity / refillRate) * 2)
+ *   return allowed  -- 1 or 0
+ */
+public class TokenBucketRateLimiter {
+
+    /**
+     * Immutable token bucket state per key.
+     * Stored as an AtomicReference for lock-free updates.
+     */
+    private record BucketState(double availableTokens, long lastRefillTimeNanos) {}
+
+    private final int bucketCapacity;     // Maximum tokens per bucket
+    private final double refillRatePerSecond; // Tokens added per second
+    private final ConcurrentHashMap&lt;String, Object&gt; bucketLocks = new ConcurrentHashMap&lt;&gt;();
+    private final ConcurrentHashMap&lt;String, BucketState&gt; buckets = new ConcurrentHashMap&lt;&gt;();
+
+    /**
+     * @param bucketCapacity       max burst size (e.g., 100 requests)
+     * @param refillRatePerSecond  steady-state limit (e.g., 10 req/s)
+     */
+    public TokenBucketRateLimiter(int bucketCapacity, double refillRatePerSecond) {
+        this.bucketCapacity = bucketCapacity;
+        this.refillRatePerSecond = refillRatePerSecond;
+    }
+
+    /**
+     * Attempts to consume one token for the given key (e.g., userId or apiKey).
+     * Thread-safe: synchronized on a per-key monitor object.
+     *
+     * @param rateLimitKey the identifier to rate limit (user ID, API key, IP)
+     * @return true if the request is allowed; false if rate limit exceeded
+     */
+    public boolean allowRequest(String rateLimitKey) {
+        // Per-key monitor object avoids global lock contention
+        Object keyMonitor = bucketLocks.computeIfAbsent(rateLimitKey, ignored -&gt; new Object());
+
+        synchronized (keyMonitor) {
+            long currentTimeNanos = System.nanoTime();
+            BucketState currentState = buckets.computeIfAbsent(
+                rateLimitKey,
+                ignored -&gt; new BucketState(bucketCapacity, currentTimeNanos)
+            );
+
+            // Compute how many tokens to add since last refill
+            double elapsedSeconds = (currentTimeNanos - currentState.lastRefillTimeNanos()) / 1_000_000_000.0;
+            double refillAmount = elapsedSeconds * refillRatePerSecond;
+            double newTokenCount = Math.min(
+                bucketCapacity,
+                currentState.availableTokens() + refillAmount
+            );
+
+            if (newTokenCount &lt; 1.0) {
+                // Not enough tokens — request denied, bucket state unchanged
+                // Update lastRefill to avoid losing the partial refill progress
+                buckets.put(rateLimitKey, new BucketState(newTokenCount, currentTimeNanos));
+                return false;
+            }
+
+            // Consume one token and update state
+            buckets.put(rateLimitKey, new BucketState(newTokenCount - 1.0, currentTimeNanos));
+            return true;
+        }
+    }
+
+    /**
+     * Returns the number of tokens currently available for a key.
+     * Useful for X-RateLimit-Remaining response headers.
+     *
+     * @param rateLimitKey the identifier to check
+     * @return remaining tokens (floor), or full capacity if key is new
+     */
+    public int getRemainingTokens(String rateLimitKey) {
+        BucketState state = buckets.get(rateLimitKey);
+        if (state == null) {
+            return bucketCapacity;
+        }
+        long currentTimeNanos = System.nanoTime();
+        double elapsedSeconds = (currentTimeNanos - state.lastRefillTimeNanos()) / 1_000_000_000.0;
+        double projected = Math.min(bucketCapacity, state.availableTokens() + elapsedSeconds * refillRatePerSecond);
+        return (int) Math.floor(projected);
+    }
+
+    /**
+     * Sliding window counter rate limiter for comparison.
+     * O(1) memory: only 2 counters per key. ~1-5% inaccuracy at window boundary.
+     * Better than token bucket for strict "no burst" requirements.
+     */
+    public static class SlidingWindowCounterLimiter {
+
+        private record WindowState(long currentWindowStart, AtomicLong currentCount, long previousCount) {}
+
+        private final int limitPerWindow;
+        private final long windowDurationMs;
+        private final ConcurrentHashMap&lt;String, WindowState&gt; windows = new ConcurrentHashMap&lt;&gt;();
+
+        public SlidingWindowCounterLimiter(int limitPerWindow, long windowDurationMs) {
+            this.limitPerWindow = limitPerWindow;
+            this.windowDurationMs = windowDurationMs;
+        }
+
+        /**
+         * Allows a request if the sliding window estimate is below the limit.
+         * Estimate = currentCount + previousCount × (1 - overlap fraction).
+         *
+         * @param rateLimitKey the key to rate limit
+         * @return true if allowed
+         */
+        public boolean allowRequest(String rateLimitKey) {
+            long nowMs = Instant.now().toEpochMilli();
+            long currentWindowStart = (nowMs / windowDurationMs) * windowDurationMs;
+
+            WindowState windowState = windows.compute(rateLimitKey, (key, existing) -&gt; {
+                if (existing == null || existing.currentWindowStart() != currentWindowStart) {
+                    long previousCount = (existing != null) ? existing.currentCount().get() : 0;
+                    return new WindowState(currentWindowStart, new AtomicLong(0), previousCount);
+                }
+                return existing;
+            });
+
+            // Calculate overlap: how much of the previous window is within our sliding window
+            double overlapFraction = 1.0 - ((double)(nowMs - currentWindowStart) / windowDurationMs);
+            double estimatedCount = windowState.currentCount().get()
+                + windowState.previousCount() * overlapFraction;
+
+            if (estimatedCount &gt;= limitPerWindow) {
+                return false;
+            }
+            windowState.currentCount().incrementAndGet();
+            return true;
+        }
+    }
+
+    // --- Demo ---
+    public static void main(String[] args) throws InterruptedException {
+        TokenBucketRateLimiter rateLimiter = new TokenBucketRateLimiter(5, 2.0);
+        String testUser = "user:alice";
+
+        System.out.println("=== Token Bucket Demo (capacity=5, refill=2/s) ===");
+        for (int requestNumber = 1; requestNumber &lt;= 8; requestNumber++) {
+            boolean isAllowed = rateLimiter.allowRequest(testUser);
+            System.out.printf("Request %d: %s (remaining tokens: %d)%n",
+                requestNumber,
+                isAllowed ? "ALLOWED ✓" : "REJECTED ✗",
+                rateLimiter.getRemainingTokens(testUser));
+        }
+
+        System.out.println("\nWaiting 2 seconds for refill...");
+        Thread.sleep(2000);
+        System.out.println("After refill — remaining tokens: " + rateLimiter.getRemainingTokens(testUser));
+        System.out.println("Request 9: " + (rateLimiter.allowRequest(testUser) ? "ALLOWED ✓" : "REJECTED ✗"));
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Trade-off Table -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-off Table
+        </h2>
+        <div class="content-section__body">
+          <table class="content-table" aria-label="API protocol and rate limiting trade-offs">
+            <thead>
+              <tr><th>Dimension</th><th>REST</th><th>gRPC</th><th>GraphQL</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Performance</td><td>Good (JSON, HTTP/1.1)</td><td>Excellent (Protobuf, HTTP/2)</td><td>Moderate (JSON, HTTP/1.1)</td></tr>
+              <tr><td>Browser support</td><td>Native</td><td>Requires gRPC-Web proxy</td><td>Native</td></tr>
+              <tr><td>Cacheability</td><td>Excellent (HTTP cache)</td><td>Poor (streaming RPC)</td><td>Complex (per-query hash)</td></tr>
+              <tr><td>Schema enforcement</td><td>Optional (OpenAPI)</td><td>Mandatory (.proto)</td><td>Mandatory (SDL)</td></tr>
+              <tr><td>Learning curve</td><td>Low</td><td>Medium</td><td>High</td></tr>
+              <tr><td>Best for</td><td>Public APIs, CRUD</td><td>Internal microservices</td><td>Mobile BFF, flexible clients</td></tr>
+            </tbody>
+          </table>
+          <table class="content-table" aria-label="Rate limiting algorithm trade-offs" style="margin-top:var(--space-4)">
+            <thead>
+              <tr><th>Algorithm</th><th>Burst handling</th><th>Memory</th><th>Accuracy</th><th>Best for</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Token Bucket</td><td>Allows up to capacity</td><td>O(1) per key</td><td>Exact</td><td>General purpose API limiting</td></tr>
+              <tr><td>Leaky Bucket</td><td>No burst (smooth output)</td><td>O(queue size)</td><td>Exact</td><td>Protecting fragile backends</td></tr>
+              <tr><td>Sliding Window Log</td><td>No burst at boundary</td><td>O(requests in window)</td><td>Exact</td><td>Strict rate enforcement, low volume</td></tr>
+              <tr><td>Sliding Window Counter</td><td>Minimal burst at boundary</td><td>O(1) per key</td><td>~95% accurate</td><td>High-scale distributed limiting</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="module-05-quiz" role="region" aria-label="Module 05 quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> API Design Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="You are designing the internal API between your order service and payment service. Both run in the same AWS VPC. What protocol and why?"
+               data-options='["REST+JSON — easiest to implement and debug","gRPC+Protobuf — binary serialization and HTTP/2 multiplexing give 3-5× performance improvement over REST for high-frequency internal calls; strict .proto contracts prevent interface drift","GraphQL — flexible querying reduces over-fetching between services","WebSocket — persistent connections reduce overhead"]'
+               data-correct="1"
+               data-explanation="gRPC is the correct choice for internal microservice RPC. The performance improvement (Protobuf serialization ~5× faster, HTTP/2 multiplexing eliminates head-of-line blocking) matters at high call volumes. The .proto contract provides compile-time type safety and documentation. REST/JSON is fine for external APIs but wasteful for internal high-frequency calls. GraphQL is designed for client-server, not service-to-service."
+               style="display:none"></div>
+          <div data-question="A mobile app makes 5 REST calls to build the home screen (user profile, feed, stories, ads, suggestions). What pattern eliminates these round trips without moving to GraphQL?"
+               data-options='["Increase server size so each call is faster","Backend for Frontend (BFF) pattern — a dedicated aggregation layer (or API gateway) combines the 5 calls into one endpoint tailored to the mobile home screen","REST batch endpoint — POST /api/batch with array of requests","WebSocket — subscribe to home screen events"]'
+               data-correct="1"
+               data-explanation="The Backend for Frontend (BFF) pattern creates a dedicated API surface per client type (mobile, web, TV). The mobile BFF aggregates the 5 internal service calls into one home screen endpoint. This trades server-side latency (parallel fan-out) for client-side latency (5 round trips). GraphQL solves the same problem declaratively but adds schema complexity."
+               style="display:none"></div>
+          <div data-question="A user sends a 'place order' request. The network drops before the response arrives. The client retries. How do you prevent two orders being placed?"
+               data-options='["Use a transaction ID in the database to detect duplicates after the fact and cancel","Client sends a UUID Idempotency-Key header with the retry. Server stores (idempotencyKey → result) in Redis with 24h TTL. On retry, return the stored result without re-executing","Use POST request — POST is naturally idempotent","Add a unique constraint on the orderId database column"]'
+               data-correct="1"
+               data-explanation="Idempotency keys are the correct pattern. The client generates a UUID before the first attempt and includes it in every retry. The server checks Redis on arrival — if the key exists, return the cached response. If not, execute and store the result. This converts a non-idempotent operation into a safe retry. POST is NOT idempotent by HTTP specification. A database unique constraint only catches duplicates after both requests reach the DB, which doesn't prevent race conditions."
+               style="display:none"></div>
+          <div data-question="You implement a token bucket rate limiter in your application. Multiple instances of your service are deployed. A user can exceed the rate limit by hitting different instances. What is the fix?"
+               data-options='["Use sticky sessions so each user always hits the same instance","Move rate limiter state to Redis — use an atomic Lua script to refill and consume tokens in a single round trip. All instances share one Redis bucket per user key","Increase the per-instance limit to account for multiple instances","Use a fixed window counter instead"]'
+               data-correct="1"
+               data-explanation="In-process rate limiters are local to one instance. With N instances each allowing 100 req/s, a user distributing requests gets N×100 effective requests/s. The fix: centralize state in Redis. A Lua script executes atomically (EVAL command) — no race conditions even with concurrent requests across instances. The overhead (~1ms per request) is acceptable. Sticky sessions create hot spots and fail if an instance dies."
+               style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../06-distributed/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../04-messaging/index.html" class="module-nav__btn module-nav__btn--prev">← Module 04: Messaging</a>
+        <a href="../06-distributed/index.html" class="module-nav__btn module-nav__btn--next">Module 06: Distributed Systems →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 05</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

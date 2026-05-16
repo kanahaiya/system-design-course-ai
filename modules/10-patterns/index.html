@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master CQRS, Event Sourcing, Circuit Breaker state machine, Bulkhead isolation, Sidecar, and Strangler Fig migration patterns for MAANG system design interviews.">
+  <title>Resilience &amp; Architecture Patterns — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/10-patterns/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#cqrs" class="module-toc__link">CQRS &amp; Event Stores</a></li>
+          <li><a href="#event-sourcing" class="module-toc__link">Event Sourcing</a></li>
+          <li><a href="#circuit-breaker" class="module-toc__link">Circuit Breaker</a></li>
+          <li><a href="#bulkhead" class="module-toc__link">Bulkhead Pattern</a></li>
+          <li><a href="#sidecar-strangler" class="module-toc__link">Sidecar &amp; Strangler Fig</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-10" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 10</span>
+        </nav>
+        <div class="module-header__number">Module 10</div>
+        <h1 class="module-header__title">Resilience &amp; Architecture Patterns</h1>
+        <p class="module-header__desc">Build systems that stay available under failure: CQRS and event sourcing for scalable reads and auditability, Circuit Breaker and Bulkhead for fault isolation, Sidecar for cross-cutting concerns, and Strangler Fig for safe legacy migration.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <section id="cqrs" class="content-section">
+        <h2>CQRS: Command Query Responsibility Segregation</h2>
+        <p>CQRS separates the write model (Commands) from the read model (Queries). Commands change state and are handled by the domain model. Queries return data and are served by a separate read model optimised for the specific query pattern — often a denormalised, pre-aggregated view.</p>
+
+        <p><strong>Why separate them?</strong> The optimal data model for writes (normalised, transactional, domain-rich) is different from the optimal model for reads (denormalised, fast, shaped to the UI). CQRS allows each side to be independently scaled and optimised: the write side can be a relational DB with complex domain logic; the read side can be Elasticsearch or a Redis hash per user.</p>
+
+        <p><strong>Event Store:</strong> In CQRS with event sourcing, the write model publishes domain events. A separate event projector listens to these events and updates the read model. The event store is the source of truth; read models are derived views that can be rebuilt by replaying events.</p>
+
+        <table class="trade-off-table">
+          <caption>CQRS: When to Use vs When to Avoid</caption>
+          <thead><tr><th>Use CQRS when</th><th>Avoid CQRS when</th></tr></thead>
+          <tbody>
+            <tr><td>Read and write load is very asymmetric (e.g., 100:1 read/write ratio)</td><td>Domain is simple CRUD — the overhead outweighs benefits</td></tr>
+            <tr><td>Multiple read models are needed for the same data (mobile, web, analytics)</td><td>Eventual consistency between read and write model is unacceptable</td></tr>
+            <tr><td>Write and read scalability requirements differ significantly</td><td>Team lacks experience with event-driven architectures</td></tr>
+            <tr><td>Audit trail and event replay are business requirements</td><td>Low traffic systems where a single DB handles both fine</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="event-sourcing" class="content-section">
+        <h2>Event Sourcing: Rebuilding State from Events</h2>
+        <p>Instead of storing the current state of an entity, Event Sourcing stores every event that led to that state. The current state is derived by replaying all events in order from the beginning. An <code>Account</code> entity's balance is not stored — it is calculated from <code>AccountCreated</code>, <code>MoneyDeposited</code>, and <code>MoneyWithdrawn</code> events.</p>
+
+        <p><strong>Benefits:</strong></p>
+        <ul>
+          <li><strong>Complete audit trail:</strong> Every state change is recorded with who did it and when.</li>
+          <li><strong>Temporal queries:</strong> "What was the account balance on March 15th?" is answerable by replaying events up to that date.</li>
+          <li><strong>Event replay for projections:</strong> Add a new read model at any time by replaying historical events into it.</li>
+          <li><strong>Debugging:</strong> Reproduce any bug by replaying the exact event sequence that caused it.</li>
+        </ul>
+
+        <p><strong>Challenges:</strong> Event schema evolution (old events must still be deserializable after schema changes). Replaying a large number of events to reconstruct state — solved with <strong>snapshots</strong>: periodically persist the current state so replay starts from the latest snapshot, not from the beginning.</p>
+
+        <figure class="diagram-container" aria-label="Event sourcing state reconstruction diagram">
+          <svg viewBox="0 0 640 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Event sourcing event log to state">
+            <title>Event Sourcing: Event Log to Current State</title>
+            <rect x="10" y="50" width="115" height="50" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="67" y="72" text-anchor="middle" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif">AccountCreated</text>
+            <text x="67" y="88" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">balance: 0</text>
+            <rect x="145" y="50" width="115" height="50" rx="6" fill="#1e3a5f" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="202" y="72" text-anchor="middle" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif">MoneyDeposited</text>
+            <text x="202" y="88" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">amount: +500</text>
+            <rect x="280" y="50" width="115" height="50" rx="6" fill="#1e3a5f" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="337" y="72" text-anchor="middle" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif">MoneyWithdrawn</text>
+            <text x="337" y="88" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">amount: -200</text>
+            <rect x="415" y="50" width="115" height="50" rx="6" fill="#1e3a5f" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="472" y="72" text-anchor="middle" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif">MoneyDeposited</text>
+            <text x="472" y="88" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">amount: +100</text>
+            <rect x="560" y="40" width="70" height="70" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+            <text x="595" y="70" text-anchor="middle" fill="#86efac" font-size="10" font-family="Inter,sans-serif">Current</text>
+            <text x="595" y="85" text-anchor="middle" fill="#86efac" font-size="10" font-family="Inter,sans-serif">State</text>
+            <text x="595" y="100" text-anchor="middle" fill="#4ade80" font-size="11" font-family="Inter,sans-serif" font-weight="700">$400</text>
+            <line x1="125" y1="75" x2="143" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowES)"/>
+            <line x1="260" y1="75" x2="278" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowES)"/>
+            <line x1="395" y1="75" x2="413" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowES)"/>
+            <line x1="530" y1="75" x2="558" y2="75" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowESG)"/>
+            <text x="320" y="140" text-anchor="middle" fill="#64748b" font-size="10" font-family="Inter,sans-serif">Replay all events in sequence → derive current state (0+500-200+100 = $400)</text>
+            <defs>
+              <marker id="arrowES" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#475569"/></marker>
+              <marker id="arrowESG" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#22c55e"/></marker>
+            </defs>
+          </svg>
+          <figcaption>State is derived by replaying events. The event log is immutable — never update or delete events.</figcaption>
+        </figure>
+      </section>
+
+      <section id="circuit-breaker" class="content-section">
+        <h2>Circuit Breaker Pattern</h2>
+        <p>The Circuit Breaker prevents cascading failures: when a downstream service is slow or failing, continuing to send requests wastes resources and delays the caller's failure detection. The Circuit Breaker wraps calls to the remote service and tracks the failure rate.</p>
+
+        <p>Three states form a state machine:</p>
+        <ul>
+          <li><strong>CLOSED (normal operation):</strong> Requests pass through. The circuit monitors the error rate. When it exceeds the threshold (e.g., 50% failures in a 30-second window), the circuit trips to OPEN.</li>
+          <li><strong>OPEN (fail fast):</strong> All requests fail immediately with a fallback response — no calls reach the downstream service. The circuit stays open for a configured reset timeout (e.g., 60 seconds). This gives the downstream service time to recover.</li>
+          <li><strong>HALF-OPEN (probe):</strong> After the reset timeout, one probe request is allowed through. If it succeeds, the circuit transitions to CLOSED. If it fails, the circuit returns to OPEN and the reset timeout restarts.</li>
+        </ul>
+
+        <figure class="diagram-container" aria-label="Circuit breaker state machine">
+          <svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Circuit breaker states">
+            <title>Circuit Breaker State Machine</title>
+            <circle cx="100" cy="100" r="60" fill="#1e3a5f" stroke="#22c55e" stroke-width="2.5"/>
+            <text x="100" y="95" text-anchor="middle" fill="#86efac" font-size="12" font-family="Inter,sans-serif" font-weight="600">CLOSED</text>
+            <text x="100" y="112" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">requests pass</text>
+            <circle cx="440" cy="100" r="60" fill="#3f1e1e" stroke="#ef4444" stroke-width="2.5"/>
+            <text x="440" y="95" text-anchor="middle" fill="#fca5a5" font-size="12" font-family="Inter,sans-serif" font-weight="600">OPEN</text>
+            <text x="440" y="112" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">fail fast</text>
+            <circle cx="270" cy="160" r="50" fill="#2d2a1e" stroke="#f59e0b" stroke-width="2.5"/>
+            <text x="270" y="157" text-anchor="middle" fill="#fcd34d" font-size="11" font-family="Inter,sans-serif" font-weight="600">HALF-OPEN</text>
+            <text x="270" y="172" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">probe request</text>
+            <path d="M155 80 Q270 30 380 80" fill="none" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowCB)"/>
+            <text x="270" y="48" text-anchor="middle" fill="#ef4444" font-size="9" font-family="Inter,sans-serif">error rate &gt; threshold</text>
+            <path d="M390 130 Q340 170 318 158" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowCBY)"/>
+            <text x="390" y="160" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="Inter,sans-serif">reset timeout</text>
+            <path d="M222 148 Q160 140 140 108" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowCBG)"/>
+            <text x="160" y="140" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">probe OK</text>
+            <path d="M296 112 Q370 100 382 100" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowCB)"/>
+            <text x="340" y="105" text-anchor="middle" fill="#ef4444" font-size="9" font-family="Inter,sans-serif">probe fails</text>
+            <defs>
+              <marker id="arrowCB" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#ef4444"/></marker>
+              <marker id="arrowCBY" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#f59e0b"/></marker>
+              <marker id="arrowCBG" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#22c55e"/></marker>
+            </defs>
+          </svg>
+          <figcaption>Circuit Breaker state machine: CLOSED → OPEN on high error rate → HALF-OPEN after timeout → CLOSED on probe success or back to OPEN on probe failure</figcaption>
+        </figure>
+      </section>
+
+      <section id="bulkhead" class="content-section">
+        <h2>Bulkhead Pattern: Thread Pool Isolation</h2>
+        <p>Named after watertight compartments in ships, the Bulkhead pattern isolates failures by assigning separate thread pools (or semaphores) to each dependency. If calls to Service A exhaust their thread pool, Service B's pool is unaffected — the application stays partially available.</p>
+        <p>Without bulkheads: a slow dependency fills the shared thread pool; all inbound requests queue; the entire application becomes unresponsive. With bulkheads: Service A degrades; the rest of the application continues serving requests.</p>
+        <p><strong>Implementation options:</strong></p>
+        <ul>
+          <li><strong>Thread pool isolation:</strong> Each dependency gets a dedicated thread pool. Full fault isolation at the cost of more threads. Hystrix's original approach.</li>
+          <li><strong>Semaphore isolation:</strong> Limit concurrent calls with a semaphore. Lower overhead but doesn't protect against thread hangs (the caller's thread is used for the call).</li>
+        </ul>
+      </section>
+
+      <section id="sidecar-strangler" class="content-section">
+        <h2>Sidecar Pattern and Strangler Fig Migration</h2>
+        <h3>Sidecar</h3>
+        <p>Deploy cross-cutting concerns (observability, mTLS, service discovery, config) as a separate container alongside every application container, rather than embedding them in each service. Benefits: language-agnostic (Node.js service gets the same mTLS sidecar as a Go service), independently upgradable, and no library version skew across services. Istio's Envoy proxy is the canonical sidecar.</p>
+
+        <h3>Strangler Fig Pattern</h3>
+        <p>Incrementally migrate a legacy monolith to microservices without a risky big-bang rewrite. Named after the strangler fig tree, which grows around and eventually replaces its host:</p>
+        <ol>
+          <li>Place a façade (API gateway or reverse proxy) in front of the monolith.</li>
+          <li>Extract one bounded context at a time as a new microservice.</li>
+          <li>Route traffic for the extracted domain to the new service through the façade.</li>
+          <li>Repeat until the monolith is fully replaced and can be decommissioned.</li>
+        </ol>
+        <p>At each step, both old and new code run in production, allowing gradual traffic shifts (1% → 10% → 100% canary) with easy rollback.</p>
+      </section>
+
+      <section id="implementation" class="content-section">
+        <h2>Java Implementation: Circuit Breaker State Machine</h2>
+        <pre><code class="language-java">/**
+ * Thread-safe Circuit Breaker with CLOSED → OPEN → HALF_OPEN → CLOSED
+ * state machine. Uses a sliding window for error rate calculation.
+ */
+public class CircuitBreaker {
+
+    public enum State { CLOSED, OPEN, HALF_OPEN }
+
+    private static final int FAILURE_THRESHOLD_COUNT = 5;
+    private static final int SUCCESS_THRESHOLD_IN_HALF_OPEN = 2;
+    private static final long OPEN_TIMEOUT_MS = 60_000; // 60 seconds before probing
+
+    private volatile State currentState = State.CLOSED;
+    private final AtomicInteger failureCount = new AtomicInteger(0);
+    private final AtomicInteger successCountInHalfOpen = new AtomicInteger(0);
+    private volatile long openedAtMs = 0L;
+    private final Object stateLock = new Object();
+
+    /**
+     * Executes the given action through the circuit breaker.
+     * Throws CircuitOpenException if the circuit is OPEN.
+     * Records success or failure and transitions state accordingly.
+     *
+     * @param action - the remote call to protect
+     * @return the result of the action
+     */
+    public &lt;T&gt; T execute(Callable&lt;T&gt; action) throws Exception {
+        checkStateBeforeCall();
+
+        try {
+            T result = action.call();
+            recordSuccess();
+            return result;
+        } catch (Exception callException) {
+            recordFailure();
+            throw callException;
+        }
+    }
+
+    /**
+     * Checks the current circuit state before allowing a call.
+     * CLOSED: allowed. OPEN: blocked (fail fast). HALF_OPEN: one probe allowed.
+     */
+    private void checkStateBeforeCall() {
+        synchronized (stateLock) {
+            if (currentState == State.OPEN) {
+                long timeSinceOpen = System.currentTimeMillis() - openedAtMs;
+                if (timeSinceOpen &gt;= OPEN_TIMEOUT_MS) {
+                    // Reset timeout expired — allow one probe request
+                    transitionTo(State.HALF_OPEN);
+                    successCountInHalfOpen.set(0);
+                } else {
+                    throw new CircuitOpenException(
+                        "Circuit is OPEN. Retry after "
+                        + (OPEN_TIMEOUT_MS - timeSinceOpen) + "ms");
+                }
+            }
+            // CLOSED and HALF_OPEN: allow the call to proceed
+        }
+    }
+
+    /**
+     * Records a successful call.
+     * In HALF_OPEN: enough successes → transition back to CLOSED.
+     * In CLOSED: reset the failure counter.
+     */
+    private void recordSuccess() {
+        synchronized (stateLock) {
+            if (currentState == State.HALF_OPEN) {
+                int successes = successCountInHalfOpen.incrementAndGet();
+                if (successes &gt;= SUCCESS_THRESHOLD_IN_HALF_OPEN) {
+                    transitionTo(State.CLOSED);
+                    failureCount.set(0);
+                    successCountInHalfOpen.set(0);
+                }
+            } else if (currentState == State.CLOSED) {
+                // Successful call in CLOSED state: reduce failure count (sliding window)
+                failureCount.updateAndGet(count -&gt; Math.max(0, count - 1));
+            }
+        }
+    }
+
+    /**
+     * Records a failed call.
+     * In CLOSED: increment failure count; trip to OPEN if threshold exceeded.
+     * In HALF_OPEN: probe failed — return to OPEN and restart the timeout.
+     */
+    private void recordFailure() {
+        synchronized (stateLock) {
+            if (currentState == State.HALF_OPEN) {
+                // Probe failed — not recovered yet
+                transitionTo(State.OPEN);
+                openedAtMs = System.currentTimeMillis();
+            } else if (currentState == State.CLOSED) {
+                int failures = failureCount.incrementAndGet();
+                if (failures &gt;= FAILURE_THRESHOLD_COUNT) {
+                    transitionTo(State.OPEN);
+                    openedAtMs = System.currentTimeMillis();
+                }
+            }
+        }
+    }
+
+    private void transitionTo(State newState) {
+        System.out.println("[CircuitBreaker] Transitioning: "
+            + currentState + " → " + newState);
+        currentState = newState;
+    }
+
+    public State getState() {
+        return currentState;
+    }
+
+    public static class CircuitOpenException extends RuntimeException {
+        public CircuitOpenException(String message) {
+            super(message);
+        }
+    }
+}</code></pre>
+        <p><strong>Why <code>synchronized</code> on state transitions?</strong> State transitions must be atomic — checking the state and changing it must not interleave with another thread's read/write. Using <code>volatile</code> alone on <code>currentState</code> prevents stale reads but doesn't prevent race conditions during compound check-then-act operations like "if OPEN and timeout expired, transition to HALF_OPEN".</p>
+      </section>
+
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-10-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Patterns Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">In CQRS, why is the read model often denormalised even though this duplicates data?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="In CQRS, why is the read model often denormalised even though this duplicates data?" data-options='["Denormalisation is required by the event sourcing pattern","The read model is optimised for query performance, eliminating joins that would be expensive at read time","Denormalised data takes up less storage space","Normalised data cannot be served from a read replica"]' data-correct="1" data-explanation="Reads happen far more frequently than writes. Pre-joining and denormalising data in the read model means queries are simple lookups. The write model stays normalised for correctness; the read model sacrifices storage for speed." style="display:none"></div>
+          <div data-question="In Event Sourcing, what is the purpose of a snapshot?" data-options='["To compress the event log and delete old events","To capture the current state at a point in time so that event replay starts from the snapshot instead of the very first event","To take a backup of the event store to S3","To publish the current state to all read model subscribers simultaneously"]' data-correct="1" data-explanation="Replaying all events from the beginning becomes slow as the event log grows. Snapshots periodically materialise the current state. Replay then starts from the latest snapshot plus only the subsequent events — O(recent events) instead of O(all events)." style="display:none"></div>
+          <div data-question="A Circuit Breaker in HALF_OPEN state:" data-options='["Fails all requests immediately like the OPEN state","Allows all requests through like the CLOSED state","Allows a limited number of probe requests to test if the downstream service has recovered","Routes requests to a backup service automatically"]' data-correct="2" data-explanation="HALF_OPEN is a probe state. It allows one (or a small number of) test requests through. Success transitions to CLOSED (recovered). Failure transitions back to OPEN (still down). This prevents thundering-herd when a recovered service comes back online." style="display:none"></div>
+          <div data-question="The Bulkhead pattern primarily prevents which failure mode?" data-options='["An attacker overwhelming the system with requests","A slow dependency exhausting a shared thread pool and making the entire application unresponsive","A database primary failing and causing all reads to fail","A configuration change breaking all services simultaneously"]' data-correct="1" data-explanation="Without bulkheads, one slow dependency fills the shared thread pool. All threads wait, the queue grows, and the entire service becomes unresponsive — even for endpoints that don't use the slow dependency. Bulkheads isolate each dependency to its own pool so one failure cannot cascade." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../../mock-interview/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Mock Interview →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../09-security/index.html" class="btn btn--outline">← Module 09: Security</a>
+        <a href="../../mock-interview/index.html" class="btn btn--primary">Mock Interview →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 10</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

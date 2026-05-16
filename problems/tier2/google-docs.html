@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Google Docs collaborative editing — RESHADED walkthrough covering Operational Transformation, conflict resolution, version history, and real-time sync for MAANG interviews.">
+  <title>Design Google Docs — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-google-docs" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=google-docs" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Collaborative editing</span>
+        </div>
+        <h1 class="module-header__title">Design Google Docs (Collaborative Editing)</h1>
+        <p class="module-header__desc">Google Docs' hardest problem: two users edit the same position simultaneously. Without conflict resolution, one user's change overwrites the other. Operational Transformation (OT) transforms operations to account for concurrent changes — ensuring convergence.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Notion, Figma</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📝</span> Real-time collaboration</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Real-time collaborative text editing — multiple users editing simultaneously</li>
+            <li>Cursor position sharing — see where other users are editing</li>
+            <li>Version history — view and restore previous document states</li>
+            <li>Permission model — owner, editor, commenter, viewer</li>
+            <li>Offline editing — changes sync when reconnected</li>
+            <li>Comments and suggestions</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Convergence:</strong> All users must see the same document state after all operations are applied</li>
+            <li><strong>Latency:</strong> Local edits appear instantly; remote edits appear &lt;500ms</li>
+            <li><strong>Scale:</strong> 1B documents, 10M concurrent editors</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>10M concurrent editors; avg 10 ops/min = 100M ops/min = 1.6M ops/sec</li>
+            <li>Each operation: ~50 bytes → 80MB/sec → Kafka easily handles this</li>
+            <li>Version history: 1B docs × avg 100 versions × 500 bytes = 50TB → S3 for compressed snapshots</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Documents (PostgreSQL)
+documents: doc_id, owner_id, title, created_at, last_modified
+
+// Operations (append-only log — Cassandra or PostgreSQL)
+// The document state = apply all ops in order from revision 0
+operations:
+    doc_id      UUID,
+    revision    BIGINT,    -- monotonically increasing per document
+    user_id     UUID,
+    op_type     ENUM(insert, delete),
+    position    INT,
+    content     TEXT,       -- for insert ops
+    length      INT,        -- for delete ops
+    applied_at  TIMESTAMP,
+    PRIMARY KEY (doc_id, revision)
+
+// Document snapshots (S3 — compressed JSON every 1000 ops)
+// Avoids replaying all ops from the beginning on load</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Client:</strong> Applies operations locally immediately (optimistic UI). Sends operations to server tagged with client's current revision number.</li>
+            <li><strong>Collaboration Server:</strong> Receives operations. Applies OT to transform against concurrent operations. Assigns global revision number. Broadcasts to all clients editing the document via WebSocket.</li>
+            <li><strong>Operation Log:</strong> All operations stored in Cassandra (partition by doc_id, cluster by revision) — the source of truth.</li>
+            <li><strong>Document Load:</strong> Load latest snapshot from S3, then replay operations since the snapshot.</li>
+            <li><strong>Presence Service:</strong> Tracks cursor positions and user presence in each document. Redis-based with 5s TTL.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// WebSocket events (client ↔ server)
+// Client → Server
+{ type: "op", docId, baseRevision, op: {type: "insert", position: 5, content: "a"} }
+{ type: "cursor", docId, position: 42 }
+
+// Server → Client
+{ type: "op", revision: 102, op: {...}, userId }  // broadcast to all other editors
+{ type: "ack", revision: 102 }                    // confirm client's op was accepted
+
+// REST
+GET  /v1/documents/{docId}              // load doc (latest snapshot + ops since)
+GET  /v1/documents/{docId}/revisions    // version history
+POST /v1/documents/{docId}/restore?revision=50  // restore to specific revision</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Operational Transformation<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>The problem:</strong> User A inserts 'X' at position 5. Simultaneously, User B inserts 'Y' at position 5. If both apply in sequence without transformation, 'X' shifts and 'Y' is at the wrong position.</p>
+          <p><strong>OT transform rules:</strong></p>
+          <ul>
+            <li><strong>insert(pos1, c1) ∘ insert(pos2, c2):</strong> If pos2 ≤ pos1: shift pos1 right by 1. Reason: B's insert at position ≤ pos1 shifts A's content right.</li>
+            <li><strong>delete(pos1) ∘ insert(pos2, c):</strong> If pos2 ≤ pos1: shift pos1 right by 1.</li>
+            <li><strong>insert(pos1, c) ∘ delete(pos2):</strong> If pos2 &lt; pos1: shift pos1 left by 1. If pos2 == pos1: keep pos1 (insert at same position as delete).</li>
+          </ul>
+          <p><strong>Server-side OT:</strong> Server receives op with baseRevision. All server-side ops since baseRevision are transformed against the incoming op. The transformed op is applied and broadcast.</p>
+          <p><strong>CRDT as an alternative:</strong> CRDTs (Conflict-free Replicated Data Types) automatically merge without a central server. Used by Figma, Linear. More complex to implement but enables true peer-to-peer. OT requires a central server; CRDT does not.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>OT correctness:</strong> OT with a central server is provably correct for convergence (CP1 and CP2 properties). Without a central server, OT becomes exponentially complex. Google Docs uses server-side OT.</li>
+            <li><strong>Offline editing:</strong> Client buffers ops locally. On reconnect, sends buffered ops with the revision number from when it went offline. Server transforms each buffered op against all ops that happened during offline period.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed Google Docs handling 10M concurrent editors. Key decisions: server-side OT for conflict resolution (proven convergence), append-only operation log in Cassandra (source of truth), periodic S3 snapshots for fast document loading, and WebSocket for real-time operation broadcast.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Conflict resolution</td><td>OT (Operational Transformation)</td><td>CRDT</td><td>OT: proven, used by Google. Requires central server. CRDT: no central server needed, but larger document footprint and more complex implementation.</td></tr>
+              <tr><td>Operation storage</td><td>Append-only log (Cassandra)</td><td>Mutable document state</td><td>Append-only log = complete history, replay capability, audit trail, version rollback. Mutable state = faster reads but no history.</td></tr>
+              <tr><td>Document sync protocol</td><td>WebSocket</td><td>SSE (Server-Sent Events)</td><td>WebSocket: bidirectional — client sends ops, server sends ops. SSE: server→client only, client needs separate HTTP requests to send. Bidirectional needed for collaborative editing.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * OperationalTransformer — transforms operations for concurrent insert/delete conflicts.
+ * Ensures all clients converge to the same document state regardless of operation order.
+ */
+public class OperationalTransformer {
+
+    /**
+     * Transforms operationA against a concurrent operationB.
+     * Returns a new operation that, when applied after operationB, produces the same
+     * result as applying the original operationA before operationB.
+     *
+     * @param operationA  the operation to transform
+     * @param operationB  the concurrent operation that was applied first by the server
+     * @return transformed version of operationA
+     */
+    public Operation transform(Operation operationA, Operation operationB) {
+        if (operationA.getType() == OperationType.INSERT && operationB.getType() == OperationType.INSERT) {
+            return transformInsertVsInsert(operationA, operationB);
+        }
+        if (operationA.getType() == OperationType.INSERT && operationB.getType() == OperationType.DELETE) {
+            return transformInsertVsDelete(operationA, operationB);
+        }
+        if (operationA.getType() == OperationType.DELETE && operationB.getType() == OperationType.INSERT) {
+            return transformDeleteVsInsert(operationA, operationB);
+        }
+        // DELETE vs DELETE
+        return transformDeleteVsDelete(operationA, operationB);
+    }
+
+    /** insert(pos_a) vs insert(pos_b): shift A right if B inserted before or at A's position */
+    private Operation transformInsertVsInsert(Operation insertA, Operation insertB) {
+        int transformedPosition = insertA.getPosition();
+        if (insertB.getPosition() &lt;= insertA.getPosition()) {
+            transformedPosition += insertB.getContent().length();
+        }
+        return new Operation(OperationType.INSERT, transformedPosition, insertA.getContent());
+    }
+
+    /** insert(pos_a) vs delete(pos_b, len_b): shift A left if B deleted text before A */
+    private Operation transformInsertVsDelete(Operation insertA, Operation deleteB) {
+        int transformedPosition = insertA.getPosition();
+        if (deleteB.getPosition() &lt; insertA.getPosition()) {
+            int overlap = Math.min(deleteB.getLength(),
+                                    insertA.getPosition() - deleteB.getPosition());
+            transformedPosition -= overlap;
+        }
+        return new Operation(OperationType.INSERT, transformedPosition, insertA.getContent());
+    }
+
+    /** delete(pos_a) vs insert(pos_b): shift A right if B inserted before A */
+    private Operation transformDeleteVsInsert(Operation deleteA, Operation insertB) {
+        int transformedPosition = deleteA.getPosition();
+        if (insertB.getPosition() &lt;= deleteA.getPosition()) {
+            transformedPosition += insertB.getContent().length();
+        }
+        return new Operation(OperationType.DELETE, transformedPosition, deleteA.getLength());
+    }
+
+    /** delete(pos_a) vs delete(pos_b): adjust A's position and length based on B's deletion */
+    private Operation transformDeleteVsDelete(Operation deleteA, Operation deleteB) {
+        if (deleteB.getPosition() &gt;= deleteA.getPosition() + deleteA.getLength()) {
+            return deleteA; // B is after A — no effect
+        }
+        if (deleteB.getPosition() + deleteB.getLength() &lt;= deleteA.getPosition()) {
+            // B is entirely before A — shift A left
+            return new Operation(OperationType.DELETE,
+                deleteA.getPosition() - deleteB.getLength(), deleteA.getLength());
+        }
+        // Overlapping deletes — shrink A's length by the overlap
+        int overlapStart = Math.max(deleteA.getPosition(), deleteB.getPosition());
+        int overlapEnd = Math.min(deleteA.getPosition() + deleteA.getLength(),
+                                   deleteB.getPosition() + deleteB.getLength());
+        int reducedLength = deleteA.getLength() - (overlapEnd - overlapStart);
+        int newPosition = Math.min(deleteA.getPosition(), deleteB.getPosition());
+        return new Operation(OperationType.DELETE, newPosition, Math.max(0, reducedLength));
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-google-docs-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="The document is 'Hello'. User A inserts 'X' at position 0 (result: 'XHello'). Simultaneously, User B inserts 'Y' at position 0. After OT, where should User A's operation be re-applied from B's perspective?" data-options='["Position 0 — no transformation needed","Position 1 — B's insert at position 0 shifted A's original position 0 to position 1","Position 5 — A's insert must go at the end","Positions are irrelevant — OT uses content-based merging"]' data-correct="1" data-explanation="OT rule: insert(posA) vs insert(posB). If posB <= posA: posA becomes posA + len(B). Here posB=0 <= posA=0, so posA becomes 0+1=1. Result: B's 'Y' is at 0, A's 'X' is at 1: 'YXHello'. Both clients converge to this state." style="display:none"></div>
+          <div data-question="What is the key difference between OT (Operational Transformation) and CRDTs for collaborative editing?" data-options='["OT is newer than CRDT","OT requires a central server to order and transform operations — guaranteeing convergence through server-serialized transforms. CRDTs embed convergence properties into the data structure itself — they can merge without a central coordinator, enabling true peer-to-peer collaboration.","CRDT cannot handle text editing, only simple counters","OT is used by startups; CRDT is only for large companies"]' data-correct="1" data-explanation="OT's correctness proof relies on operations going through a central server that transforms them before broadcasting. Without a server, the transform complexity becomes exponential. CRDTs (like RGA for sequences) have merge semantics built in — any two replicas can merge directly. Figma uses CRDTs; Google Docs uses OT." style="display:none"></div>
+          <div data-question="Why store an append-only operation log rather than updating the document state directly?" data-options='["Append-only logs are faster than mutable state","Append-only logs provide complete history: you can replay all operations to reconstruct any past state, support version history (restore to any point), enable audit trails, and replay for new clients joining mid-session. Mutable state only has the current snapshot.","Append-only is required for Cassandra's data model","Cassandra doesn't support UPDATE operations"]' data-correct="1" data-explanation="This is Event Sourcing applied to documents. The log is the source of truth. Current state is a derived value (apply all ops). Benefits: full history, time travel (restore to revision N), debugging (replay to reproduce a bug), new clients (replay ops since their last sync). Trade-off: loading a doc requires replaying ops — mitigated by periodic snapshots." style="display:none"></div>
+          <div data-question="When a user goes offline for 10 minutes and returns, how does their buffered edits get merged?" data-options='["Offline edits are discarded — only online edits are accepted","The client stores the revision number when it went offline and buffers all local ops. On reconnect, it sends each buffered op with its base revision. The server transforms each op against all server-side ops that occurred during the offline period, then applies and broadcasts them.","The server sends the latest document state and the client discards their offline edits","Offline edits are stored in a separate 'conflict branch' that the user must manually merge"]' data-correct="1" data-explanation="This is the core value of OT for offline support. The client knows its last-synced revision (say, 500). All ops buffered offline have baseRevision=500. The server has applied ops 501-600 while the user was offline. It transforms each buffered op against 501-600, assigns new revision numbers, and applies them. The user's edits are preserved and merged correctly." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="metrics-dashboard.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Metrics Dashboard →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="flash-sale.html" class="btn btn--outline">← Flash Sale</a>
+        <a href="metrics-dashboard.html" class="btn btn--primary">Next: Metrics Dashboard →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

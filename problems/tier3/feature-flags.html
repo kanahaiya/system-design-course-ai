@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Feature Flag System &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design a Feature Flag System &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-flags" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-flags" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Platform Engineering</span>
+        </div>
+        <h1 class="module-header__title">Design a Feature Flag System</h1>
+        <p class="module-header__desc">Feature flags decouple deploy from release. The hard parts: evaluating flags in under 1ms per request, consistent rollout (same user always gets same experience), and kill switches that work globally in 30 seconds. The evaluation algorithm uses hashing for deterministic gradual rollout.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; LaunchDarkly, Split.io, Statsig</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><h3>Functional Requirements</h3><ul>
+            <li>Create feature flags with targeting rules (% rollout, user segment, A/B test)</li>
+            <li>Evaluate flags for a given user in &lt;1ms</li>
+            <li>Kill switch: disable flag globally in &lt;30 seconds</li>
+            <li>Audit log: who changed what flag when</li>
+            <li>Gradual rollout: 1% &rarr; 10% &rarr; 50% &rarr; 100% over time</li></ul><h3>Non-Functional Requirements</h3><ul>
+            <li><strong>Scale:</strong> 10M flag evaluations/sec (every request evaluates 10&ndash;50 flags)</li>
+            <li><strong>Latency:</strong> &lt;1ms per evaluation (must not add noticeable latency)</li>
+            <li><strong>Propagation:</strong> Flag changes reach all servers in &lt;30 seconds</li></ul></div>
+      </section>
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li>10M evaluations/sec &times; 1000 flags &rarr; must be in-memory, never hit network per evaluation</li>
+            <li>Flag config: 1000 flags &times; 1KB config = 1MB &rarr; trivially cached locally in each service</li>
+            <li>Change events: &lt;100 flag changes/day &rarr; very low write volume</li></ul></div>
+      </section>
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Flag definitions (PostgreSQL -- source of truth)
+feature_flags:
+    flag_id         UUID PRIMARY KEY,
+    flag_key        VARCHAR(100) UNIQUE,  -- "checkout-v2-enabled"
+    enabled         BOOLEAN,
+    rollout_pct     INT,           -- 0-100 (what % of users get this)
+    targeting_rules JSONB,         -- [{ attribute: "plan", op: "eq", value: "premium" }]
+    description     VARCHAR(500),
+    updated_at      TIMESTAMP,
+    updated_by      VARCHAR(100)
+
+// Flag evaluation cache (Redis -- synced from DB, TTL-based invalidation)
+// Key: flags:{environment}  Value: serialized JSON of all flag configs
+// Updated on every flag change via Kafka event</code></pre></div>
+      </section>
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>SDK (client-side):</strong> Loads all flag configs from Redis on startup. Caches locally with 30s TTL. Evaluates entirely in-memory &mdash; no network call per evaluation.</li>
+            <li><strong>Consistent rollout:</strong> hash(userId + flagKey) % 100. If result &lt; rollout_pct: enabled. Same user always gets same result for the same rollout percentage.</li>
+            <li><strong>Targeting rules:</strong> Before rollout hash, check targeting rules: premium users get flag regardless of rollout %. Segment targeting applies first.</li>
+            <li><strong>Change propagation:</strong> Flag change &rarr; write to DB &rarr; publish to Kafka &rarr; all servers receive event &rarr; reload flag config from Redis.</li>
+            <li><strong>Kill switch:</strong> Set enabled=false &rarr; Kafka event propagates to all SDKs &rarr; re-evaluation returns false. 30s for full propagation.</li></ul></div>
+      </section>
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Flag Management API
+POST /api/v1/flags
+Body: { key: "checkout-v2", enabled: true, rollout_pct: 10, targeting_rules: [...] }
+
+PUT /api/v1/flags/{flagKey}
+Body: { rollout_pct: 50 }  -- gradual rollout increase
+
+DELETE /api/v1/flags/{flagKey}/enable   -- kill switch: immediately disable
+
+// SDK Evaluation (in-process -- no API call at evaluation time)
+// SDK loads all flags from Redis at startup, polls every 30s for updates
+// Evaluation: FeatureFlagEvaluator.isEnabled("checkout-v2", userId, userAttrs)</code></pre></div>
+      </section>
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Consistent hash rollout algorithm:</strong></p>
+          <pre><code>// Deterministic: same user always gets same result
+long hashValue = Math.abs(MurmurHash3.hash(userId + ':' + flagKey));
+int bucketNumber = (int) (hashValue % 100); // 0-99
+boolean flagEnabled = bucketNumber &lt; rolloutPercent;</code></pre>
+          <p><strong>Why hash(userId + flagKey) not just hash(userId)?</strong> Without the flagKey, all flags would have correlated rollout -- if you are in the 1% for flag A, you would also be in the 1% for flag B. This creates experimental contamination. Including flagKey decorrelates rollout groups.</p>
+          <p><strong>Sticky bucketing:</strong> Once a user is assigned to a variant, they stay in that variant even as rollout % changes. Hash-based assignment achieves this automatically: rolling from 10% to 20% adds new users (buckets 10-19) but does not remove existing users (buckets 0-9).</p>
+          <p><strong>Feature flag vs A/B test:</strong> Feature flag: is this feature on/off for this user? A/B test: what variant does this user see, and what are the metric outcomes? Feature flags can implement A/B tests (multiple variants) but a pure feature flag system does not need experiment analysis infrastructure.</p></div>
+      </section>
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Flag explosion:</strong> Too many flags slow down code and create tech debt. Flags should have a TTL (clean up after rollout completes). Stale flags in code = maintenance burden and evaluation overhead.</li>
+            <li><strong>Override rules:</strong> Enable flag for specific users (QA team, beta testers) by user ID override list. This overrides rollout percentage. Must be fast to evaluate: store as Set of userIds in memory.</li></ul></div>
+      </section>
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body"><p>Feature flags = in-memory SDK evaluation (no network per call) + hash(userId+flagKey) % 100 for consistent rollout + Kafka event propagation for kill switch in 30s. Key insight: including flagKey in hash prevents experimental contamination across A/B tests.</p></div>
+      </section>
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th></tr></thead>
+            <tbody>
+              <tr><td>SDK polling</td><td>Poll Redis every 30s: simple, 30s max staleness</td><td>Push via Kafka/WebSocket: instant propagation, more infrastructure</td></tr>
+              <tr><td>Rollout algorithm</td><td>Hash-based: deterministic, sticky, no stored state</td><td>Random per evaluation: not sticky, user experience changes on each request</td></tr>
+              <tr><td>Isolation model</td><td>Shared flag service: simpler ops, all teams share one service</td><td>Per-team flag service: stronger isolation, more overhead</td></tr>
+            </tbody>
+          </table></div>
+      </section>
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body"><pre><code class="language-java">/**
+ * FeatureFlagEvaluator -- evaluates feature flags for a user in O(1) time.
+ * All flag configs loaded in-memory; no network call per evaluation.
+ */
+public class FeatureFlagEvaluator {
+
+    private volatile Map&lt;String, FlagConfig&gt; flagConfigs = new HashMap&lt;&gt;();
+
+    /**
+     * Evaluates whether a flag is enabled for a specific user.
+     * Order: overrides &gt; targeting rules &gt; rollout hash.
+     */
+    public boolean isEnabled(String flagKey, String userId, Map&lt;String, String&gt; userAttrs) {
+        FlagConfig config = flagConfigs.get(flagKey);
+        if (config == null || !config.isEnabled()) {
+            return false; // Flag missing or globally disabled (kill switch)
+        }
+
+        // User-specific overrides (QA, beta testers)
+        if (config.getUserOverrides().contains(userId)) {
+            return true;
+        }
+
+        // Targeting rules (plan=premium -&gt; always on)
+        for (TargetingRule rule : config.getTargetingRules()) {
+            if (rule.matches(userAttrs.get(rule.getAttribute()))) {
+                return true;
+            }
+        }
+
+        // Consistent hash-based percentage rollout
+        return isInRolloutBucket(flagKey, userId, config.getRolloutPercent());
+    }
+
+    /**
+     * Deterministic bucket assignment.
+     * hash(userId:flagKey) % 100 ensures:
+     * - Same user always gets same bucket (sticky)
+     * - Different flags have uncorrelated rollout groups (no contamination)
+     */
+    private boolean isInRolloutBucket(String flagKey, String userId, int rolloutPercent) {
+        if (rolloutPercent &lt;= 0) return false;
+        if (rolloutPercent &gt;= 100) return true;
+        String hashInput = userId + ":" + flagKey;
+        int hashValue = Math.abs(hashInput.hashCode()); // Production: MurmurHash3
+        return (hashValue % 100) &lt; rolloutPercent;
+    }
+
+    /**
+     * Called when Kafka delivers a flag config update.
+     * Atomically replaces the entire config map (copy-on-write).
+     */
+    public void updateFlagConfigs(Map&lt;String, FlagConfig&gt; newConfigs) {
+        this.flagConfigs = Map.copyOf(newConfigs); // volatile write -- safe for readers
+    }
+}</code></pre></div>
+      </section>
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-flags-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why does the rollout algorithm use hash(userId + flagKey) instead of hash(userId) alone?" data-options='["Using only userId would be faster to compute since it is a shorter string", "Using only userId would correlate all flags -- if userId hashes to bucket 5, it would be in the 6% rollout for every flag. This contaminates A/B tests: a user testing the new checkout is also testing the new search, making it impossible to isolate either effect. Including flagKey decorrelates the rollout groups.", "hash(userId + flagKey) provides stronger cryptographic security guarantees", "The flagKey is included to prevent hash collisions in the bucket assignment"]' data-correct="1" data-explanation="Experiment contamination is a serious problem in A/B testing. If a user is simultaneously in 5 experimental variants all using hash(userId) for bucketing, you cannot tell which variant caused which metric change. Including flagKey in the hash ensures each experiment has an independent random assignment." style="display:none"></div>
+          <div data-question="A flag at 10% rollout is increased to 20%. Which users are added to the enabled group, and do existing users remain enabled?" data-options='["All users are re-bucketed randomly when the rollout percentage changes", "Users with buckets 10-19 are added (newly enabled). Users with buckets 0-9 remain enabled. Hash-based bucketing is sticky: hash(userId:flagKey) % 100 does not change, so a user bucket is permanent. Increasing rollout % simply expands the threshold.", "50% of existing users are randomly removed when rollout changes to prevent bias", "All users are fully re-evaluated from scratch each time rollout percentage changes"]' data-correct="1" data-explanation="This is the elegance of hash-based rollout. The bucket assignment is stateless and deterministic -- you do not need to store which users are in the experiment. The rollout_pct is the only stored state. To add users: increase the threshold. Users in buckets below the threshold are always in." style="display:none"></div>
+          <div data-question="How does a kill switch work, and what is the typical propagation time from dashboard change to all services disabling the flag?" data-options='["Kill switches require redeployment of all services to take effect", "Setting enabled=false in the DB publishes a Kafka event. All service SDK instances receive the event (Kafka delivery 1-5s), clear their local cache, and reload from Redis (where the flag is now false). With event-driven updates: 5-10s total propagation globally.", "Kill switches are instantaneous because they use a global distributed lock", "Kill switches only work if you restart all service instances"]' data-correct="1" data-explanation="The propagation chain: DB write to Kafka event to SDK receives event to local cache cleared to flag reloads from Redis as false. The bottleneck is typically the SDK polling interval if not using push-based invalidation. Event-driven SDKs subscribing to Kafka events can achieve sub-10s propagation globally." style="display:none"></div>
+          <div data-question="What is the difference between a feature flag and an A/B test, and why might you use the same infrastructure for both?" data-options='["Feature flags and A/B tests are identical concepts with different names", "A feature flag controls whether a feature is on or off for a user. An A/B test assigns users to variants and tracks metric outcomes (click rate, conversion). A feature flag with two variants plus metric tracking equals an A/B test. The same bucketing infrastructure powers both; A/B tests add the experiment analysis layer on top.", "A/B tests require completely separate infrastructure than feature flags", "Feature flags can only have two states; A/B tests can have unlimited variants"]' data-correct="1" data-explanation="Most feature flag platforms (LaunchDarkly, Statsig) evolved into experimentation platforms precisely because the bucketing mechanism is the same. Feature flags care about did the feature reach users; A/B tests care about did variant B cause higher conversion rate. The evaluation SDK is identical; experiment analysis is a separate concern." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="multi-tenant-saas.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Multi-Tenant SaaS &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="api-gateway.html" class="btn btn--outline">&larr; API Gateway</a>
+        <a href="multi-tenant-saas.html" class="btn btn--primary">Next: Multi-Tenant SaaS &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

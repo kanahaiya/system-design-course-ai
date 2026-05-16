@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design E-commerce Flash Sale System — RESHADED walkthrough covering overselling prevention, Redis atomic operations, traffic spike handling, and queue-based order processing for MAANG interviews.">
+  <title>Design Flash Sale System — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-flash" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=flash" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">High concurrency</span>
+        </div>
+        <h1 class="module-header__title">Design E-commerce Flash Sale System</h1>
+        <p class="module-header__desc">A flash sale has two hard problems: 1) Don't oversell (sell more units than exist). 2) Don't crash under a 10× traffic spike that lasts 5 minutes. Redis DECR is atomic — the solution to problem 1. Kafka queues solve problem 2.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Amazon, Alibaba, Shopify</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> 10× traffic spike</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Users can view flash sale products and purchase at discounted price</li>
+            <li>Limited inventory (e.g., 1,000 iPhones at $199)</li>
+            <li>First-come-first-served within sale window</li>
+            <li>Order confirmation with payment processing</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>No overselling:</strong> Never sell more units than available inventory</li>
+            <li><strong>Traffic spike:</strong> Handle 100K requests/sec for a product with 1K inventory</li>
+            <li><strong>Fair:</strong> Random selection is acceptable; but no request should succeed after stock is 0</li>
+            <li><strong>Availability:</strong> Flash sale page must remain responsive even under extreme load</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>Normal traffic: 10K req/sec. Flash sale: 10× = 100K req/sec for 5 minutes</li>
+            <li>1,000 units available → only 1,000 orders succeed out of 100K attempts in first second</li>
+            <li>Rate of rejection: 99%+ → reject fast (before hitting DB) to save resources</li>
+            <li>Redis atomic DECR: 500K ops/sec on a single Redis instance → can handle 100K purchase attempts/sec</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Redis (hot inventory counter — single source of truth during sale)
+// Key: inventory:{productId}  Value: remaining_count (integer)
+// Initialized before sale start: SET inventory:{productId} 1000
+
+// Products (PostgreSQL)
+products: product_id, name, original_price, sale_price, sale_start, sale_end
+
+// Orders (PostgreSQL — written by order processor workers)
+orders: order_id, user_id, product_id, quantity, status (pending/confirmed/failed),
+        created_at, payment_intent_id</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Static Product Page:</strong> CDN-cached. No DB hits for browsing. Only the "Buy Now" action hits servers.</li>
+            <li><strong>Rate Limiter:</strong> IP-based rate limiting at gateway. 1 request/user/second. Rejects obvious bots. Implemented via sliding window in Redis.</li>
+            <li><strong>Inventory Check (Redis):</strong> Atomic DECR on inventory:{productId}. If result ≥ 0: reserved. If result &lt; 0: INCR back + reject. This is the gatekeeper — fast (&lt;1ms) and atomic.</li>
+            <li><strong>Order Queue (Kafka):</strong> Successful reservations published to Kafka. Returns 202 Accepted immediately. Client polls order status.</li>
+            <li><strong>Order Processor Workers:</strong> Consume Kafka. Create DB order record. Process payment. Update order status. Release inventory to DB on success.</li>
+            <li><strong>Presale Warmup:</strong> Before sale starts, pre-warm CDN, load inventory to Redis, spin up extra order processor pods (Kubernetes HPA on queue depth).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">GET  /v1/products/{productId}/flash-sale   // product page (CDN-cached)
+POST /v1/orders/flash                      // purchase attempt (rate limited)
+  Body: { productId, paymentMethodId }
+  Returns: { orderId, status: "pending" } or 429/sold-out
+GET  /v1/orders/{orderId}                  // poll order status</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Redis Atomic Inventory<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Why Redis DECR is the right tool:</strong></p>
+          <ul>
+            <li>Redis is single-threaded. All commands execute sequentially. DECR is atomic by design — no race conditions.</li>
+            <li>At 100K purchase attempts/sec, a DB check-then-update pattern would require locking, causing serialization and timeout cascades under load.</li>
+            <li>Redis DECR + check result is O(1) and completes in &lt;1ms — can handle 500K ops/sec on a single instance.</li>
+          </ul>
+          <p><strong>The atomic pattern:</strong></p>
+          <pre><code class="language-java">long remaining = jedis.decr("inventory:" + productId);
+if (remaining >= 0) {
+    // Reserved! User gets a spot. Publish to Kafka.
+} else {
+    jedis.incr("inventory:" + productId); // undo the decrement
+    return soldOut(); // reject request
+}</code></pre>
+          <p><strong>Edge case:</strong> Redis crash between DECR and Kafka publish. The inventory is decremented but no order is created — a unit is "lost." Mitigation: write to Redis + DB atomically using Lua script or accept &lt;1% inventory discrepancy, reconcile in batch.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Thundering herd:</strong> 100K users hit at sale start simultaneously. Rate limiting at API gateway + CDN-served product page absorbs most. Only POST /orders hits the stack. Redis handles the inventory check.</li>
+            <li><strong>Payment failure after inventory reserved:</strong> Order processor reserves inventory but payment fails. Must release inventory back to Redis (+1) to avoid permanently losing a unit.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a flash sale system handling 100K req/sec with zero overselling. Key decisions: Redis atomic DECR as gatekeeper (prevents overselling), CDN for product page (removes browse traffic from servers), Kafka queue to decouple purchase acceptance from order processing, and rate limiting to reduce bot traffic.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Inventory check</td><td>Redis atomic DECR</td><td>DB SELECT FOR UPDATE</td><td>Redis: 500K ops/sec, &lt;1ms. DB lock: serialized writes, timeouts under load. Redis 500× faster for this pattern.</td></tr>
+              <tr><td>Order processing</td><td>Async via Kafka queue</td><td>Synchronous HTTP</td><td>Processing includes payment (2–3s). Async returns 202 immediately, handles 100K/sec. Synchronous would require 200K server threads.</td></tr>
+              <tr><td>Traffic spike handling</td><td>Rate limiting + CDN caching</td><td>Vertical scaling</td><td>Vertical scaling has limits and costs. Rate limiting (bots) + CDN (static pages) eliminate 90% of load before hitting servers.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * FlashSaleService — atomic inventory reservation using Redis DECR.
+ * Only successful reservations are forwarded to the order queue.
+ */
+public class FlashSaleService {
+    private static final String INVENTORY_KEY_PREFIX = "inventory:";
+    private final JedisPool jedisPool;
+    private final KafkaProducer&lt;String, String&gt; kafkaProducer;
+
+    public FlashSaleService(JedisPool jedisPool, KafkaProducer&lt;String, String&gt; kafkaProducer) {
+        this.jedisPool = jedisPool;
+        this.kafkaProducer = kafkaProducer;
+    }
+
+    /**
+     * Attempts to reserve one unit for a flash sale product.
+     * Returns a reservation token if successful, throws SoldOutException if not.
+     */
+    public String attemptPurchase(String productId, String userId, String paymentMethodId) {
+        String inventoryKey = INVENTORY_KEY_PREFIX + productId;
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Atomic decrement — Redis single-threaded guarantees no race condition
+            long remainingInventory = jedis.decr(inventoryKey);
+
+            if (remainingInventory &lt; 0) {
+                // Undo the decrement — we overshot, put it back
+                jedis.incr(inventoryKey);
+                throw new SoldOutException("Product " + productId + " is sold out");
+            }
+
+            // Reservation successful — publish to order queue asynchronously
+            String orderId = UUID.randomUUID().toString();
+            String orderJson = buildOrderJson(orderId, productId, userId, paymentMethodId);
+            kafkaProducer.send(new ProducerRecord&lt;&gt;("flash-sale-orders", orderId, orderJson),
+                (metadata, kafkaException) -> {
+                    if (kafkaException != null) {
+                        // Kafka publish failed — must release the reserved inventory
+                        releaseInventory(inventoryKey);
+                        System.err.println("[FlashSaleService] Kafka publish failed for order " + orderId
+                                           + ": " + kafkaException.getMessage());
+                    }
+                });
+            return orderId;
+        }
+    }
+
+    private void releaseInventory(String inventoryKey) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.incr(inventoryKey);
+        }
+    }
+
+    private String buildOrderJson(String orderId, String productId, String userId, String paymentMethodId) {
+        return "{\"orderId\":\"" + orderId + "\",\"productId\":\"" + productId
+               + "\",\"userId\":\"" + userId + "\",\"paymentMethodId\":\"" + paymentMethodId + "\"}";
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-flash-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Two users simultaneously attempt to buy the last item. With Redis atomic DECR, what happens?" data-options='["Both succeed — Redis allows concurrent decrements","Redis is single-threaded. Both DECRs execute sequentially. First gets 0 (success), second gets -1 (failure — does INCR to restore). No overselling possible.","Redis uses optimistic locking similar to a database","The second request is queued and waits for the first to complete"]' data-correct="1" data-explanation="Redis executes all commands in a single thread. DECR from 1 to 0 = success. The next DECR from 0 to -1 = failure (negative means nothing left). The INCR restores the count. This is why Redis DECR is the perfect atomic inventory counter — no locks, no race conditions, 500K ops/sec throughput." style="display:none"></div>
+          <div data-question="Why return 202 Accepted (async) rather than waiting for payment confirmation on the purchase API?" data-options='["HTTP 202 is required for inventory systems","Payment processing takes 1–3 seconds. At 100K requests/sec, synchronous payment would require 100K-300K concurrent server threads holding connections open. Returning 202 immediately allows a small number of order processor workers to handle the queue at their own pace.","202 allows the server to reject the payment later without liability","Kafka requires 202 responses from the calling service"]' data-correct="1" data-explanation="This is the classic queue-based load leveling pattern. The API tier (accepting requests) is decoupled from the processing tier (payments, DB writes). The API can handle 100K/sec requests and queue them. The processors run at 1K/sec — they don't need to match the spike. The queue absorbs the difference." style="display:none"></div>
+          <div data-question="A user reserves inventory (Redis DECR succeeds) but their payment fails. What must happen?" data-options='["The inventory is permanently sold — payment failure doesn't release it","The order processor must increment Redis inventory (+1) to release the reserved unit back, making it available for another purchaser","The user is allowed to retry with a different payment method within 5 minutes","Inventory is automatically released after 24 hours"]' data-correct="1" data-explanation="Reserved but not paid = no sale. The unit must return to available inventory. On payment failure, the order processor calls jedis.incr(inventoryKey). Failing to do this causes permanent inventory leakage — after 1,000 payment failures you've 'sold' all items without receiving payment." style="display:none"></div>
+          <div data-question="Why CDN-cache the flash sale product page instead of serving it dynamically?" data-options='["Dynamic pages are not SEO-friendly","99% of flash sale traffic is page views (browsing, waiting for sale to start) not purchase attempts. Serving this from CDN eliminates 99% of load from application servers, leaving them free to handle the 1% that are actual purchase requests at sale start.","CDN provides better HTML rendering than application servers","Dynamic pages cannot display countdown timers accurately"]' data-correct="1" data-explanation="Pre-sale traffic can be 10–100× normal as users load/refresh the page waiting for the sale. If every refresh hits your app servers at 100K req/sec, you need 10× capacity just for browsing. CDN caching (with short TTL to keep inventory count fresh) eliminates this entirely — CDN serves pages at zero cost to your servers." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="google-docs.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Google Docs →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="live-streaming.html" class="btn btn--outline">← Live Streaming</a>
+        <a href="google-docs.html" class="btn btn--primary">Next: Google Docs →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

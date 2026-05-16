@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Netflix — RESHADED walkthrough covering adaptive bitrate streaming, transcoding pipeline, CDN Open Connect, and recommendation engine for MAANG interviews.">
+  <title>Design Netflix — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-netflix" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=netflix" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Video streaming</span>
+        </div>
+        <h1 class="module-header__title">Design Netflix</h1>
+        <p class="module-header__desc">Netflix's core technical challenge is delivering high-quality video to 200M users across wildly different network conditions. Adaptive Bitrate Streaming (ABR) is the key — the client constantly measures bandwidth and switches quality seamlessly.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Netflix, YouTube, Amazon</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎬</span> 15% of internet traffic</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Upload and stream video content (movies, TV shows)</li>
+            <li>Adaptive quality streaming — auto-adjust to network conditions</li>
+            <li>Resume watching from last position across devices</li>
+            <li>Browse catalog, search titles, personalized recommendations</li>
+            <li>Multiple user profiles per account</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 200M subscribers, 200M streaming hours/day</li>
+            <li><strong>Latency:</strong> Video starts in &lt;2s (buffering before first frame)</li>
+            <li><strong>Availability:</strong> 99.99% — buffering is revenue loss</li>
+            <li><strong>Bandwidth:</strong> Netflix uses ~15% of global internet traffic at peak</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>200M hours/day streaming; avg 1.5 hrs/session → ~133M concurrent sessions at peak</li>
+            <li>1080p stream = ~5 Mbps; 133M streams × 5 Mbps = 665 Tbps of egress bandwidth</li>
+            <li>Transcoding: 1 hr of 4K source → encode to 10 quality levels × 2 codecs (H.264, HEVC) → 20 files, each ~5–50GB. Total library ~10 PB.</li>
+            <li>CDN servers worldwide; Netflix places Open Connect Appliances (OCA) in ISP data centers to serve 95% of traffic locally.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Content catalog (PostgreSQL / DynamoDB)
+titles: title_id, name, description, release_year, genre[], rating, duration_seconds
+title_media: title_id, quality_tier (240p/480p/720p/1080p/4K), codec, s3_key, bitrate_kbps
+
+// User watch history (Cassandra — per-user time series)
+// partition: user_id, clustering: watched_at DESC
+watch_history: (user_id, title_id, profile_id, watched_at, position_seconds, completed)
+
+// User resume position (Redis — low latency, frequent updates)
+// Key: resume:{user_id}:{title_id}  Value: {position_seconds, updated_at}
+
+// Manifest per title (generated at transcoding time, cached on CDN)
+// m3u8 playlist: references all quality tiers and segment URLs</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Content upload:</strong> Studio uploads raw 4K source → S3 → Transcoding Service (distributed encoding cluster) → multiple quality tiers → stored in S3 → pushed to Open Connect CDN nodes.</li>
+            <li><strong>Streaming flow:</strong> Client → API → Manifest Service (returns .m3u8 playlist URL) → Client fetches manifest from CDN → Client downloads 2–4 second segments from CDN based on ABR algorithm.</li>
+            <li><strong>Open Connect (OCA):</strong> Netflix's private CDN. Servers placed inside ISP facilities worldwide. ISP benefits from reduced peering cost; Netflix benefits from speed. Proactively pre-positions popular content overnight.</li>
+            <li><strong>Recommendation Service:</strong> Offline training on watch history → user/item embeddings. Online: ANN lookup for similar titles → re-rank by recency, diversity, A/B test bucket.</li>
+            <li><strong>Resume Service:</strong> Client posts position update every 60s to Redis. On app open, fetch position → seek to byte offset in video stream.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">GET  /v1/titles/{titleId}/manifest    // returns CDN URL of .m3u8 playlist
+GET  /v1/recommendations?profileId={id}&limit=20
+POST /v1/watch-history                // { titleId, profileId, positionSeconds }
+GET  /v1/resume/{titleId}?profileId={id}   // returns { positionSeconds }
+GET  /v1/search?q={query}&genre={}&limit=20</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Adaptive Bitrate Streaming (ABR)<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p>ABR is how Netflix delivers smooth video on everything from a 4G phone to a 10 Gbps fiber connection.</p>
+          <ol>
+            <li><strong>Manifest (.m3u8):</strong> An HLS playlist listing available quality tiers with their segment URLs. The client downloads this first.</li>
+            <li><strong>Segments:</strong> Each tier is cut into 2–4 second MPEG-TS or fMP4 segments. Segments are independently decodable.</li>
+            <li><strong>Buffer level:</strong> Client maintains a playback buffer (target: 30 seconds ahead). Buffer level drives quality decisions.</li>
+            <li><strong>Bandwidth estimation:</strong> Client measures download speed of the last N segments (EWMA). If estimated bandwidth &gt; next tier bitrate, step up. If buffer &lt; 10s, step down.</li>
+            <li><strong>VMAF (Video Multi-method Assessment Fusion):</strong> Netflix's perceptual quality metric. Used during encoding to optimize quality-per-bitrate, not just PSNR.</li>
+          </ol>
+          <p><strong>Why ABR beats fixed quality:</strong> A 1080p stream at 8 Mbps on a 3 Mbps connection causes buffering. ABR automatically drops to 720p at 2.5 Mbps — the user keeps watching without interruption.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Transcoding cost:</strong> A 2-hour 4K movie generates ~200GB of encoded files. Netflix encodes per-title at optimal bitrate ladders using VMAF, not a fixed ladder — this reduces storage ~40%.</li>
+            <li><strong>CDN cache misses:</strong> Long-tail titles (rare requests) miss the OCA cache and hit S3. Acceptable since rare titles have fewer concurrent viewers.</li>
+            <li><strong>DRM:</strong> Widevine/FairPlay/PlayReady. Segments are encrypted; client fetches license key from DRM server before decryption. Key not shown in design because it's a legal/integration concern, not a systems problem.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed Netflix handling 200M users and 665 Tbps of egress. Key decisions: HLS + ABR for adaptive quality, Open Connect CDN inside ISPs for 95% of traffic, distributed transcoding pipeline producing 10+ quality tiers per title, and Redis for sub-100ms resume position lookups.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Streaming protocol</td><td>HLS (HTTP-based)</td><td>RTMP, RTSP</td><td>HLS uses standard HTTP — works through firewalls, leverages CDN caching naturally, widely supported</td></tr>
+                <tr><td>CDN</td><td>Open Connect (private ISP-embedded)</td><td>AWS CloudFront</td><td>Lower cost at Netflix's scale; direct peering with ISPs eliminates transit costs; faster last-mile delivery</td></tr>
+                <tr><td>Quality metric</td><td>VMAF (perceptual)</td><td>PSNR (pixel-level)</td><td>VMAF correlates with human perception — allows lower bitrates at same perceived quality, reducing storage/bandwidth</td></tr>
+                <tr><td>Resume position storage</td><td>Redis (fast) + Cassandra (durable)</td><td>PostgreSQL only</td><td>Redis serves &lt;1ms reads; position written to Kafka, async persisted to Cassandra for durability</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ABRController — selects the optimal video quality tier based on
+ * current bandwidth estimate and playback buffer level.
+ * Runs client-side; included here to illustrate the algorithm.
+ */
+public class ABRController {
+
+    // Quality tiers: name → required bandwidth in kbps
+    private static final List&lt;QualityTier&gt; QUALITY_TIERS = List.of(
+        new QualityTier("240p",  400),
+        new QualityTier("480p",  1000),
+        new QualityTier("720p",  2500),
+        new QualityTier("1080p", 5000),
+        new QualityTier("4K",    15000)
+    );
+
+    // Buffer thresholds in seconds
+    private static final int BUFFER_PANIC_THRESHOLD_SECONDS = 10;  // drop quality immediately
+    private static final int BUFFER_TARGET_SECONDS          = 30;  // ideal buffer level
+
+    // Bandwidth estimate: exponential weighted moving average
+    private static final double EWMA_ALPHA = 0.3; // weight of latest measurement
+    private double estimatedBandwidthKbps = 1000; // initial conservative estimate
+
+    private int currentTierIndex = 0; // start at lowest quality
+
+    /**
+     * Called after each segment download completes.
+     * Updates bandwidth estimate and selects the tier for the next segment.
+     *
+     * @param downloadedBytes      size of the segment just downloaded
+     * @param downloadDurationMs   time it took to download
+     * @param bufferLevelSeconds   current playback buffer depth
+     * @return name of quality tier to request for the next segment
+     */
+    public String selectNextQuality(long downloadedBytes, long downloadDurationMs, int bufferLevelSeconds) {
+        updateBandwidthEstimate(downloadedBytes, downloadDurationMs);
+
+        if (bufferLevelSeconds &lt; BUFFER_PANIC_THRESHOLD_SECONDS) {
+            // Emergency: buffer critically low — drop to lowest quality immediately
+            currentTierIndex = 0;
+        } else {
+            currentTierIndex = findOptimalTierIndex(bufferLevelSeconds);
+        }
+
+        return QUALITY_TIERS.get(currentTierIndex).getName();
+    }
+
+    /**
+     * Finds the highest quality tier whose bitrate fits within estimated bandwidth,
+     * with a safety margin that tightens when the buffer is low.
+     */
+    private int findOptimalTierIndex(int bufferLevelSeconds) {
+        // Safety margin: tighter when buffer is low (0.5×), relaxed when buffer is healthy (0.9×)
+        double safetyMargin = (bufferLevelSeconds &gt;= BUFFER_TARGET_SECONDS) ? 0.9 : 0.6;
+        double usableBandwidthKbps = estimatedBandwidthKbps * safetyMargin;
+
+        int bestTierIndex = 0;
+        for (int tierIndex = 0; tierIndex &lt; QUALITY_TIERS.size(); tierIndex++) {
+            if (QUALITY_TIERS.get(tierIndex).getRequiredKbps() &lt;= usableBandwidthKbps) {
+                bestTierIndex = tierIndex;
+            }
+        }
+
+        // Limit quality increase to one step at a time (prevents oscillation)
+        return Math.min(bestTierIndex, currentTierIndex + 1);
+    }
+
+    /**
+     * Updates the EWMA bandwidth estimate with the latest measurement.
+     * EWMA smooths out transient spikes and drops.
+     */
+    private void updateBandwidthEstimate(long downloadedBytes, long downloadDurationMs) {
+        if (downloadDurationMs &lt;= 0) {
+            return;
+        }
+        double measuredKbps = (downloadedBytes * 8.0) / downloadDurationMs; // bits/ms = kbps
+        estimatedBandwidthKbps = EWMA_ALPHA * measuredKbps + (1 - EWMA_ALPHA) * estimatedBandwidthKbps;
+    }
+
+    private record QualityTier(String name, int requiredKbps) {
+        public String getName() { return name; }
+        public int getRequiredKbps() { return requiredKbps; }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-netflix-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="What triggers an ABR client to step DOWN to a lower quality tier?" data-options='["The user manually selects lower quality","The playback buffer drops below a critical threshold (e.g., 10 seconds), indicating download speed can't keep up with playback","The CDN returns a 429 Too Many Requests response","The video file for the current quality is not cached at the CDN edge"]' data-correct="1" data-explanation="ABR monitors buffer depth continuously. When buffer drops below the panic threshold, the client switches to a lower bitrate that can be downloaded faster than it plays, allowing the buffer to rebuild. Quality drops silently — the user sees a blurrier image rather than a spinner." style="display:none"></div>
+          <div data-question="Why does Netflix use a private CDN (Open Connect) embedded inside ISPs rather than a public CDN like CloudFront?" data-options='["Public CDNs don't support video streaming protocols","At Netflix's scale (15% of internet traffic), placing servers inside ISPs eliminates peering/transit costs and reduces last-mile latency — the economics are far better than paying a CDN per-GB fee","Netflix needs DRM hardware that only ISP facilities can host","Public CDNs have a 10 Gbps maximum throughput limit"]' data-correct="1" data-explanation="At Netflix's volume, per-GB CDN costs become enormous. Open Connect lets Netflix pre-position content directly in ISP data centers. The ISP wins (less traffic traversing expensive peering links); Netflix wins (lower latency, lower cost). The break-even vs public CDN is well below Netflix's scale." style="display:none"></div>
+          <div data-question="A 2-hour movie is encoded at 10 quality tiers. What does the HLS .m3u8 manifest file contain?" data-options='["The actual video data encoded in base64","A list of available quality tiers, each with a URL to its segment playlist. The client downloads the master manifest, picks a tier, then downloads that tier's segment URLs","A single URL pointing to the highest quality version","The movie's metadata: title, description, and cast information"]' data-correct="1" data-explanation="The HLS master manifest is a small text file (~1KB) listing each quality variant. Selecting a tier downloads that tier's media playlist — a list of 2–4 second segment URLs. The actual video data is in those segments, served directly from the CDN edge." style="display:none"></div>
+          <div data-question="Why is VMAF preferred over PSNR for Netflix's video quality optimization?" data-options='["VMAF is a simpler calculation that runs faster","VMAF correlates with human visual perception — a video scored 90 VMAF looks good to viewers even at a lower bitrate that PSNR would rate poorly, enabling better quality-per-bit efficiency","VMAF is a Netflix open-source tool so it's free to use","PSNR cannot measure color accuracy in HDR content"]' data-correct="1" data-explanation="PSNR measures pixel-level mathematical difference and doesn't correlate well with perceived quality. VMAF combines motion, temporal distortion, and contrast models trained on human ratings. Using VMAF allows Netflix to find the minimum bitrate at which a specific title looks 'good' — saving 30–40% storage vs fixed bitrate ladders." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="google-maps.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Google Maps →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="instagram.html" class="btn btn--outline">← Instagram</a>
+        <a href="google-maps.html" class="btn btn--primary">Next: Google Maps →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

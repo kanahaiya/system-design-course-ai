@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Multi-tenant SaaS Platform &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design Multi-tenant SaaS Platform &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-saas" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-saas" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Platform Architecture</span>
+        </div>
+        <h1 class="module-header__title">Design Multi-tenant SaaS Platform</h1>
+        <p class="module-header__desc">Multi-tenancy is about one platform serving many customers with guaranteed isolation. The three isolation models trade off cost, complexity, and isolation strength. The wrong choice is hard to reverse -- designing the tenant isolation model is the most important architectural decision in a SaaS system.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; Salesforce, Slack, GitHub</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+      <section class="content-section" id="requirements"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><h3>Functional Requirements</h3><ul>
+            <li>Multiple tenants share the same infrastructure with logical isolation</li>
+            <li>Tenant data must never be visible to other tenants</li>
+            <li>Per-tenant customization: settings, feature flags, branding</li>
+            <li>Self-service tenant onboarding</li>
+            <li>Usage metering and billing per tenant</li></ul><h3>Non-Functional Requirements</h3><ul>
+            <li><strong>Isolation:</strong> Tenant A can never read, write, or infer Tenant B data</li>
+            <li><strong>Scale:</strong> 10K tenants, each with 0&ndash;100K users</li>
+            <li><strong>Latency:</strong> tenant_id filtering must not add measurable latency</li></ul></div></section>
+      <section class="content-section" id="estimation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><ul>
+            <li>10K tenants &times; avg 10K users = 100M user records total</li>
+            <li>Shared schema: one DB table, tenant_id column on every row</li>
+            <li>Most SaaS: shared DB + row-level security for small/medium tenants; separate DB for enterprise</li></ul></div></section>
+      <section class="content-section" id="schema"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Shared schema model (most common for mid-market SaaS)
+// Every table has tenant_id as first column in composite primary key
+users:     (tenant_id, user_id) PRIMARY KEY, email, name, role
+documents: (tenant_id, doc_id) PRIMARY KEY, title, content, owner_id
+settings:  (tenant_id) PRIMARY KEY, plan, feature_flags, custom_config
+
+// Row-level security (PostgreSQL RLS)
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON users
+  USING (tenant_id = current_setting('app.current_tenant_id'));
+
+// Thread-local tenant context (application layer)
+// Set before every DB query: SET LOCAL app.current_tenant_id = 'tenant123'</code></pre></div></section>
+      <section class="content-section" id="hld"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body"><ul>
+            <li><strong>Model 1 &mdash; Shared DB + shared schema (tenant_id column):</strong> All tenants in same tables. RLS enforces isolation. Cheapest. Risk: misconfigured query leaks cross-tenant data.</li>
+            <li><strong>Model 2 &mdash; Shared DB + separate schema (one schema per tenant):</strong> Schema isolation at DB level. Medium cost. Easy to migrate one tenant to their own DB later.</li>
+            <li><strong>Model 3 &mdash; Separate DB per tenant:</strong> Strongest isolation. Most expensive. Required for regulated industries (healthcare, finance).</li>
+            <li><strong>Hybrid (most common):</strong> SMB tenants share DB (Model 1). Enterprise tenants get dedicated DB (Model 3). Migration path: tenant grows &rarr; move to own DB.</li>
+            <li><strong>Tenant context propagation:</strong> Middleware extracts tenant_id from JWT. Sets thread-local. Query interceptor automatically adds WHERE tenant_id = ? to all queries.</li></ul></div></section>
+      <section class="content-section" id="apis"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Tenant Management API (admin only)
+POST /api/v1/tenants           { name, plan, admin_email } -> { tenant_id, api_keys }
+GET  /api/v1/tenants/{id}      -> { tenant settings, usage stats }
+POST /api/v1/tenants/{id}/plan { plan: "enterprise" }  -- upgrade to dedicated DB
+
+// All other APIs are tenant-scoped via JWT claim
+// JWT payload: { sub: "user123", tenant_id: "tenant456", plan: "pro" }
+// Gateway extracts tenant_id, passes to service as X-Tenant-Id header
+// Service layer sets TenantContextHolder.setCurrentTenantId("tenant456")</code></pre></div></section>
+      <section class="content-section" id="deepdive"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body">
+          <p><strong>Preventing tenant data leakage (the critical requirement):</strong></p>
+          <ol>
+            <li><strong>Query interceptor:</strong> JPA/Hibernate entity listener or Spring AOP. Intercepts all queries. Injects AND tenant_id = ? automatically. Developers cannot forget to add tenant_id filter -- it is enforced by the framework.</li>
+            <li><strong>PostgreSQL Row-Level Security (RLS):</strong> DB-level enforcement. Even if the application bug forgets the filter, RLS blocks cross-tenant reads at the database. Defense in depth.</li>
+            <li><strong>Tenant-scoped access tokens:</strong> JWTs embed tenant_id as a claim. A user cannot create a valid token for a different tenant.</li>
+            <li><strong>Integration test:</strong> Always include a cross-tenant leakage test: tenant A token cannot access tenant B resources at any endpoint.</li>
+          </ol>
+          <p><strong>Noisy neighbor problem:</strong> Tenant A runs a heavy report query, degrading performance for all other tenants sharing the same DB. Mitigation: per-tenant query quotas, read replicas for analytics, automatic migration of high-volume tenants to dedicated DB instances.</p></div></section>
+      <section class="content-section" id="evaluate"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2><div class="content-section__body"><ul>
+            <li><strong>Schema migration at scale:</strong> ALTER TABLE with millions of rows and 10K tenants all sharing one table = potentially long lock time. Mitigation: online DDL, or feature flags to roll out new columns gradually.</li>
+            <li><strong>Tenant onboarding:</strong> For shared schema: one row in tenants table + settings = minutes. For dedicated DB: provision DB instance, run migrations, configure connection pool = hours. Automate with Terraform + migration runner.</li></ul></div></section>
+      <section class="content-section" id="deliver"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2><div class="content-section__body"><p>Multi-tenant SaaS = shared schema (tenant_id column) + PostgreSQL RLS (DB-level backstop) + thread-local tenant context + query interceptor (auto-inject WHERE tenant_id). Hybrid model for scale: shared DB for SMB, dedicated DB for enterprise.</p></div></section>
+      <section class="content-section" id="tradeoffs"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2><div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Isolation Model</th><th>Cost</th><th>Isolation</th><th>Best For</th></tr></thead>
+            <tbody>
+              <tr><td>Shared schema (tenant_id)</td><td>Lowest</td><td>Logical only -- application-enforced</td><td>SMB SaaS, startups, &lt;1000 tenants</td></tr>
+              <tr><td>Separate schema per tenant</td><td>Medium</td><td>Schema-level -- DB-enforced</td><td>Mid-market, schema customization needed</td></tr>
+              <tr><td>Separate DB per tenant</td><td>Highest</td><td>Strongest -- full isolation</td><td>Enterprise, regulated industries, data residency requirements</td></tr>
+            </tbody>
+          </table></div></section>
+      <section class="content-section" id="implementation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2><div class="content-section__body"><pre><code class="language-java">/**
+ * TenantContextHolder -- stores the current tenant_id in thread-local storage.
+ * Set by HTTP middleware from JWT claim; read by the query interceptor.
+ */
+public class TenantContextHolder {
+    private static final ThreadLocal&lt;String&gt; currentTenantId = new ThreadLocal&lt;&gt;();
+
+    public static void setCurrentTenantId(String tenantId) { currentTenantId.set(tenantId); }
+
+    public static String getCurrentTenantId() {
+        String tenantId = currentTenantId.get();
+        if (tenantId == null) {
+            throw new IllegalStateException("No tenant context set -- missing tenant_id in JWT");
+        }
+        return tenantId;
+    }
+
+    public static void clear() { currentTenantId.remove(); } // MUST call in finally block
+}
+
+/**
+ * TenantFilterInterceptor -- Spring MVC interceptor that sets tenant context.
+ * Called before every controller method. Extracts tenant_id from JWT.
+ */
+@Component
+public class TenantFilterInterceptor implements HandlerInterceptor {
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        String jwtToken = extractBearerToken(request);
+        if (jwtToken == null) { response.setStatus(401); return false; }
+        String tenantId = extractTenantIdFromJwt(jwtToken);
+        TenantContextHolder.setCurrentTenantId(tenantId);
+        return true;
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest req, HttpServletResponse res, Object handler, Exception ex) {
+        TenantContextHolder.clear(); // CRITICAL: prevent tenant context leaking to next request
+    }
+
+    private String extractBearerToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        return (authHeader != null &amp;&amp; authHeader.startsWith("Bearer "))
+               ? authHeader.substring(7) : null;
+    }
+
+    private String extractTenantIdFromJwt(String token) {
+        // Production: decode and verify JWT, extract "tenant_id" claim
+        // Simplified: return claim from verified JWT payload
+        return JwtUtils.getClaim(token, "tenant_id");
+    }
+}</code></pre></div></section>
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-saas-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 4</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+          <div data-question="What is the key risk of the shared-schema (tenant_id column) isolation model?" data-options='["Shared schema is more expensive than separate databases", "A single application bug (forgetting to include WHERE tenant_id = ? in a query) can expose all tenants data to any user. Defense requires multiple layers: application-level query interceptor, PostgreSQL Row-Level Security as a database-level backstop, and mandatory cross-tenant leakage tests.", "Shared schema cannot support more than 1,000 tenants", "Shared schema prevents using database indexes effectively"]' data-correct="1" data-explanation="This is why defense-in-depth is critical for multi-tenant systems. Application bugs happen. If the only isolation is in application code, one bug equals customer data breach. PostgreSQL RLS adds a database-level filter that fires even if the application forgets. Two independent layers: if either works, the leak is prevented." style="display:none"></div>
+          <div data-question="Why is thread-local storage used for tenant context rather than passing tenant_id as a function parameter?" data-options='["Thread-local storage is faster than function parameters at runtime", "Passing tenant_id through every layer (controller to service to repository to query) would require modifying every method signature in the entire codebase. Thread-local stores it once in middleware, accessible anywhere in the same request call stack without parameter threading.", "Thread-local storage prevents multi-threading issues in concurrent requests", "Function parameters cannot handle UUID-length tenant IDs correctly"]' data-correct="1" data-explanation="Thread-local storage is the standard pattern for request-scoped context (also used for database transactions, security context, MDC logging). The alternative -- method parameter threading -- requires modifying every method and makes code harder to test. Thread-local is implicit but contained: set once in middleware, cleared in a finally block." style="display:none"></div>
+          <div data-question="What is the noisy neighbor problem in a shared multi-tenant database?" data-options='["Noisy neighbors are tenants who send too many support tickets", "One tenant running heavy analytical queries consumes DB CPU and I/O, degrading response times for all other tenants sharing the same instance. Mitigation: per-tenant query quotas, routing analytics queries to read replicas, automatic migration of high-volume tenants to dedicated DB instances.", "Noisy neighbors are only a problem in shared-schema, not separate-schema models", "Noisy neighbor problems only occur in cloud databases, not on-premises deployments"]' data-correct="1" data-explanation="Shared infrastructure means shared resources. A SaaS tenant running a monthly data export at 9 AM can consume 80% of the shared DB I/O, causing timeouts for all other tenants. Detection: per-tenant query metrics. Response: rate-limit analytical queries or move high-resource tenants to dedicated infrastructure." style="display:none"></div>
+          <div data-question="How does the hybrid multi-tenant model (shared DB for SMB, dedicated DB for enterprise) affect the application architecture?" data-options='["The hybrid model requires rewriting the application code twice for each model", "The data access layer must be routing-aware: resolve tenant_id to data store location (shared pool or dedicated DB connection). Connection pool manager routes queries to the correct DB. Application code stays the same -- only the routing layer changes. New enterprise tenant onboarding triggers DB provisioning automatically.", "Hybrid models are not supported by PostgreSQL connection poolers", "Enterprise tenants must use different application servers than SMB tenants"]' data-correct="1" data-explanation="Connection routing is the key abstraction. The application calls userRepository.findById() and the repository resolves the current tenant_id, looks up which DB pool serves this tenant (shared pool or dedicated), and routes accordingly. Application business logic is tenant-agnostic -- only the infrastructure layer knows about data residency." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite"><div class="quiz__result-score"></div><div class="quiz__result-label"></div><div style="margin-top:var(--space-4)"><button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button><a href="log-aggregation.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Log Aggregation &rarr;</a></div></div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)"><a href="feature-flags.html" class="btn btn--outline">&larr; Feature Flags</a><a href="log-aggregation.html" class="btn btn--primary">Next: Log Aggregation &rarr;</a></div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

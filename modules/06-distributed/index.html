@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master distributed systems consensus with Raft, Redlock distributed locks, two-phase commit limitations, Saga pattern, and CAP theorem for MAANG interviews.">
+  <title>Distributed Consensus &amp; Transactions — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/06-distributed/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#raft" class="module-toc__link">Raft Consensus</a></li>
+          <li><a href="#redlock" class="module-toc__link">Distributed Locks (Redlock)</a></li>
+          <li><a href="#2pc" class="module-toc__link">Two-Phase Commit</a></li>
+          <li><a href="#saga" class="module-toc__link">Saga Pattern</a></li>
+          <li><a href="#cap" class="module-toc__link">CAP Theorem Revisited</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-06" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 06</span>
+        </nav>
+        <div class="module-header__number">Module 06</div>
+        <h1 class="module-header__title">Distributed Consensus &amp; Transactions</h1>
+        <p class="module-header__desc">Deep dive into Raft consensus, distributed locking with Redlock, the fundamental limits of 2PC, and the Saga pattern that powers modern microservices payment flows.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <section id="raft" class="content-section">
+        <h2>Raft Consensus Algorithm</h2>
+        <p>Raft was designed to be more understandable than Paxos while achieving equivalent fault tolerance. It decomposes consensus into three sub-problems: leader election, log replication, and safety.</p>
+
+        <h3>Leader Election</h3>
+        <p>Every node starts as a <strong>Follower</strong>. If no heartbeat is received within the election timeout (150–300 ms, randomised), a follower transitions to <strong>Candidate</strong> and starts a new term. It votes for itself and sends <code>RequestVote</code> RPCs to all peers. A candidate becomes <strong>Leader</strong> once it receives votes from a majority of the cluster (⌊N/2⌋ + 1).</p>
+        <p>Randomised timeouts prevent split votes: each node picks a different timeout, so one node usually times out first and wins the election before others start competing.</p>
+
+        <h3>Log Replication</h3>
+        <p>Once elected, the leader accepts client writes, appends them to its own log, then sends <code>AppendEntries</code> RPCs in parallel to all followers. An entry is <strong>committed</strong> once a majority acknowledges it. The leader then applies the entry to its state machine and responds to the client. Followers apply entries once they observe the leader's <code>commitIndex</code> advance.</p>
+
+        <figure class="diagram-container" aria-label="Raft state machine diagram">
+          <svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Raft node state transitions">
+            <title>Raft Node State Transitions</title>
+            <rect x="10" y="70" width="140" height="60" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="2"/>
+            <text x="80" y="97" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="Inter,sans-serif">FOLLOWER</text>
+            <text x="80" y="113" text-anchor="middle" fill="#64748b" font-size="10" font-family="Inter,sans-serif">receives heartbeats</text>
+            <rect x="280" y="70" width="140" height="60" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+            <text x="350" y="97" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="Inter,sans-serif">CANDIDATE</text>
+            <text x="350" y="113" text-anchor="middle" fill="#64748b" font-size="10" font-family="Inter,sans-serif">requests votes</text>
+            <rect x="550" y="70" width="140" height="60" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2"/>
+            <text x="620" y="97" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="Inter,sans-serif">LEADER</text>
+            <text x="620" y="113" text-anchor="middle" fill="#64748b" font-size="10" font-family="Inter,sans-serif">replicates logs</text>
+            <line x1="150" y1="100" x2="278" y2="100" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-y)"/>
+            <text x="214" y="92" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="Inter,sans-serif">timeout</text>
+            <line x1="420" y1="100" x2="548" y2="100" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-g)"/>
+            <text x="484" y="92" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">majority votes</text>
+            <path d="M350 70 Q350 20 80 70" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-s)"/>
+            <text x="215" y="28" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">higher term seen</text>
+            <path d="M620 130 Q620 180 80 130" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-r)"/>
+            <text x="350" y="185" text-anchor="middle" fill="#ef4444" font-size="9" font-family="Inter,sans-serif">network partition / new term</text>
+            <defs>
+              <marker id="arrow-y" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker>
+              <marker id="arrow-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#22c55e"/></marker>
+              <marker id="arrow-s" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/></marker>
+              <marker id="arrow-r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/></marker>
+            </defs>
+          </svg>
+          <figcaption>Raft node state machine: Follower → Candidate → Leader, with fallback paths on term changes</figcaption>
+        </figure>
+
+        <h3>Safety Guarantees</h3>
+        <p>Raft's <em>Election Restriction</em> ensures only candidates with an up-to-date log can win: a candidate's last log term must be ≥ the voter's last log term, and if equal, its log must be at least as long. This prevents any node from winning if it is missing committed entries.</p>
+      </section>
+
+      <section id="redlock" class="content-section">
+        <h2>Distributed Locks: Redlock</h2>
+        <p>A single-node Redis lock is fast but fails if that node crashes. Redlock runs across <strong>N independent Redis instances</strong> (typically 5). The algorithm:</p>
+        <ol>
+          <li>Record the current time in milliseconds.</li>
+          <li>Attempt to acquire the lock on all N nodes sequentially using <code>SET resource_name random_token NX PX ttl</code>.</li>
+          <li>The lock is acquired only if at least ⌊N/2⌋+1 nodes succeeded <em>and</em> the total elapsed time is less than the TTL.</li>
+          <li>The effective lock validity = TTL − elapsed time − clock drift safety margin.</li>
+          <li>To release, send a Lua script to <em>all</em> nodes: delete the key only if the value matches the random token (prevents releasing another client's lock).</li>
+        </ol>
+        <p><strong>Why a random token?</strong> If a client holds the lock and its thread pauses (GC, network lag) past the TTL, another client may acquire it. When the first client wakes and tries to release, the random token check prevents it from deleting the new holder's lock.</p>
+        <p><strong>Critique (Martin Kleppmann):</strong> Redlock does not protect against clock jumps or process pauses longer than the TTL. For strong mutual exclusion, use a fencing token: a monotonically increasing integer from the lock service that storage systems can reject if out of order.</p>
+      </section>
+
+      <section id="2pc" class="content-section">
+        <h2>Two-Phase Commit (2PC) and Its Limits</h2>
+        <p>2PC coordinates an atomic commit across multiple participants using a <strong>coordinator</strong>:</p>
+        <ul>
+          <li><strong>Phase 1 – Prepare:</strong> Coordinator sends <code>PREPARE</code> to all participants. Each participant locks resources, writes undo/redo logs, then replies <code>YES</code> or <code>NO</code>.</li>
+          <li><strong>Phase 2 – Commit/Abort:</strong> If all replied YES, coordinator sends <code>COMMIT</code>; otherwise sends <code>ABORT</code>. Participants apply or revert.</li>
+        </ul>
+
+        <table class="trade-off-table">
+          <caption>2PC Limitations vs. Saga Trade-offs</caption>
+          <thead><tr><th>Dimension</th><th>2PC</th><th>Saga</th></tr></thead>
+          <tbody>
+            <tr><td>Consistency</td><td>Strong (ACID)</td><td>Eventual (BASE)</td></tr>
+            <tr><td>Blocking</td><td>Blocks on coordinator failure</td><td>Non-blocking; compensates</td></tr>
+            <tr><td>Cross-service</td><td>Requires XA-capable resources</td><td>Works with any REST/event service</td></tr>
+            <tr><td>Scalability</td><td>Poor — lock contention</td><td>High — each step is local tx</td></tr>
+            <tr><td>Failure recovery</td><td>Manual intervention if coordinator dies in Phase 2</td><td>Automatic via compensation</td></tr>
+            <tr><td>Use case</td><td>Internal DB shards (rare)</td><td>Microservices workflows</td></tr>
+          </tbody>
+        </table>
+
+        <p>The critical flaw: if the coordinator crashes <em>after</em> sending COMMIT to some participants but before others receive it, the system is in an uncertain state. Participants that prepared cannot unilaterally abort or commit—they must wait for the coordinator to recover, potentially blocking for minutes or hours.</p>
+      </section>
+
+      <section id="saga" class="content-section">
+        <h2>Saga Pattern for Distributed Transactions</h2>
+        <p>A Saga is a sequence of local transactions where each step publishes an event or message to trigger the next. If any step fails, it executes <strong>compensating transactions</strong> in reverse order to undo completed steps.</p>
+
+        <p>Two implementation styles:</p>
+        <ul>
+          <li><strong>Choreography:</strong> Each service listens for events and decides what to do. Simple but hard to track overall saga state.</li>
+          <li><strong>Orchestration:</strong> A central Saga Orchestrator drives the workflow, calling each service in sequence and invoking compensations on failure. Easier to reason about and monitor.</li>
+        </ul>
+
+        <figure class="diagram-container" aria-label="Saga payment flow diagram">
+          <svg viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Saga orchestrator payment flow">
+            <title>Saga Orchestrator Payment Flow</title>
+            <rect x="290" y="10" width="100" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="340" y="35" text-anchor="middle" fill="#93c5fd" font-size="11" font-family="Inter,sans-serif">Orchestrator</text>
+            <rect x="30" y="100" width="110" height="40" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="85" y="125" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">Payment Svc</text>
+            <rect x="185" y="100" width="110" height="40" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="240" y="125" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">Inventory Svc</text>
+            <rect x="340" y="100" width="110" height="40" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="395" y="125" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">Shipping Svc</text>
+            <rect x="495" y="100" width="110" height="40" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="550" y="125" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">Notification Svc</text>
+            <line x1="290" y1="50" x2="85" y2="100" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowB)"/>
+            <line x1="320" y1="50" x2="240" y2="100" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowB)"/>
+            <line x1="350" y1="50" x2="395" y2="100" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowB)"/>
+            <line x1="390" y1="50" x2="550" y2="100" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowB)"/>
+            <rect x="30" y="190" width="110" height="35" rx="6" fill="#3f1e1e" stroke="#ef4444" stroke-width="1.5"/>
+            <text x="85" y="212" text-anchor="middle" fill="#fca5a5" font-size="10" font-family="Inter,sans-serif">Refund Payment</text>
+            <rect x="185" y="190" width="110" height="35" rx="6" fill="#3f1e1e" stroke="#ef4444" stroke-width="1.5"/>
+            <text x="240" y="212" text-anchor="middle" fill="#fca5a5" font-size="10" font-family="Inter,sans-serif">Release Inventory</text>
+            <text x="340" y="240" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">← Compensating transactions (reverse order on failure)</text>
+            <defs><marker id="arrowB" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/></marker></defs>
+          </svg>
+          <figcaption>Saga orchestrator calls services in sequence; failures trigger compensating transactions in reverse</figcaption>
+        </figure>
+      </section>
+
+      <section id="cap" class="content-section">
+        <h2>CAP Theorem Revisited</h2>
+        <p>CAP states that a distributed system can guarantee at most two of: <strong>Consistency</strong>, <strong>Availability</strong>, and <strong>Partition Tolerance</strong>. In practice, network partitions are inevitable, so the real choice is: when a partition occurs, do you sacrifice C or A?</p>
+        <ul>
+          <li><strong>CP systems</strong> (HBase, ZooKeeper, etcd): Return an error or timeout rather than serve stale data. Correct for leader election and distributed locks.</li>
+          <li><strong>AP systems</strong> (Cassandra, DynamoDB, CouchDB): Continue serving reads/writes but may return stale or conflicting data. Resolve conflicts via last-write-wins or CRDTs.</li>
+        </ul>
+        <p>The more nuanced <strong>PACELC model</strong> extends CAP: even when there is no partition (P), systems trade off latency (L) vs. consistency (C). For example, DynamoDB defaults to AP but offers strongly consistent reads at higher latency cost—a PACELC tradeoff.</p>
+        <p>Relating to Saga: Sagas accept <em>eventual consistency</em> — the system is temporarily inconsistent after each step. This is an explicit AP choice that trades atomicity for availability and partition tolerance.</p>
+      </section>
+
+      <section id="implementation" class="content-section">
+        <h2>Java Implementation: Saga Orchestrator</h2>
+        <p>The following implementation demonstrates an orchestrator-style Saga for a payment flow with full compensation support. Each step declares its forward action and its compensating action. The orchestrator tracks completed steps and unwinds them on failure.</p>
+        <pre><code class="language-java">/**
+ * Saga orchestrator for payment flow:
+ * 1. Debit account
+ * 2. Reserve inventory
+ * 3. Create shipment
+ * Each step registers a compensating action executed in reverse on failure.
+ */
+public class PaymentSagaOrchestrator {
+
+    private final PaymentService paymentService;
+    private final InventoryService inventoryService;
+    private final ShippingService shippingService;
+
+    // Tracks completed steps in order so we can compensate in reverse
+    private final Deque&lt;Runnable&gt; compensationStack = new ArrayDeque&lt;&gt;();
+
+    public PaymentSagaOrchestrator(PaymentService paymentService,
+                                    InventoryService inventoryService,
+                                    ShippingService shippingService) {
+        this.paymentService = paymentService;
+        this.inventoryService = inventoryService;
+        this.shippingService = shippingService;
+    }
+
+    /**
+     * Executes the full saga. Returns true if all steps succeed.
+     * On any failure, compensates already-completed steps in reverse order.
+     */
+    public SagaResult execute(OrderRequest orderRequest) {
+        try {
+            // Step 1: Debit the customer account
+            String paymentId = executeStep(
+                () -&gt; paymentService.debitAccount(orderRequest.getCustomerId(),
+                                                   orderRequest.getAmount()),
+                () -&gt; paymentService.refundAccount(orderRequest.getCustomerId(),
+                                                    orderRequest.getAmount()),
+                "DEBIT_ACCOUNT"
+            );
+
+            // Step 2: Reserve inventory items
+            String reservationId = executeStep(
+                () -&gt; inventoryService.reserveItems(orderRequest.getItemIds(),
+                                                     orderRequest.getQuantities()),
+                () -&gt; inventoryService.releaseReservation(reservationId),
+                "RESERVE_INVENTORY"
+            );
+
+            // Step 3: Create shipment
+            String shipmentId = executeStep(
+                () -&gt; shippingService.createShipment(orderRequest.getAddress(),
+                                                      reservationId),
+                () -&gt; shippingService.cancelShipment(shipmentId),
+                "CREATE_SHIPMENT"
+            );
+
+            compensationStack.clear(); // All steps succeeded; clear compensation state
+            return SagaResult.success(paymentId, reservationId, shipmentId);
+
+        } catch (SagaStepException stepException) {
+            // Compensate in reverse order (LIFO via Deque)
+            compensate();
+            return SagaResult.failure(stepException.getFailedStep(),
+                                      stepException.getCause());
+        }
+    }
+
+    /**
+     * Executes a single saga step, registers its compensation, and returns the result.
+     * Throws SagaStepException on any failure to trigger compensation.
+     */
+    private &lt;T&gt; T executeStep(StepAction&lt;T&gt; action,
+                                Runnable compensation,
+                                String stepName) {
+        try {
+            T result = action.execute();
+            // Register compensation only after successful forward action
+            compensationStack.push(compensation);
+            return result;
+        } catch (Exception cause) {
+            throw new SagaStepException(stepName, cause);
+        }
+    }
+
+    /**
+     * Executes all registered compensating actions in reverse order (LIFO).
+     * Each compensation is attempted independently; failures are logged but
+     * do not prevent subsequent compensations from running.
+     */
+    private void compensate() {
+        while (!compensationStack.isEmpty()) {
+            Runnable compensatingAction = compensationStack.pop();
+            try {
+                compensatingAction.run();
+            } catch (Exception compensationError) {
+                // Log for manual remediation; do NOT rethrow — keep unwinding
+                System.err.println("[SagaOrchestrator] Compensation failed: "
+                    + compensationError.getMessage());
+            }
+        }
+    }
+
+    @FunctionalInterface
+    interface StepAction&lt;T&gt; {
+        T execute() throws Exception;
+    }
+}
+
+// ── Result type ───────────────────────────────────────────────────
+public record SagaResult(boolean success,
+                          String failedStep,
+                          Throwable cause,
+                          String paymentId,
+                          String reservationId,
+                          String shipmentId) {
+
+    public static SagaResult success(String paymentId,
+                                      String reservationId,
+                                      String shipmentId) {
+        return new SagaResult(true, null, null,
+                              paymentId, reservationId, shipmentId);
+    }
+
+    public static SagaResult failure(String failedStep, Throwable cause) {
+        return new SagaResult(false, failedStep, cause, null, null, null);
+    }
+}</code></pre>
+        <p><strong>Why <code>Deque</code> as a stack?</strong> <code>ArrayDeque</code> is preferred over <code>Stack</code> (which is synchronized) and gives O(1) push/pop. The LIFO order of compensation mirrors how database transactions undo operations in reverse.</p>
+      </section>
+
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-06-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Distributed Systems Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">In Raft, a candidate wins the election when it receives votes from:</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="In Raft, a candidate wins the election when it receives votes from:" data-options='["Any single node in the cluster","A strict majority (⌊N/2⌋ + 1) of all nodes","All nodes in the cluster","Two-thirds of all nodes"]' data-correct="1" data-explanation="Raft requires a strict majority (⌊N/2⌋ + 1) to prevent split-brain. With 5 nodes, 3 votes are needed. Requiring all nodes would block on any single failure." style="display:none"></div>
+          <div data-question="Redlock uses a random token per lock acquisition primarily to:" data-options='["Avoid hash collisions in Redis","Prevent a client from releasing another client's lock after its own TTL expired","Reduce network round trips","Enable lock reuse across multiple clients"]' data-correct="1" data-explanation="The random token ensures only the original lock holder can release the lock. Without it, a slow client waking after its TTL might delete the new holder's lock, breaking mutual exclusion." style="display:none"></div>
+          <div data-question="The fundamental blocking problem with 2PC occurs when:" data-options='["A participant sends a NO vote","The coordinator crashes after receiving all YES votes but before sending COMMIT to all participants","A network partition isolates one participant","More than half the participants fail simultaneously"]' data-correct="1" data-explanation="If the coordinator crashes mid-Phase-2, some participants may have committed while others wait indefinitely. They cannot unilaterally decide — they must wait for coordinator recovery, causing indefinite blocking." style="display:none"></div>
+          <div data-question="In the Saga pattern, compensating transactions must be:" data-options='["Idempotent and semantically reversible, but not necessarily atomic across services","Strictly atomic using XA two-phase commit","Executed before the corresponding forward transaction","Guaranteed to succeed or the Saga framework retries indefinitely"]' data-correct="0" data-explanation="Compensating transactions must be idempotent (safe to retry) and semantically reverse the effect (e.g., refund a charge). They are local transactions, not cross-service atomic ops. If compensation itself fails, it is logged for manual remediation." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../07-scalability/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../05-api-design/index.html" class="btn btn--outline">← Module 05: API Design</a>
+        <a href="../07-scalability/index.html" class="btn btn--primary">Module 07: Scalability →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 06</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

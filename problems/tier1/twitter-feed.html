@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Twitter/X News Feed — full RESHADED walkthrough covering fanout on write vs read, celebrity problem, Redis sorted sets, and Kafka for MAANG interviews.">
+  <title>Design Twitter News Feed — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/twitter-feed/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-twitter-feed" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=twitter-feed" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Celebrity Problem</span>
+        </div>
+        <h1 class="module-header__title">Design Twitter/X News Feed</h1>
+        <p class="module-header__desc">The classic feed design problem. The real challenge is the "celebrity problem" — when Cristiano Ronaldo tweets, you cannot push to 600M followers synchronously. Hybrid fanout is the answer interviewers want to hear.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Twitter, LinkedIn</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> 300M DAU</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Post a tweet (text up to 280 chars + optional media)</li>
+            <li>View home feed: reverse-chronological tweets from followed users</li>
+            <li>Follow / unfollow users</li>
+            <li>Like a tweet, retweet a tweet</li>
+            <li>Search tweets (out of scope for this interview — redirect)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 300M DAU, 500M tweets per day</li>
+            <li><strong>Feed read QPS:</strong> ~17,000 QPS (300M × 5 reads/day / 86,400)</li>
+            <li><strong>Tweet write QPS:</strong> ~175 QPS (300M × 0.05 writes/day / 86,400)</li>
+            <li><strong>Feed latency:</strong> &lt; 200ms p99 to load home feed</li>
+            <li><strong>Eventual consistency OK:</strong> seeing a tweet 1–2 seconds after posting is acceptable</li>
+          </ul>
+          <div class="callout callout--tip">
+            <strong>Key question to ask:</strong> "What's the follower ceiling? Should we treat celebrity accounts (100M+ followers) differently?" This signals you already know about the celebrity problem.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Tweets/day:</strong> 300M × 0.05 (5% of users tweet daily) = 15M tweets/day</li>
+            <li><strong>Tweet storage:</strong> 15M × 500B = 7.5GB/day → ~2.7TB/year (manageable)</li>
+            <li><strong>Feed cache size:</strong> 300M users × 20 tweet IDs × 8 bytes = ~48GB per shard</li>
+            <li><strong>Fan-out writes:</strong> Average 200 followers × 175 tweet QPS = 35,000 fan-out writes/sec — must be async via Kafka</li>
+            <li><strong>Celebrity fan-out blocker:</strong> 175M followers × 175 QPS = would require 30 billion writes/sec synchronously — impossible, confirms need for hybrid approach</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// users table (PostgreSQL)
+CREATE TABLE users (
+    user_id      BIGINT PRIMARY KEY,    -- Snowflake ID
+    username     VARCHAR(50) UNIQUE NOT NULL,
+    follower_count INT DEFAULT 0,
+    is_celebrity BOOLEAN DEFAULT FALSE  -- > 1M followers
+);
+
+// tweets table (Cassandra, partitioned by user_id)
+CREATE TABLE tweets (
+    tweet_id    BIGINT PRIMARY KEY,     -- Snowflake ID (time-sortable)
+    user_id     BIGINT NOT NULL,
+    content     VARCHAR(280) NOT NULL,
+    media_url   TEXT,
+    created_at  TIMESTAMP NOT NULL,
+    like_count  BIGINT DEFAULT 0
+);
+
+// follows table (Cassandra)
+CREATE TABLE follows (
+    follower_id BIGINT,
+    followee_id BIGINT,
+    created_at  TIMESTAMP,
+    PRIMARY KEY ((follower_id), followee_id)
+);
+
+// Redis: Feed cache (sorted set per user)
+// Key:   feed:{user_id}
+// Value: sorted set — score=tweet_timestamp, member=tweet_id
+// Keep max 200 tweet IDs per user (hydrate at read time)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Write Path (Post Tweet)</h3>
+          <ol>
+            <li>Client → Tweet Service → persist to Cassandra (tweets table)</li>
+            <li>Publish tweet event to <strong>Kafka</strong> (topic: tweet-created)</li>
+            <li><strong>Fan-out Worker</strong> consumes from Kafka:
+              <ul>
+                <li>Fetch follower list from follows table</li>
+                <li>For non-celebrity (< 1M followers): push tweet_id to each follower's Redis sorted set</li>
+                <li>For celebrity: skip fan-out; followers pull at read time</li>
+              </ul>
+            </li>
+          </ol>
+
+          <h3>Read Path (Load Home Feed)</h3>
+          <ol>
+            <li>Client → Feed Service</li>
+            <li>Fetch tweet IDs from Redis sorted set <code>feed:{user_id}</code> (sorted by timestamp)</li>
+            <li>Merge with celebrity tweets: fetch IDs from followed celebrities' Cassandra rows</li>
+            <li>Sort merged list by timestamp → take top 20</li>
+            <li>Hydrate tweet IDs → full tweet objects (tweet metadata cache or Cassandra)</li>
+            <li>Return paginated feed to client</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// POST /api/v1/tweets
+// Auth: Bearer token required
+// Body: { "content": "Hello world", "mediaUrl": null }
+// Response 201: { "tweetId": "...", "content": "...", "createdAt": "..." }
+
+// GET /api/v1/feed?userId={userId}&cursor={lastTweetId}&limit=20
+// cursor = null for first page, tweetId of last item for pagination
+// Response 200: { "tweets": [...], "nextCursor": "...", "hasMore": true }
+
+// POST /api/v1/follows
+// Body: { "followeeId": "123456" }
+// Response 201: { "followerId": "...", "followeeId": "..." }
+
+// DELETE /api/v1/follows/{followeeId}
+// Response 204 No Content</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: The Celebrity Fanout Problem
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>When Elon Musk posts a tweet (175M followers), writing to 175M Redis sorted sets synchronously is impossible — it would take hours and block everything.</p>
+
+          <h3>Hybrid Fanout Strategy</h3>
+          <ul>
+            <li><strong>Push model (normal users, &lt; 1M followers):</strong> Fan-out asynchronously via Kafka worker. Followers see tweets pre-computed in their Redis feed. Read is O(1).</li>
+            <li><strong>Pull model (celebrities, ≥ 1M followers):</strong> Do NOT fan-out. At read time, for each celebrity the user follows, fetch their last 20 tweets from Cassandra and merge with the pre-computed feed.</li>
+          </ul>
+
+          <h3>Merge at Read Time</h3>
+          <p>The feed service maintains two sorted streams:</p>
+          <ol>
+            <li>Pre-computed stream from Redis (non-celebrity follows)</li>
+            <li>On-demand celebrity tweets fetched from Cassandra at read time</li>
+          </ol>
+          <p>Merge with a k-way merge algorithm (min-heap), take top 20 by timestamp. The celebrity query results are cached per-celebrity (not per-follower), so 175M followers all share the same celebrity cache entry.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Failure Scenarios</h3>
+          <ul>
+            <li><strong>Fan-out worker lag:</strong> Kafka consumer group lag monitoring. Scale consumers horizontally. Tweets appear with slight delay — acceptable per requirements.</li>
+            <li><strong>Redis OOM:</strong> Cap feed cache at 200 tweet IDs per user. Evict oldest. If user hasn't read feed in 30 days, expire the key entirely.</li>
+            <li><strong>New follower not seeing old tweets:</strong> On follow, backfill last 20 tweets from followee into follower's Redis feed.</li>
+          </ul>
+          <h3>Consistency</h3>
+          <p>Eventual consistency is explicitly acceptable. A tweet may take 1–5 seconds to appear in followers' feeds (Kafka propagation delay). This matches real Twitter behaviour.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"We use a hybrid fanout approach — push for normal users via Kafka workers into Redis sorted sets, pull for celebrities at read time from Cassandra. Feeds merge at read time using a min-heap. The design handles 300M DAU with eventual consistency and sub-200ms feed loads because 95% of the feed comes pre-computed from Redis."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Fanout Strategy</td>
+                <td>Fanout on write (push to all)</td>
+                <td>Fanout on read (pull always)</td>
+                <td><strong>Hybrid</strong> — push for normal, pull for celebrities</td>
+              </tr>
+              <tr>
+                <td>Feed Storage</td>
+                <td>Redis sorted set (pre-computed)</td>
+                <td>Rebuild from DB on every read</td>
+                <td><strong>Redis</strong> — 17K QPS impossible from DB alone</td>
+              </tr>
+              <tr>
+                <td>Consistency</td>
+                <td>Strong (synchronous fanout)</td>
+                <td>Eventual (async Kafka)</td>
+                <td><strong>Eventual</strong> — strong consistency blocks writes at celebrity scale</td>
+              </tr>
+              <tr>
+                <td>Tweet Storage</td>
+                <td>MySQL (relational)</td>
+                <td>Cassandra (wide-column)</td>
+                <td><strong>Cassandra</strong> — append-heavy, time-series access pattern</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * FanoutService — pushes a new tweet to follower feeds asynchronously.
+ * Normal users (< CELEBRITY_THRESHOLD followers): push to Redis sorted sets.
+ * Celebrity users: skip fanout; followers pull at read time.
+ */
+public class FanoutService {
+    private static final int CELEBRITY_FOLLOWER_THRESHOLD = 1_000_000;
+    private static final int MAX_FEED_SIZE = 200;
+    private static final String FEED_KEY_PREFIX = "feed:";
+    private static final int FEED_TTL_DAYS = 30;
+
+    private final FollowRepository followRepository;
+    private final RedisClient redisClient;
+    private final UserRepository userRepository;
+
+    public FanoutService(FollowRepository followRepository,
+                         RedisClient redisClient,
+                         UserRepository userRepository) {
+        this.followRepository = followRepository;
+        this.redisClient = redisClient;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * Fans out a tweet to all eligible follower feeds.
+     * Called by a Kafka consumer — one message per tweet creation event.
+     *
+     * @param tweetEvent The Kafka event containing tweetId, authorId, and timestamp
+     */
+    public void fanoutTweet(TweetCreatedEvent tweetEvent) {
+        User author = userRepository.findById(tweetEvent.getAuthorId())
+                .orElseThrow(() -> new IllegalStateException("Author not found: " + tweetEvent.getAuthorId()));
+
+        if (author.getFollowerCount() >= CELEBRITY_FOLLOWER_THRESHOLD) {
+            // Celebrity: do not fan out; followers pull at read time
+            return;
+        }
+
+        List<Long> followerIds = followRepository.getFollowerIds(tweetEvent.getAuthorId());
+
+        for (Long followerId : followerIds) {
+            pushTweetToFeed(followerId, tweetEvent.getTweetId(), tweetEvent.getTimestampMs());
+        }
+    }
+
+    private void pushTweetToFeed(long userId, long tweetId, long timestampMs) {
+        String feedKey = FEED_KEY_PREFIX + userId;
+
+        // ZADD feed:{userId} timestamp tweetId
+        redisClient.zadd(feedKey, timestampMs, String.valueOf(tweetId));
+
+        // Trim to MAX_FEED_SIZE, keeping highest scores (newest tweets)
+        long feedSize = redisClient.zcard(feedKey);
+        if (feedSize > MAX_FEED_SIZE) {
+            redisClient.zremrangeByRank(feedKey, 0, feedSize - MAX_FEED_SIZE - 1);
+        }
+
+        // Refresh TTL on every write to keep active users' caches alive
+        redisClient.expire(feedKey, FEED_TTL_DAYS * 86_400);
+    }
+}
+
+/**
+ * FeedService — reads and assembles a user's home feed.
+ * Merges pre-computed Redis feed with on-demand celebrity tweets.
+ */
+public class FeedService {
+    private static final int CELEBRITY_FOLLOWER_THRESHOLD = 1_000_000;
+    private static final int PAGE_SIZE = 20;
+
+    private final RedisClient redisClient;
+    private final TweetRepository tweetRepository;
+    private final FollowRepository followRepository;
+    private final UserRepository userRepository;
+
+    public FeedService(RedisClient redisClient,
+                       TweetRepository tweetRepository,
+                       FollowRepository followRepository,
+                       UserRepository userRepository) {
+        this.redisClient = redisClient;
+        this.tweetRepository = tweetRepository;
+        this.followRepository = followRepository;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * Returns the home feed for the given user, paginated by cursor.
+     *
+     * @param userId         The requesting user's ID
+     * @param cursorTweetId  The last tweet ID from the previous page (null for first page)
+     * @return Up to PAGE_SIZE hydrated Tweet objects, newest first
+     */
+    public List<Tweet> getHomeFeed(long userId, Long cursorTweetId) {
+        // Step 1: Get pre-computed tweet IDs from Redis (non-celebrity follows)
+        List<Long> precomputedTweetIds = getPrecomputedFeedIds(userId, cursorTweetId);
+
+        // Step 2: Get celebrity tweet IDs via pull model
+        List<Long> celebrityTweetIds = getCelebrityTweetIds(userId, cursorTweetId);
+
+        // Step 3: Merge both lists by timestamp using a priority queue
+        List<Long> mergedTweetIds = mergeSortedByRecency(precomputedTweetIds, celebrityTweetIds);
+
+        // Step 4: Take top PAGE_SIZE
+        List<Long> pageIds = mergedTweetIds.stream()
+                .limit(PAGE_SIZE)
+                .collect(Collectors.toList());
+
+        // Step 5: Hydrate tweet IDs → full tweet objects
+        return tweetRepository.findAllByIds(pageIds);
+    }
+
+    private List<Long> getPrecomputedFeedIds(long userId, Long cursorTweetId) {
+        String feedKey = "feed:" + userId;
+        double maxScore = cursorTweetId != null
+                ? tweetRepository.getTimestamp(cursorTweetId) - 1
+                : Double.MAX_VALUE;
+
+        // ZREVRANGEBYSCORE feed:{userId} maxScore -inf LIMIT 0 PAGE_SIZE
+        return redisClient.zrevrangeByScore(feedKey, maxScore, 0, PAGE_SIZE)
+                .stream()
+                .map(Long::parseLong)
+                .collect(Collectors.toList());
+    }
+
+    private List<Long> getCelebrityTweetIds(long userId, Long cursorTweetId) {
+        List<Long> followedCelebrities = followRepository.getFollowedCelebrities(
+                userId, CELEBRITY_FOLLOWER_THRESHOLD);
+
+        if (followedCelebrities.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Long> allCelebrityTweetIds = new ArrayList<>();
+        for (Long celebrityId : followedCelebrities) {
+            // Each celebrity's recent tweets are cached in Redis too
+            // (shared across all followers — key: celeb_tweets:{celebrityId})
+            List<Long> recentTweets = tweetRepository.getRecentTweetIds(celebrityId, PAGE_SIZE);
+            allCelebrityTweetIds.addAll(recentTweets);
+        }
+        return allCelebrityTweetIds;
+    }
+
+    /**
+     * Merges two lists of tweet IDs by recency.
+     * Uses a PriorityQueue (max-heap by timestamp) for O(n log k) merge.
+     */
+    private List<Long> mergeSortedByRecency(List<Long> listA, List<Long> listB) {
+        PriorityQueue<Long> maxHeap = new PriorityQueue<>((a, b) -> {
+            long timestampA = tweetRepository.getTimestamp(a);
+            long timestampB = tweetRepository.getTimestamp(b);
+            return Long.compare(timestampB, timestampA); // descending
+        });
+
+        maxHeap.addAll(listA);
+        maxHeap.addAll(listB);
+
+        List<Long> merged = new ArrayList<>();
+        while (!maxHeap.isEmpty() && merged.size() < PAGE_SIZE * 2) {
+            merged.add(maxHeap.poll());
+        }
+        return merged;
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-twitter-feed-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why is pure "fanout on write" problematic for celebrity accounts?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Redis sorted sets cannot hold more than 1M members</button></li>
+              <li><button class="quiz__option" data-correct="true">A celebrity with 175M followers would require writing to 175M Redis keys synchronously — billions of operations per second</button></li>
+              <li><button class="quiz__option" data-correct="false">Celebrity tweets contain more data and exceed Redis value size limits</button></li>
+              <li><button class="quiz__option" data-correct="false">Kafka cannot route celebrity tweet events fast enough</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">In the hybrid fanout model, how are celebrity tweets included in a user's feed?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Celebrity tweets are pre-computed and stored in a global Redis key</button></li>
+              <li><button class="quiz__option" data-correct="false">Celebrity tweets are pushed to followers in batches overnight</button></li>
+              <li><button class="quiz__option" data-correct="true">Fetched from Cassandra at read time and merged with the pre-computed Redis feed using a min-heap</button></li>
+              <li><button class="quiz__option" data-correct="false">Celebrity tweets are excluded and shown in a separate tab</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">Why is a Redis sorted set (ZSET) the right data structure for storing a user's feed?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">It compresses tweet IDs to save memory</button></li>
+              <li><button class="quiz__option" data-correct="true">It stores tweet IDs sorted by timestamp score, enabling O(log N) range queries for pagination</button></li>
+              <li><button class="quiz__option" data-correct="false">It automatically deduplicates tweets from multiple followed users</button></li>
+              <li><button class="quiz__option" data-correct="false">It supports pub/sub to notify users of new tweets</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">When a user follows a new account, what should happen to their Redis feed immediately?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Nothing — the feed will update naturally as new tweets are posted</button></li>
+              <li><button class="quiz__option" data-correct="false">Invalidate the entire feed cache and rebuild from scratch</button></li>
+              <li><button class="quiz__option" data-correct="true">Backfill the last ~20 tweets from the new followee into the follower's Redis sorted set</button></li>
+              <li><button class="quiz__option" data-correct="false">Send the followee a push notification to re-post their recent tweets</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="url-shortener.html" class="btn btn--outline">← URL Shortener</a>
+        <a href="youtube.html" class="btn btn--primary">Next: YouTube →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

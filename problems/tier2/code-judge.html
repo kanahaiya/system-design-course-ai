@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design an Online Code Judge like LeetCode — RESHADED walkthrough covering code sandboxing, async execution queue, test case isolation, and plagiarism detection for MAANG interviews.">
+  <title>Design Online Code Judge — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-code-judge" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=code-judge" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Security-critical</span>
+        </div>
+        <h1 class="module-header__title">Design Online Code Judge (LeetCode)</h1>
+        <p class="module-header__desc">The central challenge is security: you're executing arbitrary user code on your servers. A malicious submission could delete your database, exfiltrate secrets, or fork-bomb the host. Sandboxing is non-negotiable — Docker containers with hard resource limits.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> LeetCode, HackerRank, Google</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🔒</span> Untrusted code execution</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Submit code in multiple languages (Java, Python, C++, Go)</li>
+            <li>Run code against hidden test cases; return pass/fail per test</li>
+            <li>Show: runtime (ms), memory usage (MB), output diff on failure</li>
+            <li>Support custom test cases (run against user-provided input)</li>
+            <li>Problem management: create/edit problems with test cases</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Security:</strong> Submitted code must be fully isolated — no network, no filesystem, CPU/memory limited</li>
+            <li><strong>Scale:</strong> 100K submissions/day = ~1,200/min peak; 5s max execution time</li>
+            <li><strong>Fairness:</strong> Same code should produce consistent runtime measurements</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>100K submissions/day; each runs 50 test cases avg → 5M executions/day</li>
+            <li>Avg execution: 500ms → 5M × 0.5s = 2.5M execution-seconds/day → need ~30 executor cores running continuously</li>
+            <li>Container startup overhead: 200ms; reuse containers via warm pool to amortize</li>
+            <li>Code storage: 100K submissions × avg 2KB = 200MB/day; S3 for long-term</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Problems (PostgreSQL)
+problems: problem_id, title, description, difficulty (easy/medium/hard),
+          time_limit_ms, memory_limit_mb, created_at
+
+// Test cases (stored in S3, metadata in DB)
+test_cases: test_case_id, problem_id, is_hidden, input_s3_key, expected_output_s3_key
+
+// Submissions (PostgreSQL)
+submissions:
+    submission_id  UUID PRIMARY KEY,
+    problem_id     UUID,
+    user_id        UUID,
+    language       VARCHAR(20),  -- java, python, cpp, go
+    code_s3_key    VARCHAR(500),
+    status         ENUM(queued, running, accepted, wrong_answer, time_limit, memory_limit, compile_error, runtime_error),
+    runtime_ms     INT,
+    memory_mb      INT,
+    created_at     TIMESTAMP</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Submission API:</strong> Validates and stores code in S3. Creates submission row (status=queued). Publishes job to Kafka. Returns submission_id immediately (async).</li>
+            <li><strong>Job Queue (Kafka):</strong> Submission jobs buffered. Executor workers consume from Kafka.</li>
+            <li><strong>Executor Pool:</strong> Isolated VMs (or Kubernetes pods) with Docker daemon. Each worker pulls a job, spins up a container, executes code, compares output, updates DB, produces result to Kafka.</li>
+            <li><strong>Result Service:</strong> Client polls GET /submissions/{id} for status, or uses WebSocket for real-time result push.</li>
+            <li><strong>Container Pool:</strong> Pre-warm containers per language to avoid cold-start latency. Reuse containers between submissions (reset state between runs).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/submissions
+  Body: { problemId, language, code }
+  Returns: { submissionId, status: "queued" }   // immediate async response
+
+GET  /v1/submissions/{submissionId}
+  Returns: { status, runtimeMs, memoryMb, testResults: [{passed, input, output, expected}] }
+
+POST /v1/submissions/run          // run against custom input (no test cases)
+  Body: { language, code, stdin }
+  Returns: { stdout, stderr, runtimeMs }
+
+GET  /v1/problems/{problemId}
+GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Secure Code Execution<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Never run untrusted code on the host OS.</strong> Use Docker containers with strict constraints:</p>
+          <ul>
+            <li><strong>CPU limit:</strong> <code>--cpus=1</code> — prevents fork bombs from consuming all cores</li>
+            <li><strong>Memory limit:</strong> <code>--memory=256m --memory-swap=256m</code> — kills OOM attempts</li>
+            <li><strong>Network disabled:</strong> <code>--network=none</code> — prevents data exfiltration</li>
+            <li><strong>Read-only filesystem:</strong> <code>--read-only</code> with a tmpfs for /tmp</li>
+            <li><strong>No privilege escalation:</strong> <code>--security-opt=no-new-privileges</code></li>
+            <li><strong>Timeout:</strong> Kill container after time_limit_ms + 1s buffer via <code>docker run --timeout</code></li>
+            <li><strong>No root:</strong> Run as non-root user inside container</li>
+          </ul>
+          <p><strong>Language-specific containers:</strong> One Docker image per language (openjdk:17-slim, python:3.11-slim, gcc:12). Images are pre-pulled and cached on executor nodes.</p>
+          <p><strong>Compile step:</strong> For compiled languages (Java, C++), compile first in a separate container run, check for compile errors, then run the binary in a second container run for each test case.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Runtime fairness:</strong> Container overhead varies. Measure wall-clock time inside the container using language-native timing, not externally. Run on dedicated hardware (no noisy neighbors).</li>
+            <li><strong>Test case isolation:</strong> Each test case runs in a fresh container state — stateful code between test cases is not allowed. Reset container or use new container per test case.</li>
+            <li><strong>Escape vulnerability:</strong> Container escapes are rare but possible. Use gVisor (user-space kernel) as an additional isolation layer for untrusted code.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a code judge handling 100K submissions/day with full sandboxing. Key decisions: Docker containers with CPU/memory/network limits for security, Kafka job queue for async execution, pre-warmed container pool to minimize latency, per-language Docker images, and WebSocket for real-time result delivery.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Isolation</td><td>Docker + resource limits</td><td>VM per submission</td><td>Docker: faster startup (200ms vs 5s for VM), lower overhead. VM stronger isolation. For MAANG interviews Docker is acceptable answer.</td></tr>
+                <tr><td>Execution model</td><td>Async queue (Kafka)</td><td>Synchronous HTTP</td><td>Execution can take up to 5s; synchronous HTTP would hold connections, limit concurrency, and fail on timeout. Queue handles bursts gracefully.</td></tr>
+                <tr><td>Result delivery</td><td>WebSocket push</td><td>Client polling</td><td>WebSocket delivers result immediately on completion (~1–5s); polling adds 1–2s average latency and wasteful requests</td></tr>
+                <tr><td>Container reuse</td><td>Pre-warm pool, reset between runs</td><td>New container per submission</td><td>Container startup adds 200ms. Pre-warm pool reduces this to near-zero. Reset (remove output files, kill stray processes) is fast.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * SandboxedExecutor — runs user-submitted code in an isolated Docker container.
+ * Enforces CPU, memory, network, and time limits. Never executes code on the host OS.
+ */
+public class SandboxedExecutor {
+
+    private static final int TIME_LIMIT_BUFFER_MS = 1000; // extra buffer beyond problem's limit
+    private static final String EXECUTOR_IMAGE_JAVA  = "openjdk:17-slim";
+    private static final String EXECUTOR_IMAGE_PYTHON = "python:3.11-slim";
+
+    /**
+     * Executes compiled code in a sandboxed container against one test case.
+     *
+     * @param language       "java", "python", "cpp"
+     * @param codeFilePath   path to compiled binary or source on executor host
+     * @param stdinInput     test case input
+     * @param timeLimitMs    problem's time limit in milliseconds
+     * @param memoryLimitMb  problem's memory limit in megabytes
+     * @return ExecutionResult with stdout, stderr, runtime, status
+     */
+    public ExecutionResult execute(String language, String codeFilePath,
+                                   String stdinInput, int timeLimitMs, int memoryLimitMb) {
+        String dockerImage = resolveDockerImage(language);
+        int timeoutSeconds = (timeLimitMs + TIME_LIMIT_BUFFER_MS) / 1000;
+
+        // Build the Docker run command with all security constraints
+        List&lt;String&gt; dockerCommand = buildDockerCommand(
+            dockerImage, codeFilePath, memoryLimitMb, timeoutSeconds, language
+        );
+
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder(dockerCommand);
+            processBuilder.redirectErrorStream(false);
+            Process dockerProcess = processBuilder.start();
+
+            // Write stdin to the container
+            try (OutputStream stdinStream = dockerProcess.getOutputStream()) {
+                stdinStream.write(stdinInput.getBytes());
+            }
+
+            long executionStartMs = System.currentTimeMillis();
+            boolean completedInTime = dockerProcess.waitFor(timeoutSeconds + 1, TimeUnit.SECONDS);
+            long runtimeMs = System.currentTimeMillis() - executionStartMs;
+
+            if (!completedInTime) {
+                dockerProcess.destroyForcibly();
+                return ExecutionResult.timeLimitExceeded(runtimeMs);
+            }
+
+            String stdout = readStream(dockerProcess.getInputStream());
+            String stderr = readStream(dockerProcess.getErrorStream());
+            int exitCode = dockerProcess.exitValue();
+
+            return buildExecutionResult(exitCode, stdout, stderr, runtimeMs, timeLimitMs);
+
+        } catch (IOException ioException) {
+            throw new RuntimeException("[SandboxedExecutor.execute] Docker invocation failed", ioException);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("[SandboxedExecutor.execute] Interrupted", interruptedException);
+        }
+    }
+
+    private List&lt;String&gt; buildDockerCommand(String image, String codeFilePath,
+                                              int memoryLimitMb, int timeoutSeconds, String language) {
+        return List.of(
+            "docker", "run",
+            "--rm",                                          // auto-remove container on exit
+            "--network=none",                                // no network access
+            "--cpus=1",                                      // one CPU core max
+            "--memory=" + memoryLimitMb + "m",              // hard memory limit
+            "--memory-swap=" + memoryLimitMb + "m",         // no swap (swap would allow memory bypass)
+            "--read-only",                                   // read-only root filesystem
+            "--tmpfs=/tmp:size=64m",                         // writable /tmp only
+            "--security-opt=no-new-privileges",              // prevent privilege escalation
+            "--user=1000:1000",                              // run as non-root
+            "-v", codeFilePath + ":/code:ro",               // mount code read-only
+            image,
+            buildRunCommand(language)
+        );
+    }
+
+    private String buildRunCommand(String language) {
+        return switch (language) {
+            case "python" -> "python3 /code/solution.py";
+            case "java"   -> "java -cp /code Main";
+            case "cpp"    -> "/code/solution";
+            default -> throw new IllegalArgumentException("Unsupported language: " + language);
+        };
+    }
+
+    private String resolveDockerImage(String language) {
+        return switch (language) {
+            case "java"   -> EXECUTOR_IMAGE_JAVA;
+            case "python" -> EXECUTOR_IMAGE_PYTHON;
+            default -> throw new IllegalArgumentException("Unsupported language: " + language);
+        };
+    }
+
+    private ExecutionResult buildExecutionResult(int exitCode, String stdout,
+                                                  String stderr, long runtimeMs, int timeLimitMs) {
+        if (runtimeMs &gt; timeLimitMs) return ExecutionResult.timeLimitExceeded(runtimeMs);
+        if (exitCode != 0)           return ExecutionResult.runtimeError(stderr, runtimeMs);
+        return ExecutionResult.success(stdout, runtimeMs);
+    }
+
+    private String readStream(InputStream inputStream) throws IOException {
+        return new String(inputStream.readAllBytes());
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-code-judge-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why is --network=none a critical security constraint when running user-submitted code?" data-options='["It improves performance by disabling network stack overhead","Without network isolation, submitted code could connect to the internet — exfiltrating test case answers, downloading malware, or attacking other services on the network","Network access is required for compiling code dependencies","Docker containers always run with --network=none by default"]' data-correct="1" data-explanation="Disabling network access prevents: (1) fetching hidden test case answers from your DB, (2) sending user data to an attacker's server, (3) connecting to internal services (AWS metadata endpoint, databases), (4) participating in DDoS attacks. This is not optional." style="display:none"></div>
+          <div data-question="Why use an async job queue (Kafka) for code execution instead of synchronous HTTP?" data-options='["Kafka is required because code execution uses a binary protocol","Code execution takes 1–5 seconds per submission. Synchronous HTTP would hold connections open during execution — at 1,200 submissions/min this would require 1,000+ concurrent connections on the API server. A queue decouples submission acceptance from execution and handles traffic bursts.","Kafka provides the time-limit enforcement mechanism","Asynchronous execution allows multiple test cases to run in parallel"]' data-correct="1" data-explanation="Queuing is a classic pattern for decoupling variable-latency work from the request/response cycle. The API accepts submissions instantly (fast), the executor processes them at its own rate. If there's a burst of 10K submissions, they queue up without dropping requests — the API stays fast and the executors catch up." style="display:none"></div>
+          <div data-question="A user submits C++ code that calls fork() in a loop to create thousands of processes. Which Docker flag prevents this from exhausting host OS process table?" data-options='["--memory=256m limits child processes indirectly","--pids-limit=100 caps the number of processes inside the container, preventing fork bombs","--network=none prevents fork() system calls","--cpus=1 limits fork bombs because child processes share the CPU budget"]' data-correct="1" data-explanation="--pids-limit caps the total number of process IDs in the container's namespace. A fork bomb creates exponentially growing child processes — without --pids-limit, it would eventually exhaust the host OS process table (typically 32K-4M PIDs), crashing the host. --pids-limit=100 would abort the fork bomb after 100 processes." style="display:none"></div>
+          <div data-question="Why does the executor use --memory-swap equal to --memory rather than leaving swap unlimited?" data-options='["Swap is slower than RAM so limiting it improves performance","Setting swap equal to memory limit effectively disables swap. Allowing swap would let code bypass the memory limit by swapping to disk — a user could allocate 10GB even with --memory=256m by paging to swap. Equal values = hard memory limit with no overflow.","Swap is not available inside Docker containers","Unlimited swap would cause the container to compete with other containers for disk I/O"]' data-correct="1" data-explanation="Docker's --memory sets RAM limit; --memory-swap sets RAM+swap combined limit. If --memory=256m and --memory-swap is default (2× RAM = 512m), the container gets 256m of swap space. Setting --memory-swap=256m (same as --memory) allows 0 bytes of swap — a true hard memory limit." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="hotel-booking.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Hotel Booking →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="payment-system.html" class="btn btn--outline">← Payment System</a>
+        <a href="hotel-booking.html" class="btn btn--primary">Next: Hotel Booking →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

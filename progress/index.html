@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Track your MAANG system design interview preparation progress. See which modules and problems you've completed and what's left to study.">
+  <title>My Progress — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/progress/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/css/main.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="index.html" class="site-nav__link site-nav__link--active">Progress</a></li>
+      </ul>
+      <a href="../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <main id="main" class="page-wrapper">
+    <div class="container--wide" style="padding-top:var(--space-12);padding-bottom:var(--space-16)">
+
+      <div style="margin-bottom:var(--space-10)">
+        <div class="section__label">Dashboard</div>
+        <h1 style="font-size:var(--text-4xl);font-weight:var(--font-extrabold);margin-bottom:var(--space-3)">My Progress</h1>
+        <p style="color:var(--color-text-secondary)">Track your system design interview preparation.</p>
+      </div>
+
+      <!-- Overview Stats -->
+      <div class="progress-overview" id="js-overview-stats">
+        <div class="progress-stat">
+          <span class="progress-stat__value" id="js-total-completed">0</span>
+          <div class="progress-stat__label">Total Completed</div>
+          <div class="progress-bar">
+            <div class="progress-bar__fill" id="js-overall-bar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="progress-stat">
+          <span class="progress-stat__value" id="js-modules-completed">0</span>
+          <div class="progress-stat__label">Modules Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 11</span></div>
+          <div class="progress-bar">
+            <div class="progress-bar__fill" id="js-modules-bar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="progress-stat">
+          <span class="progress-stat__value" id="js-tier1-completed">0</span>
+          <div class="progress-stat__label">Tier 1 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 15</span></div>
+          <div class="progress-bar">
+            <div class="progress-bar__fill" id="js-tier1-bar" style="width:0%;background:linear-gradient(90deg,var(--color-tier1),#16a34a)"></div>
+          </div>
+        </div>
+        <div class="progress-stat">
+          <span class="progress-stat__value" id="js-tier2-completed">0</span>
+          <div class="progress-stat__label">Tier 2 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 15</span></div>
+          <div class="progress-bar">
+            <div class="progress-bar__fill" id="js-tier2-bar" style="width:0%;background:linear-gradient(90deg,var(--color-tier2),#ca8a04)"></div>
+          </div>
+        </div>
+        <div class="progress-stat">
+          <span class="progress-stat__value" id="js-mock-count">0</span>
+          <div class="progress-stat__label">Mock Interviews</div>
+        </div>
+      </div>
+
+      <!-- Readiness Indicator -->
+      <div id="js-readiness-card" style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-xl);padding:var(--space-6);margin-bottom:var(--space-10);display:flex;align-items:center;gap:var(--space-6);flex-wrap:wrap">
+        <div style="font-size:3rem" id="js-readiness-emoji">🌱</div>
+        <div style="flex:1">
+          <div style="font-size:var(--text-lg);font-weight:var(--font-bold);margin-bottom:var(--space-1)" id="js-readiness-title">Getting Started</div>
+          <div style="font-size:var(--text-sm);color:var(--color-text-secondary)" id="js-readiness-desc">Complete Module 00 (Framework) and your first 5 Tier 1 problems to build the foundation.</div>
+        </div>
+        <div style="text-align:center;min-width:80px">
+          <div style="font-size:var(--text-3xl);font-weight:var(--font-extrabold);color:var(--color-primary)" id="js-readiness-pct">0%</div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted)">Interview Ready</div>
+        </div>
+      </div>
+
+      <!-- Modules Progress -->
+      <section style="margin-bottom:var(--space-10)" aria-labelledby="modules-progress-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-6)" id="modules-progress-title">
+          Core Modules
+        </h2>
+        <div id="js-modules-list" style="display:flex;flex-direction:column;gap:var(--space-3)"></div>
+      </section>
+
+      <!-- Tier 1 Problems -->
+      <section style="margin-bottom:var(--space-10)" aria-labelledby="tier1-progress-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-2);display:flex;align-items:center;gap:var(--space-3)" id="tier1-progress-title">
+          <span style="color:var(--color-tier1)">●</span> Tier 1 Problems
+        </h2>
+        <p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-5)">Must know — asked at every MAANG company</p>
+        <div id="js-tier1-list" style="display:flex;flex-direction:column;gap:var(--space-2)"></div>
+      </section>
+
+      <!-- Tier 2 Problems -->
+      <section style="margin-bottom:var(--space-10)" aria-labelledby="tier2-progress-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-2);display:flex;align-items:center;gap:var(--space-3)" id="tier2-progress-title">
+          <span style="color:var(--color-tier2)">●</span> Tier 2 Problems
+        </h2>
+        <p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-5)">Common at senior levels</p>
+        <div id="js-tier2-list" style="display:flex;flex-direction:column;gap:var(--space-2)"></div>
+      </section>
+
+      <!-- Tier 3 Problems -->
+      <section style="margin-bottom:var(--space-10)" aria-labelledby="tier3-progress-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-2);display:flex;align-items:center;gap:var(--space-3)" id="tier3-progress-title">
+          <span style="color:var(--color-tier3)">●</span> Tier 3 Problems
+        </h2>
+        <p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-5)">Staff+ deep dives</p>
+        <div id="js-tier3-list" style="display:flex;flex-direction:column;gap:var(--space-2)"></div>
+      </section>
+
+      <!-- Mock Interview History -->
+      <section aria-labelledby="mock-history-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-6)" id="mock-history-title">
+          Mock Interview History
+        </h2>
+        <div id="js-mock-history">
+          <p style="color:var(--color-text-muted);font-size:var(--text-sm)">No mock interviews yet. <a href="../mock-interview/index.html">Try your first one →</a></p>
+        </div>
+      </section>
+
+      <!-- Reset Button -->
+      <div style="margin-top:var(--space-12);padding-top:var(--space-8);border-top:1px solid var(--color-border)">
+        <button id="js-reset-btn" class="btn btn--outline" type="button"
+                style="color:var(--color-accent-red);border-color:var(--color-accent-red)"
+                aria-label="Reset all progress — this cannot be undone">
+          Reset All Progress
+        </button>
+        <p style="color:var(--color-text-muted);font-size:var(--text-xs);margin-top:var(--space-2)">
+          Clears all completion data from this browser. Cannot be undone.
+        </p>
+      </div>
+
+    </div>
+  </main>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Progress Dashboard</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../index.html" class="site-footer__link">Home</a>
+        <a href="../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script type="module">
+    const MODULES = [
+      { id: 'module-00', title: 'Interview Framework (RESHADED)', url: '../modules/00-framework/index.html', essential: true },
+      { id: 'module-01', title: 'Fundamentals — CAP, ACID, Estimation', url: '../modules/01-fundamentals/index.html' },
+      { id: 'module-02', title: 'Storage & Databases', url: '../modules/02-storage/index.html' },
+      { id: 'module-03', title: 'Caching', url: '../modules/03-caching/index.html' },
+      { id: 'module-04', title: 'Messaging & Queues', url: '../modules/04-messaging/index.html' },
+      { id: 'module-05', title: 'API Design & Rate Limiting', url: '../modules/05-api-design/index.html' },
+      { id: 'module-06', title: 'Distributed Systems', url: '../modules/06-distributed/index.html' },
+      { id: 'module-07', title: 'Scalability & Consistent Hashing', url: '../modules/07-scalability/index.html' },
+      { id: 'module-08', title: 'Observability', url: '../modules/08-observability/index.html' },
+      { id: 'module-09', title: 'Security', url: '../modules/09-security/index.html' },
+      { id: 'module-10', title: 'Design Patterns (CQRS, Circuit Breaker)', url: '../modules/10-patterns/index.html' },
+    ];
+
+    const TIER1_PROBLEMS = [
+      { id: 'p-url-shortener', title: 'URL Shortener', url: '../problems/tier1/url-shortener.html' },
+      { id: 'p-twitter-feed',  title: 'Twitter Feed', url: '../problems/tier1/twitter-feed.html' },
+      { id: 'p-youtube',       title: 'YouTube / Video Streaming', url: '../problems/tier1/youtube.html' },
+      { id: 'p-whatsapp',      title: 'WhatsApp / Chat Messaging', url: '../problems/tier1/whatsapp.html' },
+      { id: 'p-rate-limiter',  title: 'Rate Limiter', url: '../problems/tier1/rate-limiter.html' },
+      { id: 'p-distributed-cache', title: 'Distributed Cache', url: '../problems/tier1/distributed-cache.html' },
+      { id: 'p-search-autocomplete', title: 'Search Autocomplete', url: '../problems/tier1/search-autocomplete.html' },
+      { id: 'p-notification',  title: 'Notification System', url: '../problems/tier1/notification-system.html' },
+      { id: 'p-uber',          title: 'Uber / Ride Sharing', url: '../problems/tier1/uber.html' },
+      { id: 'p-web-crawler',   title: 'Web Crawler', url: '../problems/tier1/web-crawler.html' },
+      { id: 'p-pastebin',      title: 'Pastebin', url: '../problems/tier1/pastebin.html' },
+      { id: 'p-key-value',     title: 'Key-Value Store (DynamoDB)', url: '../problems/tier1/key-value-store.html' },
+      { id: 'p-message-queue', title: 'Distributed Message Queue', url: '../problems/tier1/message-queue.html' },
+      { id: 'p-news-feed',     title: 'Social News Feed', url: '../problems/tier1/news-feed.html' },
+      { id: 'p-dropbox',       title: 'Dropbox / File Storage', url: '../problems/tier1/dropbox.html' },
+    ];
+
+    const TIER2_PROBLEMS = [
+      { id: 'p-slack',        title: 'Slack / Real-time Chat',        url: '../problems/tier2/slack.html' },
+      { id: 'p-instagram',    title: 'Instagram',                      url: '../problems/tier2/instagram.html' },
+      { id: 'p-netflix',      title: 'Netflix',                        url: '../problems/tier2/netflix.html' },
+      { id: 'p-google-maps',  title: 'Google Maps',                    url: '../problems/tier2/google-maps.html' },
+      { id: 'p-payment',      title: 'Payment System',                 url: '../problems/tier2/payment-system.html' },
+      { id: 'p-code-judge',   title: 'Online Code Judge (LeetCode)',   url: '../problems/tier2/code-judge.html' },
+      { id: 'p-hotel',        title: 'Hotel Booking System',           url: '../problems/tier2/hotel-booking.html' },
+      { id: 'p-stock',        title: 'Stock Exchange',                  url: '../problems/tier2/stock-exchange.html' },
+      { id: 'p-ad-click',     title: 'Ad Click Aggregator',            url: '../problems/tier2/ad-click.html' },
+      { id: 'p-scheduler',    title: 'Distributed Task Scheduler',     url: '../problems/tier2/task-scheduler.html' },
+      { id: 'p-live',         title: 'Live Video Streaming',           url: '../problems/tier2/live-streaming.html' },
+      { id: 'p-flash',        title: 'E-commerce Flash Sale',          url: '../problems/tier2/flash-sale.html' },
+      { id: 'p-google-docs',  title: 'Google Docs (Collaborative)',    url: '../problems/tier2/google-docs.html' },
+      { id: 'p-metrics',      title: 'Metrics Dashboard',              url: '../problems/tier2/metrics-dashboard.html' },
+      { id: 'p-leaderboard',  title: 'Gaming Leaderboard',             url: '../problems/tier2/leaderboard.html' },
+    ];
+
+    const TIER3_PROBLEMS = [
+      { id: 'p-dist-db',       title: 'Distributed Database',           url: '../problems/tier3/distributed-db.html' },
+      { id: 'p-moderation',    title: 'Content Moderation System',      url: '../problems/tier3/content-moderation.html' },
+      { id: 'p-recommendation',title: 'Recommendation Engine',          url: '../problems/tier3/recommendation-engine.html' },
+      { id: 'p-cdn',           title: 'CDN',                            url: '../problems/tier3/cdn.html' },
+      { id: 'p-analytics',     title: 'Real-time Analytics Pipeline',   url: '../problems/tier3/analytics-pipeline.html' },
+      { id: 'p-tracing',       title: 'Distributed Tracing System',     url: '../problems/tier3/distributed-tracing.html' },
+      { id: 'p-api-gateway',   title: 'API Gateway',                    url: '../problems/tier3/api-gateway.html' },
+      { id: 'p-flags',         title: 'Feature Flag System',            url: '../problems/tier3/feature-flags.html' },
+      { id: 'p-saas',          title: 'Multi-tenant SaaS Platform',     url: '../problems/tier3/multi-tenant-saas.html' },
+      { id: 'p-logs',          title: 'Distributed Log Aggregation',    url: '../problems/tier3/log-aggregation.html' },
+    ];
+
+    const TOTAL_ITEMS = MODULES.length + TIER1_PROBLEMS.length + TIER2_PROBLEMS.length + TIER3_PROBLEMS.length;
+
+    function loadProgress() {
+      try {
+        const raw = localStorage.getItem('sdcourse_progress_v1');
+        return raw !== null ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function loadMockHistory() {
+      try {
+        const raw = localStorage.getItem('sdcourse_mock_history_v1');
+        return raw !== null ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function createProgressRow(item, isCompleted, tierColor) {
+      const rowElement = document.createElement('div');
+      rowElement.style.cssText = `
+        display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) var(--space-4);
+        background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);
+        transition:border-color var(--transition-fast);
+      `;
+      if (isCompleted) rowElement.style.borderColor = tierColor || 'var(--color-accent-green)';
+
+      rowElement.innerHTML = `
+        <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${isCompleted ? (tierColor || 'var(--color-accent-green)') : 'var(--color-border)'};
+             background:${isCompleted ? (tierColor || 'var(--color-accent-green)') : 'transparent'};
+             display:flex;align-items:center;justify-content:center;color:white;font-size:10px;font-weight:bold;flex-shrink:0">
+          ${isCompleted ? '✓' : ''}
+        </div>
+        <a href="${item.url}" style="flex:1;font-size:var(--text-sm);font-weight:var(--font-medium);color:${isCompleted ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}">
+          ${item.title}${item.essential ? ' <span class="tag tag--primary" style="margin-left:var(--space-2);font-size:10px">Start Here</span>' : ''}
+        </a>
+        ${!isCompleted ? `<a href="${item.url}" class="btn btn--outline btn--sm" style="font-size:var(--text-xs)">Study →</a>` : ''}
+      `;
+      return rowElement;
+    }
+
+    function renderProgress() {
+      const progressState = loadProgress();
+      const mockHistory = loadMockHistory();
+
+      let totalCompleted = 0;
+      let modulesCompleted = 0;
+      let tier1Completed = 0;
+      let tier2Completed = 0;
+
+      // Modules
+      const modulesListElement = document.getElementById('js-modules-list');
+      MODULES.forEach(moduleItem => {
+        const isCompleted = moduleItem.id in progressState;
+        if (isCompleted) { totalCompleted++; modulesCompleted++; }
+        modulesListElement.appendChild(createProgressRow(moduleItem, isCompleted, 'var(--color-primary)'));
+      });
+
+      // Tier 1
+      const tier1ListElement = document.getElementById('js-tier1-list');
+      TIER1_PROBLEMS.forEach(problemItem => {
+        const isCompleted = problemItem.id in progressState;
+        if (isCompleted) { totalCompleted++; tier1Completed++; }
+        tier1ListElement.appendChild(createProgressRow(problemItem, isCompleted, 'var(--color-tier1)'));
+      });
+
+      // Tier 2
+      const tier2ListElement = document.getElementById('js-tier2-list');
+      TIER2_PROBLEMS.forEach(problemItem => {
+        const isCompleted = problemItem.id in progressState;
+        if (isCompleted) { totalCompleted++; tier2Completed++; }
+        tier2ListElement.appendChild(createProgressRow(problemItem, isCompleted, 'var(--color-tier2)'));
+      });
+
+      // Tier 3
+      const tier3ListElement = document.getElementById('js-tier3-list');
+      TIER3_PROBLEMS.forEach(problemItem => {
+        const isCompleted = problemItem.id in progressState;
+        if (isCompleted) totalCompleted++;
+        tier3ListElement.appendChild(createProgressRow(problemItem, isCompleted, 'var(--color-tier3)'));
+      });
+
+      // Update stats
+      document.getElementById('js-total-completed').textContent = totalCompleted;
+      document.getElementById('js-modules-completed').textContent = modulesCompleted;
+      document.getElementById('js-tier1-completed').textContent = tier1Completed;
+      document.getElementById('js-tier2-completed').textContent = tier2Completed;
+      document.getElementById('js-mock-count').textContent = mockHistory.length;
+
+      const overallPct = Math.round((totalCompleted / TOTAL_ITEMS) * 100);
+      document.getElementById('js-overall-bar').style.width = `${overallPct}%`;
+      document.getElementById('js-modules-bar').style.width = `${Math.round(modulesCompleted / MODULES.length * 100)}%`;
+      document.getElementById('js-tier1-bar').style.width = `${Math.round(tier1Completed / TIER1_PROBLEMS.length * 100)}%`;
+      document.getElementById('js-tier2-bar').style.width = `${Math.round(tier2Completed / TIER2_PROBLEMS.length * 100)}%`;
+
+      // Readiness
+      const readinessScore = Math.round(
+        (modulesCompleted / MODULES.length) * 30 +
+        (tier1Completed / TIER1_PROBLEMS.length) * 50 +
+        (tier2Completed / TIER2_PROBLEMS.length) * 15 +
+        Math.min(mockHistory.length, 10) / 10 * 5
+      );
+      document.getElementById('js-readiness-pct').textContent = `${readinessScore}%`;
+
+      const readinessData = getReadinessData(readinessScore, modulesCompleted, tier1Completed, mockHistory.length);
+      document.getElementById('js-readiness-emoji').textContent = readinessData.emoji;
+      document.getElementById('js-readiness-title').textContent = readinessData.title;
+      document.getElementById('js-readiness-desc').textContent = readinessData.desc;
+
+      // Mock History
+      if (mockHistory.length > 0) {
+        const historyContainer = document.getElementById('js-mock-history');
+        historyContainer.innerHTML = '';
+        const recentHistory = mockHistory.slice(-10).reverse();
+        recentHistory.forEach(historyEntry => {
+          const entryElement = document.createElement('div');
+          entryElement.style.cssText = 'display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) var(--space-4);background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);margin-bottom:var(--space-2)';
+          const dateString = new Date(historyEntry.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          entryElement.innerHTML = `
+            <span style="font-size:var(--text-sm);font-weight:var(--font-semibold);color:var(--color-text-primary);flex:1">${historyEntry.problemId}</span>
+            <span style="font-size:var(--text-xs);color:var(--color-text-muted)">${historyEntry.minutesUsed}m used</span>
+            <span style="font-size:var(--text-xs);color:var(--color-text-muted)">${historyEntry.phasesRevealed}/8 hints</span>
+            <span style="font-size:var(--text-xs);color:var(--color-text-muted)">${dateString}</span>
+          `;
+          historyContainer.appendChild(entryElement);
+        });
+      }
+    }
+
+    function getReadinessData(score, modulesCompleted, tier1Completed, mockCount) {
+      if (score < 10) return { emoji: '🌱', title: 'Getting Started', desc: 'Complete Module 00 (RESHADED Framework) first — it\'s the foundation everything else builds on.' };
+      if (score < 30) return { emoji: '📚', title: 'Building Foundation', desc: 'Good start! Complete all 11 modules before tackling problems to build the right mental models.' };
+      if (score < 50) return { emoji: '⚡', title: 'Gaining Momentum', desc: 'Solid foundation. Focus on Tier 1 problems — solve at least 10 before your first mock interview.' };
+      if (score < 70) return { emoji: '🎯', title: 'Interview Approaching', desc: 'You\'re getting there! Run daily mock interviews for the next week. Aim for < 2 hints per problem.' };
+      if (score < 85) return { emoji: '🚀', title: 'Strong Candidate', desc: 'Excellent progress! Polish edge cases on deep dives and practice explaining your designs out loud.' };
+      return { emoji: '🏆', title: 'Interview Ready', desc: 'Outstanding! You\'ve covered 85%+ of the curriculum. Go get that offer!' };
+    }
+
+    function handleResetClick() {
+      const confirmed = window.confirm('Reset ALL progress? This cannot be undone.');
+      if (!confirmed) return;
+      try {
+        localStorage.removeItem('sdcourse_progress_v1');
+        localStorage.removeItem('sdcourse_quiz_v1');
+        localStorage.removeItem('sdcourse_mock_history_v1');
+        window.location.reload();
+      } catch {
+        alert('Could not clear storage.');
+      }
+    }
+
+    document.getElementById('js-reset-btn').addEventListener('click', handleResetClick);
+    renderProgress();
+  </script>
+
+</body>
+</html>

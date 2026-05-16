@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Distributed Database like Google Spanner — RESHADED walkthrough covering Raft consensus, TrueTime API, global ordering, and distributed transactions for MAANG interviews.">
+  <title>Design Distributed Database (Spanner) — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-dist-db" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=dist-db" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
+          <span class="tag">60 min</span><span class="tag">Consensus / Distributed</span>
+        </div>
+        <h1 class="module-header__title">Design a Distributed Database (like Google Spanner)</h1>
+        <p class="module-header__desc">Spanner achieves the seemingly impossible: externally consistent, globally distributed transactions. The secret is TrueTime — GPS + atomic clocks that provide a globally monotonic clock with bounded uncertainty. Combined with Raft consensus, transactions are ordered by real time.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, CockroachDB, YugabyteDB</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🌐</span> Global ACID</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Relational data model with SQL query interface</li>
+            <li>ACID transactions across multiple rows, tables, and geographically distributed nodes</li>
+            <li>Strong consistency: reads always see the latest committed data</li>
+            <li>Horizontal partitioning (sharding) with automatic rebalancing</li>
+            <li>Multi-region deployment for low-latency global reads</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> Petabytes of data, millions of QPS globally</li>
+            <li><strong>Consistency:</strong> Linearizable (external consistency) — stronger than serializable</li>
+            <li><strong>Availability:</strong> Survives single datacenter failures</li>
+            <li><strong>Latency:</strong> Single-region reads: &lt;10ms; cross-region: &lt;100ms</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>Data sharded into ~64MB "splits" (Spanner's tablets). PB database = 15M tablets.</li>
+            <li>Each tablet replicated to 5 Raft followers across regions (f=2 failure tolerance)</li>
+            <li>Raft commit: 3/5 acknowledgements needed → 1 cross-region round trip (~100ms)</li>
+            <li>TrueTime uncertainty: ~7ms globally → commits must wait this long to ensure ordering</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Spanner's physical storage: tablets (sorted key ranges)
+// Each tablet is a key range of a table, replicated via Raft
+// Tablets are automatically split when they exceed ~64MB
+
+// Logical schema (SQL DDL)
+CREATE TABLE Accounts (
+    account_id  STRING(36) NOT NULL,
+    owner_id    STRING(36) NOT NULL,
+    balance     INT64,        // stored in cents
+    last_txn_ts TIMESTAMP,
+    PRIMARY KEY (account_id)
+) INTERLEAVE IN PARENT Customers ON DELETE CASCADE;
+// Interleaving: child rows co-located with parent — avoids cross-tablet joins
+
+// Transactions stored with commit timestamp from TrueTime
+CREATE TABLE Transactions (
+    txn_id      STRING(36),
+    account_id  STRING(36),
+    amount      INT64,
+    commit_ts   TIMESTAMP,    // assigned by TrueTime at commit
+    PRIMARY KEY (account_id, commit_ts)
+);</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Zones:</strong> Each datacenter is a zone. Each zone has zone masters (Paxos-elected) and tablet servers.</li>
+            <li><strong>Tablet Servers:</strong> Own a set of tablets. Each tablet is a Raft group with replicas across 3–5 zones.</li>
+            <li><strong>Raft Consensus:</strong> All writes go to the Raft leader for a tablet. Leader replicates to majority of followers. Once majority acks, commit is durable.</li>
+            <li><strong>TrueTime:</strong> Each server has TT.now() → [earliest, latest] bounded interval. Commit timestamp assigned from TrueTime. Server waits until TT.now().earliest > commit_ts before making commit visible (commit-wait).</li>
+            <li><strong>2PC for cross-tablet transactions:</strong> Transaction coordinator (one of the participant leaders) runs 2PC. Prepare → commit with TrueTime timestamp. Abort if any participant fails.</li>
+            <li><strong>Read modes:</strong> Strong reads go to Raft leader. Stale reads (as of timestamp T) can go to any replica with data as of T.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Spanner client API (Java)
+DatabaseClient client = spanner.getDatabaseClient(DatabaseId.of("project", "instance", "db"));
+
+// Read-write transaction (strong consistency, uses 2PC for cross-tablet)
+client.readWriteTransaction().run(txn -> {
+    Long balance = txn.readRow("Accounts", Key.of(accountId), List.of("balance"))
+                      .getLong("balance");
+    txn.buffer(Mutation.newUpdateBuilder("Accounts")
+                       .set("balance").to(balance - 100)
+                       .set("account_id").to(accountId)
+                       .build());
+    return null;
+});
+
+// Stale read (read as of 15 seconds ago — no leader coordination needed)
+try (ResultSet rs = client.singleUseReadOnlyTransaction(TimestampBound.ofExactStaleness(15, TimeUnit.SECONDS))
+                          .executeQuery(Statement.of("SELECT balance FROM Accounts WHERE account_id=@id"))) {}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Raft Consensus + TrueTime<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Raft consensus:</strong></p>
+          <ol>
+            <li>Leader election: nodes vote for candidate with most up-to-date log. Majority required.</li>
+            <li>Log replication: leader appends entry, sends AppendEntries to followers. Once majority ack, entry is committed.</li>
+            <li>Safety: only nodes with all committed entries can become leader. Ensures no committed entry is lost.</li>
+          </ol>
+          <p><strong>TrueTime for global ordering:</strong></p>
+          <ul>
+            <li>Problem: distributed systems have no global clock. NTP has ±100ms drift.</li>
+            <li>TrueTime uses GPS receivers + atomic clocks in each datacenter. Uncertainty: ε ≈ 7ms typically.</li>
+            <li>TT.now() returns [t-ε, t+ε]. The real time is guaranteed within this interval.</li>
+            <li>Commit protocol: assign commit_ts = TT.now().latest. Then wait until TT.now().earliest > commit_ts (commit-wait, ~14ms). This ensures no future transaction can be assigned a timestamp before commit_ts.</li>
+            <li>Result: transactions are ordered by their commit timestamps, which are guaranteed to reflect real-time ordering. This is external consistency (stronger than serializable).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Latency cost of TrueTime:</strong> Commit-wait adds ~14ms per write. Acceptable for most OLTP. For high-frequency trading: not acceptable — use a single-region DB.</li>
+            <li><strong>Cross-region write latency:</strong> 2PC across regions = 1 round-trip ≈ 100ms. Mitigate with: write to local region leader + async replicate, at the cost of weaker consistency (see CockroachDB's approaches).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a globally distributed database with external consistency. Key components: Raft per tablet for durable replication, TrueTime with GPS/atomic clocks for globally ordered timestamps, commit-wait to guarantee temporal ordering, and 2PC across tablet leaders for distributed transactions.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Consensus algorithm</td><td>Raft</td><td>Paxos</td><td>Raft is equivalent in safety but easier to understand and implement (strong leader, clear log). Paxos has no strong leader concept — harder to build on.</td></tr>
+              <tr><td>Global ordering</td><td>TrueTime (GPS+atomic clock)</td><td>Logical clocks (Lamport)</td><td>Logical clocks prove ordering but don't give real-time semantics. TrueTime enables read-only transactions at a real timestamp without coordination.</td></tr>
+              <tr><td>Distributed transactions</td><td>2PC with Raft leaders</td><td>Saga / compensating transactions</td><td>Spanner targets strict ACID — 2PC provides atomicity across tablets. Saga only provides eventual consistency — not acceptable for financial data.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * RaftNode — simplified Raft consensus participant.
+ * Implements RequestVote and AppendEntries RPC stubs for illustrative purposes.
+ * A real implementation would include log persistence, snapshotting, and network I/O.
+ */
+public class RaftNode {
+    public enum NodeState { FOLLOWER, CANDIDATE, LEADER }
+
+    private NodeState state = NodeState.FOLLOWER;
+    private int currentTerm = 0;
+    private String votedFor = null;
+    private final List&lt;LogEntry&gt; log = new ArrayList&lt;&gt;();
+    private int commitIndex = 0;
+    private final String nodeId;
+    private final List&lt;String&gt; peerNodeIds;
+
+    public RaftNode(String nodeId, List&lt;String&gt; peerNodeIds) {
+        this.nodeId = nodeId;
+        this.peerNodeIds = peerNodeIds;
+    }
+
+    /**
+     * RequestVote RPC — called by candidates during election.
+     * Grants vote if: (a) candidate's term >= our term, AND
+     *                 (b) we haven't voted yet (or voted for this candidate), AND
+     *                 (c) candidate's log is at least as up-to-date as ours.
+     */
+    public RequestVoteResponse handleRequestVote(RequestVoteRequest request) {
+        if (request.getTerm() &lt; currentTerm) {
+            return new RequestVoteResponse(currentTerm, false);
+        }
+        if (request.getTerm() &gt; currentTerm) {
+            currentTerm = request.getTerm();
+            state = NodeState.FOLLOWER;
+            votedFor = null;
+        }
+        boolean logIsUpToDate = isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm());
+        boolean canVote = (votedFor == null || votedFor.equals(request.getCandidateId())) && logIsUpToDate;
+        if (canVote) {
+            votedFor = request.getCandidateId();
+        }
+        return new RequestVoteResponse(currentTerm, canVote);
+    }
+
+    /**
+     * AppendEntries RPC — called by leader to replicate log entries.
+     * Also serves as heartbeat (empty entries) to prevent election timeouts.
+     */
+    public AppendEntriesResponse handleAppendEntries(AppendEntriesRequest request) {
+        if (request.getTerm() &lt; currentTerm) {
+            return new AppendEntriesResponse(currentTerm, false);
+        }
+        // Valid leader — reset election timeout (not shown: cancel timer)
+        currentTerm = request.getTerm();
+        state = NodeState.FOLLOWER;
+
+        // Verify log consistency at prevLogIndex
+        if (!logConsistencyCheck(request.getPrevLogIndex(), request.getPrevLogTerm())) {
+            return new AppendEntriesResponse(currentTerm, false);
+        }
+
+        // Append new entries (removing conflicting entries first)
+        appendNewEntries(request.getEntries(), request.getPrevLogIndex());
+
+        // Update commit index
+        if (request.getLeaderCommit() &gt; commitIndex) {
+            commitIndex = Math.min(request.getLeaderCommit(), log.size() - 1);
+        }
+        return new AppendEntriesResponse(currentTerm, true);
+    }
+
+    private boolean isLogUpToDate(int candidateLastIndex, int candidateLastTerm) {
+        if (log.isEmpty()) return true;
+        LogEntry lastEntry = log.get(log.size() - 1);
+        if (candidateLastTerm != lastEntry.getTerm()) {
+            return candidateLastTerm &gt; lastEntry.getTerm();
+        }
+        return candidateLastIndex &gt;= log.size() - 1;
+    }
+
+    private boolean logConsistencyCheck(int prevLogIndex, int prevLogTerm) {
+        if (prevLogIndex &lt; 0) return true;
+        if (prevLogIndex &gt;= log.size()) return false;
+        return log.get(prevLogIndex).getTerm() == prevLogTerm;
+    }
+
+    private void appendNewEntries(List&lt;LogEntry&gt; newEntries, int prevLogIndex) {
+        int insertIndex = prevLogIndex + 1;
+        for (LogEntry entry : newEntries) {
+            if (insertIndex &lt; log.size()) {
+                if (log.get(insertIndex).getTerm() != entry.getTerm()) {
+                    log.subList(insertIndex, log.size()).clear();
+                }
+            }
+            if (insertIndex &gt;= log.size()) {
+                log.add(entry);
+            }
+            insertIndex++;
+        }
+    }
+
+    // Supporting record types (abbreviated)
+    record LogEntry(int term, String command) { public int getTerm() { return term; } }
+    record RequestVoteRequest(int getTerm, String getCandidateId, int getLastLogIndex, int getLastLogTerm) {}
+    record RequestVoteResponse(int getTerm, boolean isVoteGranted) {}
+    record AppendEntriesRequest(int getTerm, int getPrevLogIndex, int getPrevLogTerm,
+                                List&lt;LogEntry&gt; getEntries, int getLeaderCommit) {}
+    record AppendEntriesResponse(int getTerm, boolean isSuccess) {}
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-dist-db-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A Raft cluster has 5 nodes. How many nodes can fail before the cluster stops accepting writes?" data-options='["1 node","2 nodes — Raft requires majority (3/5) to commit. With 2 failures, 3 nodes remain and can form a quorum.","3 nodes","4 nodes"]' data-correct="1" data-explanation="Raft requires a majority quorum of (N/2 + 1) nodes. For N=5: majority = 3. With 2 failures: 3 nodes remain, quorum is achievable, cluster continues. With 3 failures: only 2 remain, quorum (3) is unreachable, cluster stops. Formula: tolerate f failures with N = 2f+1 nodes. For f=2: N=5." style="display:none"></div>
+          <div data-question="What problem does Spanner's TrueTime solve that standard NTP clocks cannot?" data-options='["NTP is too slow for database operations","NTP has ±100ms uncertainty — two transactions could have timestamps that don't reflect their real-time ordering. TrueTime provides a bounded interval (±7ms) using GPS + atomic clocks, allowing transactions to wait out uncertainty and be assigned timestamps that are guaranteed to reflect real-time order.","NTP doesn't work across timezones","TrueTime provides higher-precision timestamps measured in nanoseconds"]' data-correct="1" data-explanation="External consistency requires: if transaction T1 commits before T2 starts in real time, then T1's timestamp < T2's timestamp. NTP drift can violate this. TrueTime's commit-wait (wait until TT.now().earliest > commit_ts) ensures no future transaction can receive a timestamp earlier than the committing transaction's timestamp." style="display:none"></div>
+          <div data-question="Why does Spanner use 2PC (Two-Phase Commit) for cross-tablet transactions?" data-options='["2PC is required by the SQL standard","A transaction that modifies data in two different tablets (on different Raft groups) needs atomic commitment — either both tablets commit or neither. 2PC achieves this: prepare phase locks both tablets, commit phase applies with TrueTime timestamp. Without 2PC, one tablet could commit while the other fails, leaving inconsistent state.","2PC provides lower latency than single-phase commit","2PC is only used for multi-region transactions"]' data-correct="1" data-explanation="Raft consensus handles single-tablet durability. But a transfer from Account A (tablet 1) to Account B (tablet 2) spans two Raft groups. 2PC coordinates: both prepare (lock and pre-commit), then both commit atomically. If either prepare fails, both abort. The coordinator is one of the participant Raft leaders." style="display:none"></div>
+          <div data-question="What is the advantage of Spanner's stale reads compared to strong reads?" data-options='["Stale reads never return incorrect data","Stale reads (as of timestamp T in the past) can be served by any replica that has data as of T — no coordination with the Raft leader required. This enables global read scalability: any follower in any region can serve reads, reducing cross-region latency dramatically.","Stale reads are faster because they skip encryption","Stale reads bypass the 2PC protocol"]' data-correct="1" data-explanation="Strong reads require going to the Raft leader (ensuring the latest committed data). Stale reads as of 15 seconds ago can be served by any follower that is at least 15 seconds behind the leader (which is typical replication lag). This allows users to read from a nearby region's replica — much lower latency than reaching the leader." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="content-moderation.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Content Moderation →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="../tier2/leaderboard.html" class="btn btn--outline">← Leaderboard</a>
+        <a href="content-moderation.html" class="btn btn--primary">Next: Content Moderation →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

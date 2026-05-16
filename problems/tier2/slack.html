@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Slack real-time chat — RESHADED walkthrough covering WebSocket scaling, Redis Pub/Sub routing, message fan-out, and offline sync for MAANG interviews.">
+  <title>Design Slack / Real-time Chat — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-slack" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=slack" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Real-time</span>
+        </div>
+        <h1 class="module-header__title">Design Slack / Real-time Chat</h1>
+        <p class="module-header__desc">The core challenge: WebSocket connections don't map 1:1 to chat servers. When user A on server 1 sends a message to user B on server 2, you need a cross-server delivery mechanism. Redis Pub/Sub is the standard answer.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Google, Slack</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📨</span> Real-time delivery</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon" aria-hidden="true">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Send and receive messages in real-time within channels and DMs</li>
+            <li>Support workspaces, channels (public/private), and direct messages</li>
+            <li>Message history — fetch last N messages, paginate older history</li>
+            <li>Presence indicators — who is online</li>
+            <li>File and image sharing (up to 1GB per file)</li>
+            <li>Message reactions, threads (replies)</li>
+            <li>Unread counts and notifications for offline users</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> &lt;100ms message delivery p99 within same region</li>
+            <li><strong>Availability:</strong> 99.99% — messaging is business-critical</li>
+            <li><strong>Scale:</strong> 10M concurrent WebSocket connections, 1B messages/day</li>
+            <li><strong>Ordering:</strong> Messages within a channel must be ordered (no re-ordering)</li>
+            <li><strong>Durability:</strong> No message loss — at-least-once delivery</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon" aria-hidden="true">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>1B messages/day = ~11,600 msg/sec average; peak ~50K msg/sec</li>
+            <li>Avg message size: 200 bytes → 200B bytes/day = 200GB/day storage</li>
+            <li>10M concurrent connections at ~10KB RAM per WebSocket → 100GB RAM for connections</li>
+            <li>Each chat server can hold ~50K connections → need 200 chat servers for connections alone</li>
+            <li>5 years retention → 365TB of message storage → use Cassandra or HBase</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon" aria-hidden="true">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Messages table (Cassandra — wide column, write-heavy)
+// Partition key: channel_id → all messages in a channel on same node
+// Clustering key: message_id (time-ordered ULID/Snowflake) → range queries
+CREATE TABLE messages (
+    channel_id   UUID,
+    message_id   BIGINT,  -- Snowflake ID (timestamp-based, sortable)
+    user_id      UUID,
+    content      TEXT,
+    thread_id    BIGINT,  -- null if top-level
+    created_at   TIMESTAMP,
+    PRIMARY KEY (channel_id, message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+
+// Users table (PostgreSQL)
+users: user_id, username, email, status (online/away/dnd), last_seen
+
+// Channels (PostgreSQL)
+channels: channel_id, workspace_id, name, is_private, created_at
+
+// channel_members (PostgreSQL)
+channel_members: channel_id, user_id, last_read_message_id</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon" aria-hidden="true">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p>The critical insight: WebSocket connections are stateful and sticky. User A connects to Chat Server 1; User B connects to Chat Server 2. When A sends a message to B, server 1 doesn't have B's connection.</p>
+          <ul>
+            <li><strong>Client ↔ Chat Server:</strong> WebSocket (persistent, bidirectional). Fallback: Long-polling for corporate firewalls.</li>
+            <li><strong>Chat Server:</strong> Holds active WebSocket connections. Routes messages via Redis Pub/Sub.</li>
+            <li><strong>Redis Pub/Sub:</strong> Each chat server subscribes to channels for its connected users. Delivers cross-server messages.</li>
+            <li><strong>Message Store (Cassandra):</strong> Persists all messages. Chat server writes to Cassandra before publishing to Redis.</li>
+            <li><strong>Presence Service:</strong> Users publish heartbeat every 5s to Redis. TTL-based — if no heartbeat in 10s, marked offline.</li>
+            <li><strong>Notification Service:</strong> For offline users, sends push notifications (APNs/FCM).</li>
+            <li><strong>Service Discovery (ZooKeeper):</strong> Clients look up which chat server to connect to. Consistent hashing on user_id → chat server.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon" aria-hidden="true">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// WebSocket messages (JSON frames over WS)
+// Client → Server
+{ "type": "send_message", "channel_id": "...", "content": "hello", "client_msg_id": "uuid" }
+{ "type": "typing_start", "channel_id": "..." }
+
+// Server → Client
+{ "type": "new_message", "message_id": 123, "channel_id": "...", "user_id": "...", "content": "hello", "ts": 1700000000 }
+{ "type": "ack", "client_msg_id": "uuid", "message_id": 123 }
+
+// REST APIs (history, channel management)
+GET  /v1/channels/{channelId}/messages?before={messageId}&limit=50
+POST /v1/channels/{channelId}/messages       // fallback for offline clients
+GET  /v1/users/{userId}/presence</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon" aria-hidden="true">🔬</span>D — Deep Dive: Cross-Server Message Routing<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Problem:</strong> User A (on Chat Server 1) sends a DM to User B (connected to Chat Server 2). How does server 1 deliver to B?</p>
+          <p><strong>Solution — Redis Pub/Sub:</strong></p>
+          <ol>
+            <li>On connect, Chat Server 2 subscribes to Redis channel <code>user:{B_id}</code></li>
+            <li>Server 1 receives message from A, persists to Cassandra, then publishes to Redis channel <code>user:{B_id}</code></li>
+            <li>Server 2 receives from Redis, pushes down B's WebSocket</li>
+            <li>For channel messages: Redis channel = <code>channel:{channel_id}</code>. All servers with members of that channel subscribe.</li>
+          </ol>
+          <p><strong>Fan-out for channels:</strong> A channel with 10,000 members means 10,000 Redis publishes or a single publish to a Redis channel that all servers subscribing to that channel pick up and fan out locally. Use the latter — O(servers) not O(members).</p>
+          <p><strong>Message ordering:</strong> Use Snowflake IDs (timestamp-based monotonic). Cassandra clustering on message_id DESC gives natural ordering per channel.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon" aria-hidden="true">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Bottleneck:</strong> Redis Pub/Sub is in-memory and not persistent — a Redis crash loses in-flight messages. Mitigation: Redis Cluster with persistence, or replace with Kafka for durability.</li>
+            <li><strong>Celebrity problem:</strong> Large channels (10K+ members) cause fan-out storms. Limit to Redis channel approach where each server handles its own members.</li>
+            <li><strong>WebSocket server failure:</strong> Client detects via heartbeat timeout, reconnects via service discovery to a new server. Missed messages fetched via REST history API.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon" aria-hidden="true">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a real-time chat system handling 10M concurrent connections. Key decisions: WebSocket for low-latency delivery, Redis Pub/Sub for cross-server routing (O(servers) fan-out), Cassandra for message storage partitioned by channel_id, Snowflake IDs for globally ordered messages, and a separate presence service with heartbeat TTLs.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon" aria-hidden="true">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Cross-server routing</td><td>Redis Pub/Sub</td><td>Kafka topics</td><td>Lower latency (&lt;1ms vs &gt;5ms); Kafka overkill for transient delivery signals</td></tr>
+                <tr><td>Message storage</td><td>Cassandra</td><td>PostgreSQL</td><td>Write-heavy (1B/day); partition by channel_id scales horizontally; no complex joins needed</td></tr>
+                <tr><td>Connection protocol</td><td>WebSocket</td><td>Long-polling</td><td>Bidirectional; lower overhead; long-polling wastes connections on idle</td></tr>
+                <tr><td>Message ID</td><td>Snowflake (timestamp-based)</td><td>UUID</td><td>Naturally ordered; enables cursor-based pagination; UUID not sortable</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon" aria-hidden="true">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ChatRouter — cross-server message routing using Redis Pub/Sub.
+ * Each chat server subscribes to channels for its connected users.
+ * Publishing a message notifies all servers that have the recipient connected.
+ */
+public class ChatRouter {
+
+    private static final String USER_CHANNEL_PREFIX = "user:";
+    private static final String CHANNEL_PREFIX = "channel:";
+
+    private final JedisPool jedisPool;
+    // Maps userId → active WebSocket session (local connections only)
+    private final Map&lt;String, WebSocketSession&gt; localConnections = new ConcurrentHashMap&lt;&gt;();
+    private final JedisSubscriber subscriber = new JedisSubscriber();
+
+    public ChatRouter(JedisPool jedisPool) {
+        this.jedisPool = jedisPool;
+    }
+
+    /**
+     * Called when a user connects to this server via WebSocket.
+     * Subscribes to their personal Redis channel to receive messages from other servers.
+     */
+    public void registerConnection(String userId, WebSocketSession session) {
+        localConnections.put(userId, session);
+        // Subscribe in a separate thread — Jedis subscribe() blocks
+        Thread.ofVirtual().start(() -> {
+            try (Jedis jedis = jedisPool.getResource()) {
+                jedis.subscribe(subscriber, USER_CHANNEL_PREFIX + userId);
+            }
+        });
+    }
+
+    /**
+     * Called when a user disconnects. Unsubscribes from Redis.
+     */
+    public void deregisterConnection(String userId) {
+        localConnections.remove(userId);
+        subscriber.unsubscribe(USER_CHANNEL_PREFIX + userId);
+    }
+
+    /**
+     * Routes a direct message to the recipient.
+     * Publishes to Redis — the server holding the recipient's connection will deliver it.
+     */
+    public void routeDirectMessage(ChatMessage message, String recipientId) {
+        String serializedMessage = serializeMessage(message);
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.publish(USER_CHANNEL_PREFIX + recipientId, serializedMessage);
+        }
+    }
+
+    /**
+     * Routes a channel message. All servers subscribed to this channel's Redis topic
+     * will receive it and deliver to their locally connected channel members.
+     */
+    public void routeChannelMessage(ChatMessage message, String channelId) {
+        String serializedMessage = serializeMessage(message);
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.publish(CHANNEL_PREFIX + channelId, serializedMessage);
+        }
+    }
+
+    /**
+     * Delivers a message to a locally connected user's WebSocket.
+     * Called by the Redis subscriber callback when this server receives a published message.
+     */
+    private void deliverToLocalConnection(String userId, String serializedMessage) {
+        WebSocketSession session = localConnections.get(userId);
+        if (session != null &amp;&amp; session.isOpen()) {
+            try {
+                session.sendMessage(new TextMessage(serializedMessage));
+            } catch (IOException ioException) {
+                // Session closed between check and send — remove stale entry
+                localConnections.remove(userId);
+            }
+        }
+    }
+
+    private String serializeMessage(ChatMessage message) {
+        // In production: use Jackson ObjectMapper
+        return "{\"id\":" + message.getId() + ",\"content\":\"" + message.getContent() + "\"}";
+    }
+
+    private class JedisSubscriber extends JedisPubSub {
+        @Override
+        public void onMessage(String channel, String message) {
+            // Extract userId from "user:{userId}" channel name
+            String userId = channel.substring(USER_CHANNEL_PREFIX.length());
+            deliverToLocalConnection(userId, message);
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon" aria-hidden="true">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-slack-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="User A is connected to Chat Server 1. User B is connected to Chat Server 2. When A sends a DM to B, how does Server 1 deliver the message to B?" data-options='["Server 1 directly connects to Server 2 via TCP","Server 1 publishes to Redis channel user:{B_id}; Server 2 (subscribed to that channel) receives it and pushes to B's WebSocket","Server 1 writes to Cassandra; Server 2 polls Cassandra every 100ms","Server 1 broadcasts to all chat servers and they filter irrelevant messages"]' data-correct="1" data-explanation="Redis Pub/Sub enables cross-server delivery without direct server-to-server connections. Server 1 publishes, Server 2 receives via its Redis subscription and delivers locally. This is O(servers that have members) not O(total members)." style="display:none"></div>
+          <div data-question="Why is Cassandra preferred over PostgreSQL for message storage in Slack?" data-options='["Cassandra supports SQL queries which PostgreSQL does not","Cassandra partitions by channel_id so all messages in a channel co-locate on one node, supporting efficient range scans — critical for history fetch","Cassandra provides stronger ACID guarantees for messages","Cassandra replicates synchronously while PostgreSQL does not"]' data-correct="1" data-explanation="Cassandra's wide-column model partitioned by channel_id with message_id as clustering key is ideal: all channel messages are on the same node (fast range scan), write throughput scales horizontally, and no joins are needed. PostgreSQL would need sharding to handle 1B messages/day." style="display:none"></div>
+          <div data-question="How does Slack detect that a user has gone offline without them explicitly logging out?" data-options='["The WebSocket TCP connection always closes immediately when the user closes the app","The client sends a heartbeat every 5 seconds; if the server receives no heartbeat for 10 seconds, the user is marked offline via Redis TTL expiry","The OS notifies the server when the process terminates","The server checks the OS-level TCP state of each connection every second"]' data-correct="1" data-explanation="Heartbeat-based presence is the standard approach. The client sends a ping every 5s; the server sets a Redis key user:{id}:online with 10s TTL on each heartbeat. When no heartbeat arrives (app backgrounded, crash, network loss), the TTL expires and the user is marked offline." style="display:none"></div>
+          <div data-question="For a channel with 50,000 members, which fan-out approach scales better?" data-options='["Publish 50,000 individual Redis messages — one per member","Publish one message to a Redis channel; each chat server receives it once and delivers to its locally connected members of that channel","Store the message in Cassandra and have all 50,000 clients poll for updates","Use a separate WebSocket broadcast server that maintains all connections"]' data-correct="1" data-explanation="Publishing to one Redis channel is O(number of subscribed chat servers), not O(members). If you have 200 chat servers, only 200 Redis messages are sent regardless of channel size. Each server then does local delivery to its connected members — this is the efficient fan-out pattern." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="instagram.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Instagram →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="../tier1/url-shortener.html" class="btn btn--outline">← URL Shortener</a>
+        <a href="instagram.html" class="btn btn--primary">Next: Instagram →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master OAuth 2.0 authorization flows, JWT validation, mTLS for service auth, encryption strategies, zero-trust architecture, and GDPR data flow requirements for MAANG interviews.">
+  <title>Security &amp; Auth Patterns — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/09-security/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#oauth2" class="module-toc__link">OAuth 2.0 Auth Code Flow</a></li>
+          <li><a href="#jwt" class="module-toc__link">JWT Structure &amp; Validation</a></li>
+          <li><a href="#mtls" class="module-toc__link">mTLS Service-to-Service</a></li>
+          <li><a href="#encryption" class="module-toc__link">Encryption At Rest vs Transit</a></li>
+          <li><a href="#zero-trust" class="module-toc__link">Zero-Trust Architecture</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-09" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 09</span>
+        </nav>
+        <div class="module-header__number">Module 09</div>
+        <h1 class="module-header__title">Security &amp; Auth Patterns</h1>
+        <p class="module-header__desc">Design secure systems with OAuth 2.0, validate JWTs correctly, enforce mTLS between microservices, and apply zero-trust principles — all with production-grade implementation details.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <section id="oauth2" class="content-section">
+        <h2>OAuth 2.0 Authorization Code Flow</h2>
+        <p>OAuth 2.0 delegates authorization: it lets a user grant an application access to their resources on another service without sharing credentials. The Authorization Code Flow is the most secure variant for server-side applications:</p>
+
+        <ol>
+          <li><strong>User initiates login:</strong> The client redirects the user to the Authorization Server with <code>response_type=code</code>, <code>client_id</code>, <code>redirect_uri</code>, <code>scope</code>, and a <code>state</code> parameter (CSRF protection).</li>
+          <li><strong>User authenticates:</strong> The Authorization Server authenticates the user (login form, MFA) and asks for consent.</li>
+          <li><strong>Authorization code returned:</strong> Authorization Server redirects to <code>redirect_uri?code=AUTH_CODE&state=STATE</code>. The code is short-lived (60 seconds) and single-use.</li>
+          <li><strong>Code exchange:</strong> The client's backend sends a POST to the token endpoint with <code>code</code>, <code>client_id</code>, <code>client_secret</code>, <code>redirect_uri</code>. This happens server-to-server — the client secret never goes to the browser.</li>
+          <li><strong>Tokens issued:</strong> Authorization Server responds with an <code>access_token</code>, <code>refresh_token</code>, and <code>id_token</code> (if OpenID Connect).</li>
+          <li><strong>API access:</strong> Client sends <code>Authorization: Bearer access_token</code> to the Resource Server.</li>
+        </ol>
+
+        <figure class="diagram-container" aria-label="OAuth 2.0 authorization code flow diagram">
+          <svg viewBox="0 0 660 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OAuth 2.0 sequence flow">
+            <title>OAuth 2.0 Authorization Code Flow</title>
+            <rect x="10" y="10" width="100" height="35" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="60" y="32" text-anchor="middle" fill="#93c5fd" font-size="11" font-family="Inter,sans-serif">Browser</text>
+            <rect x="230" y="10" width="120" height="35" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="290" y="32" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">App Backend</text>
+            <rect x="490" y="10" width="140" height="35" rx="6" fill="#1e293b" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="560" y="32" text-anchor="middle" fill="#86efac" font-size="11" font-family="Inter,sans-serif">Auth Server</text>
+            <line x1="60" y1="45" x2="60" y2="280" stroke="#334155" stroke-width="1" stroke-dasharray="3,3"/>
+            <line x1="290" y1="45" x2="290" y2="280" stroke="#334155" stroke-width="1" stroke-dasharray="3,3"/>
+            <line x1="560" y1="45" x2="560" y2="280" stroke="#334155" stroke-width="1" stroke-dasharray="3,3"/>
+            <line x1="60" y1="75" x2="555" y2="75" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowOA)"/>
+            <text x="310" y="70" text-anchor="middle" fill="#93c5fd" font-size="9" font-family="Inter,sans-serif">1. Redirect → /authorize?response_type=code&amp;state=xyz</text>
+            <line x1="555" y1="100" x2="65" y2="100" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowOG)"/>
+            <text x="310" y="95" text-anchor="middle" fill="#86efac" font-size="9" font-family="Inter,sans-serif">2. Show login / consent UI</text>
+            <line x1="555" y1="130" x2="65" y2="130" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowOG)"/>
+            <text x="310" y="125" text-anchor="middle" fill="#86efac" font-size="9" font-family="Inter,sans-serif">3. Redirect → /callback?code=AUTH_CODE&amp;state=xyz</text>
+            <line x1="65" y1="160" x2="285" y2="160" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowOA)"/>
+            <text x="175" y="155" text-anchor="middle" fill="#93c5fd" font-size="9" font-family="Inter,sans-serif">4. Forward code to backend</text>
+            <line x1="295" y1="190" x2="550" y2="190" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowOI)"/>
+            <text x="420" y="185" text-anchor="middle" fill="#a5b4fc" font-size="9" font-family="Inter,sans-serif">5. POST /token (code + client_secret)</text>
+            <line x1="550" y1="220" x2="295" y2="220" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowOG)"/>
+            <text x="420" y="215" text-anchor="middle" fill="#86efac" font-size="9" font-family="Inter,sans-serif">6. access_token + refresh_token</text>
+            <line x1="285" y1="255" x2="65" y2="255" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowOI)"/>
+            <text x="175" y="250" text-anchor="middle" fill="#a5b4fc" font-size="9" font-family="Inter,sans-serif">7. Session + tokens to browser</text>
+            <defs>
+              <marker id="arrowOA" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#3b82f6"/></marker>
+              <marker id="arrowOG" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#22c55e"/></marker>
+              <marker id="arrowOI" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#6366f1"/></marker>
+            </defs>
+          </svg>
+          <figcaption>OAuth 2.0 Authorization Code Flow: the client secret is never exposed to the browser; the code exchange happens server-to-server in step 5.</figcaption>
+        </figure>
+
+        <p><strong>PKCE (Proof Key for Code Exchange):</strong> For public clients (mobile apps, SPAs) that cannot hold a client_secret, PKCE adds a code_challenge/code_verifier pair. The client generates a random verifier, hashes it to a challenge, sends the challenge in step 1, and proves ownership of the verifier in step 5.</p>
+      </section>
+
+      <section id="jwt" class="content-section">
+        <h2>JWT Structure and Validation</h2>
+        <p>A JWT is three Base64URL-encoded JSON objects joined by dots: <code>header.payload.signature</code>.</p>
+        <ul>
+          <li><strong>Header:</strong> <code>{"alg":"RS256","typ":"JWT"}</code> — algorithm and token type.</li>
+          <li><strong>Payload:</strong> Claims — <code>sub</code> (subject), <code>iss</code> (issuer), <code>aud</code> (audience), <code>exp</code> (expiry Unix timestamp), <code>iat</code> (issued at), plus custom claims.</li>
+          <li><strong>Signature:</strong> For RS256: <code>RSA_Sign(SHA256(base64(header) + "." + base64(payload)), private_key)</code>. The receiver verifies with the public key.</li>
+        </ul>
+        <p><strong>Critical validation steps (all must pass):</strong></p>
+        <ol>
+          <li>Verify the signature using the issuer's public key (fetched from <code>/.well-known/jwks.json</code>).</li>
+          <li>Check <code>exp</code> is in the future (using server time, not client).</li>
+          <li>Check <code>iss</code> matches the expected issuer.</li>
+          <li>Check <code>aud</code> contains your service's identifier (prevents token reuse from another service).</li>
+          <li>Reject <code>alg: none</code> — never accept unsigned tokens.</li>
+        </ol>
+
+        <table class="trade-off-table">
+          <caption>JWT vs Opaque Tokens</caption>
+          <thead><tr><th>Dimension</th><th>JWT (self-contained)</th><th>Opaque token</th></tr></thead>
+          <tbody>
+            <tr><td>Validation</td><td>Stateless — verify signature locally</td><td>Requires network call to token introspection endpoint</td></tr>
+            <tr><td>Revocation</td><td>Cannot revoke before exp without a blocklist</td><td>Immediate revocation by deleting from store</td></tr>
+            <tr><td>Payload size</td><td>Grows with claims; sent on every request</td><td>Fixed small size</td></tr>
+            <tr><td>Best for</td><td>Stateless microservices, short-lived tokens</td><td>Long-lived sessions, high-security contexts</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="mtls" class="content-section">
+        <h2>mTLS for Service-to-Service Authentication</h2>
+        <p>Standard TLS authenticates only the server (client trusts the server's certificate). <strong>Mutual TLS (mTLS)</strong> requires both parties to present and verify certificates — the server also validates the client's certificate. This is the foundation of zero-trust service mesh authentication.</p>
+        <p><strong>How it works:</strong></p>
+        <ol>
+          <li>Each service has a certificate issued by an internal Certificate Authority (CA), typically with the SPIFFE SVID standard for identity (<code>spiffe://cluster/ns/default/sa/order-service</code>).</li>
+          <li>On connection, both sides exchange and verify certificates against the trusted internal CA.</li>
+          <li>If validation fails (untrusted CA, expired cert, wrong SPIFFE ID), the TLS handshake fails and no data is transmitted.</li>
+        </ol>
+        <p><strong>In practice:</strong> Service meshes like Istio and Linkerd automate certificate rotation and mTLS enforcement via sidecar proxies — application code doesn't need to implement it directly. The mesh intercepts all traffic at the pod level.</p>
+      </section>
+
+      <section id="encryption" class="content-section">
+        <h2>Encryption: At Rest vs In Transit</h2>
+        <p><strong>Encryption in transit</strong> protects data as it moves over the network: TLS 1.2+ for external traffic, mTLS for internal service calls. Prevents eavesdropping and man-in-the-middle attacks. Once data reaches the server and is decrypted, transit encryption provides no protection.</p>
+        <p><strong>Encryption at rest</strong> protects data stored on disk: AES-256 for object storage, database tablespace encryption, or application-level field encryption. Protects against physical disk theft, cloud provider data exposure, and unauthorized storage access.</p>
+        <p><strong>Key management</strong> is the hard part of encryption at rest. Use a dedicated KMS (AWS KMS, HashiCorp Vault, GCP Cloud KMS) — never store encryption keys in the same location as encrypted data. Implement envelope encryption: a data encryption key (DEK) encrypts the data, and a key encryption key (KEK) encrypts the DEK. Rotate DEKs without re-encrypting all data.</p>
+        <p><strong>GDPR data flow requirements:</strong> Personal data must not leave the EU without adequate safeguards. For multi-region architectures: use data residency controls (store EU user data only in eu-west regions), implement data minimisation (don't log PII), enforce right-to-erasure by tracking all locations where a user's data is stored, and document cross-border data transfers in your Data Processing Agreement.</p>
+      </section>
+
+      <section id="zero-trust" class="content-section">
+        <h2>Zero-Trust Architecture</h2>
+        <p>Traditional perimeter security assumes anything inside the corporate network is trusted. Zero-trust assumes breach: <strong>never trust, always verify</strong>. Every request — whether from outside or inside the network — must be authenticated and authorized.</p>
+        <p><strong>Core principles:</strong></p>
+        <ul>
+          <li><strong>Verify explicitly:</strong> Authenticate every request using strong identity (certificates, short-lived tokens). No implicit trust from network location.</li>
+          <li><strong>Least privilege:</strong> Each service has access only to the resources it needs. Scoped tokens, fine-grained RBAC/ABAC policies.</li>
+          <li><strong>Assume breach:</strong> Log everything, detect lateral movement, segment workloads so a compromised service cannot access everything.</li>
+        </ul>
+        <p><strong>Implementation:</strong> Service mesh (Istio) enforces mTLS between all services. An identity-aware proxy (Google IAP, HashiCorp Boundary) sits in front of internal tools. Short-lived credentials (AWS STS, Vault dynamic secrets) ensure compromised credentials expire quickly.</p>
+      </section>
+
+      <section id="implementation" class="content-section">
+        <h2>Java Implementation: JWT Validation Filter</h2>
+        <pre><code class="language-java">/**
+ * JWT validation filter for Spring-style servlet filter chain.
+ * Validates RS256 JWTs: signature, expiry, issuer, and audience.
+ * Fetches the public key from the JWKS endpoint and caches it.
+ */
+public class JwtValidationFilter implements Filter {
+
+    private static final String AUTHORIZATION_HEADER = "Authorization";
+    private static final String BEARER_PREFIX = "Bearer ";
+    private static final String EXPECTED_ISSUER = "https://auth.example.com";
+    private static final String EXPECTED_AUDIENCE = "api.example.com";
+
+    private final JwksKeyProvider jwksKeyProvider;
+
+    public JwtValidationFilter(JwksKeyProvider jwksKeyProvider) {
+        this.jwksKeyProvider = jwksKeyProvider;
+    }
+
+    @Override
+    public void doFilter(ServletRequest request,
+                          ServletResponse response,
+                          FilterChain chain) throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+        String authorizationHeader = httpRequest.getHeader(AUTHORIZATION_HEADER);
+        if (authorizationHeader == null || !authorizationHeader.startsWith(BEARER_PREFIX)) {
+            httpResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED,
+                "Missing or malformed Authorization header");
+            return;
+        }
+
+        String rawJwtToken = authorizationHeader.substring(BEARER_PREFIX.length()).trim();
+        JwtValidationResult validationResult = validateJwt(rawJwtToken);
+
+        if (!validationResult.isValid()) {
+            // Log the internal reason; return a generic message to the client
+            System.err.println("[JwtFilter] Rejected: " + validationResult.getRejectionReason());
+            httpResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid token");
+            return;
+        }
+
+        // Attach verified claims to request for downstream handlers
+        httpRequest.setAttribute("jwt.claims", validationResult.getClaims());
+        chain.doFilter(request, response);
+    }
+
+    /**
+     * Validates the JWT in five mandatory steps.
+     * Returns a result with the parsed claims on success, or a rejection reason on failure.
+     */
+    private JwtValidationResult validateJwt(String rawJwtToken) {
+        try {
+            // Step 1: Parse header to get key ID (kid) for JWKS lookup
+            String[] jwtParts = rawJwtToken.split("\\.");
+            if (jwtParts.length != 3) {
+                return JwtValidationResult.rejected("Malformed JWT structure");
+            }
+
+            JwtHeader header = parseHeader(jwtParts[0]);
+
+            // Step 2: Reject unsigned tokens — never accept alg:none
+            if ("none".equalsIgnoreCase(header.getAlgorithm())) {
+                return JwtValidationResult.rejected("alg:none is not permitted");
+            }
+
+            // Step 3: Verify signature using public key from JWKS
+            RSAPublicKey publicKey = jwksKeyProvider.getPublicKey(header.getKeyId());
+            if (!verifySignature(jwtParts[0], jwtParts[1], jwtParts[2], publicKey)) {
+                return JwtValidationResult.rejected("Signature verification failed");
+            }
+
+            // Step 4: Parse and validate claims
+            JwtClaims claims = parseClaims(jwtParts[1]);
+
+            // Step 5a: Check expiry
+            long nowSeconds = Instant.now().getEpochSecond();
+            if (claims.getExpiry() &lt;= nowSeconds) {
+                return JwtValidationResult.rejected("Token expired at " + claims.getExpiry());
+            }
+
+            // Step 5b: Verify issuer
+            if (!EXPECTED_ISSUER.equals(claims.getIssuer())) {
+                return JwtValidationResult.rejected("Unexpected issuer: " + claims.getIssuer());
+            }
+
+            // Step 5c: Verify audience — prevents token relay attacks
+            if (!claims.getAudience().contains(EXPECTED_AUDIENCE)) {
+                return JwtValidationResult.rejected("Token not intended for this service");
+            }
+
+            return JwtValidationResult.valid(claims);
+
+        } catch (Exception parseException) {
+            System.err.println("[JwtFilter] Parse error: " + parseException.getMessage());
+            return JwtValidationResult.rejected("Token parse failure");
+        }
+    }
+
+    private boolean verifySignature(String encodedHeader,
+                                     String encodedPayload,
+                                     String encodedSignature,
+                                     RSAPublicKey publicKey) throws Exception {
+        Signature rsaSignature = Signature.getInstance("SHA256withRSA");
+        rsaSignature.initVerify(publicKey);
+        rsaSignature.update((encodedHeader + "." + encodedPayload)
+            .getBytes(StandardCharsets.UTF_8));
+        byte[] decodedSignatureBytes = Base64.getUrlDecoder().decode(encodedSignature);
+        return rsaSignature.verify(decodedSignatureBytes);
+    }
+
+    // Parsing helpers (header/claims decode from Base64 and JSON) omitted for brevity
+    private JwtHeader parseHeader(String encodedHeader) { /* JSON decode */ return null; }
+    private JwtClaims parseClaims(String encodedPayload) { /* JSON decode */ return null; }
+}</code></pre>
+        <p><strong>Why validate audience?</strong> Without audience validation, a JWT issued for Service A can be replayed against Service B. An attacker who steals a token from one service can impersonate the user on any other service in your ecosystem that trusts the same issuer.</p>
+      </section>
+
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-09-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Security &amp; Auth Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">In the OAuth 2.0 Authorization Code Flow, why is the code exchange (step 4→5) done server-to-server rather than from the browser?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="In the OAuth 2.0 Authorization Code Flow, why is the code exchange (step 4→5) done server-to-server rather than from the browser?" data-options='["Browsers cannot make POST requests to token endpoints","The client_secret must never be exposed to the browser or intercepted in transit","Server-to-server calls have lower latency than browser-based AJAX","The authorization code is too large to fit in a URL redirect"]' data-correct="1" data-explanation="The client_secret authenticates the application to the Authorization Server. If the browser made this request, the secret would be visible in JavaScript source. Server-to-server exchange keeps the secret in a secure server environment." style="display:none"></div>
+          <div data-question="What is the primary security risk of accepting a JWT with alg:none?" data-options='["The payload will be unreadable by the receiving service","An attacker can forge any claims without a signature, since no cryptographic verification occurs","The token will expire immediately due to missing expiry claim","The issuer field cannot be validated without an algorithm"]' data-correct="1" data-explanation="alg:none means no signature is present. If a library accepts it, an attacker can create a JWT with any claims (including admin: true) by simply omitting the signature. Always reject alg:none explicitly." style="display:none"></div>
+          <div data-question="mTLS differs from standard TLS in that:" data-options='["mTLS uses AES-256 instead of RSA for the key exchange","Both the client and server must present and verify certificates, not just the server","mTLS encrypts the payload but not the headers","mTLS requires a hardware security module (HSM)"]' data-correct="1" data-explanation="Standard TLS only authenticates the server to the client. mTLS adds client certificate verification, so the server can confirm the identity of the calling service. This is the basis of zero-trust service mesh authentication." style="display:none"></div>
+          <div data-question="In zero-trust architecture, which principle explains why a compromised service should not be able to access all other services?" data-options='["Verify explicitly — re-authenticate every request","Least privilege — each service has access only to the resources it needs","Assume breach — all traffic is monitored and anomalies detected","Defense in depth — multiple security layers exist"]' data-correct="1" data-explanation="Least privilege limits the blast radius of any single compromised component. Even if Service A is breached, it cannot access Service B's data if it was never granted that permission. Combined with assume breach (network segmentation), lateral movement is contained." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../10-patterns/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../08-observability/index.html" class="btn btn--outline">← Module 08: Observability</a>
+        <a href="../10-patterns/index.html" class="btn btn--primary">Module 10: Patterns →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 09</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

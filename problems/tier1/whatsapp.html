@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design WhatsApp chat messaging — full RESHADED walkthrough covering WebSocket scaling, Redis pub/sub routing, Cassandra message storage, and delivery receipts for MAANG interviews.">
+  <title>Design WhatsApp — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/whatsapp/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-whatsapp" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=whatsapp" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Real-time</span>
+        </div>
+        <h1 class="module-header__title">Design WhatsApp / Chat Messaging</h1>
+        <p class="module-header__desc">100 billion messages per day. The hard parts: maintaining persistent WebSocket connections at scale across stateful servers, and routing messages when sender and recipient are on different servers.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Apple, Google</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">💬</span> 2B users</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>1:1 messaging between users</li>
+            <li>Group chat (up to 1,000 members)</li>
+            <li>Message delivery receipts: single tick (sent), double tick (delivered), blue tick (read)</li>
+            <li>Media sharing (images, video, documents)</li>
+            <li>Online presence indicator (last seen)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 2B users, 100B messages/day</li>
+            <li><strong>Delivery guarantee:</strong> Messages must be delivered even if recipient is offline for up to 7 days</li>
+            <li><strong>Latency:</strong> &lt; 100ms message delivery when both users are online</li>
+            <li><strong>Encryption:</strong> End-to-end encrypted (E2EE) — server cannot read message content</li>
+            <li><strong>Ordering:</strong> Messages within a conversation appear in sent order</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Message QPS:</strong> 100B / 86,400 ≈ <strong>1.16M messages/sec</strong></li>
+            <li><strong>Write throughput:</strong> 1.16M × 100 bytes avg = <strong>116 MB/s</strong> sustained write</li>
+            <li><strong>Offline storage (7-day):</strong> 100B msgs/day × 7 days × 100B = <strong>70TB</strong></li>
+            <li><strong>Concurrent WebSocket connections:</strong> 2B users × 60% online at peak = 1.2B connections → distributed across thousands of chat servers (each handling ~100K connections)</li>
+            <li><strong>Presence heartbeats:</strong> 1.2B users × 1 heartbeat/30s = 40M heartbeat writes/sec → Redis only (in-memory TTL, no persistence needed)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// messages table (Cassandra — partitioned by conversation_id)
+CREATE TABLE messages (
+    conversation_id  BIGINT,
+    message_id       BIGINT,           -- Snowflake ID (time-sortable)
+    sender_id        BIGINT NOT NULL,
+    content_bytes    BLOB,             -- E2EE ciphertext — server cannot decrypt
+    media_url        TEXT,             -- S3 URL if media message
+    status           TINYINT,          -- 1=SENT, 2=DELIVERED, 3=READ
+    created_at       TIMESTAMP,
+    PRIMARY KEY ((conversation_id), message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+-- Partition by conversation_id for fast chat history queries
+
+// message_status table (delivery receipts per recipient)
+CREATE TABLE message_status (
+    message_id   BIGINT,
+    user_id      BIGINT,
+    status       TINYINT,
+    updated_at   TIMESTAMP,
+    PRIMARY KEY ((message_id), user_id)
+);
+
+// Redis: WebSocket session routing
+// Key: ws_session:{user_id}  →  chat_server_ip  (TTL = 60s, refreshed on heartbeat)
+
+// Redis: Presence
+// Key: presence:{user_id}    →  "online"        (TTL = 30s, refreshed on heartbeat)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Message Send (Both Users Online)</h3>
+          <ol>
+            <li>Alice sends message via <strong>WebSocket</strong> to her Chat Server (CS-A)</li>
+            <li>CS-A persists message to <strong>Cassandra</strong> with status=SENT</li>
+            <li>CS-A looks up Bob's chat server in <strong>Redis</strong> (<code>ws_session:bob_id</code>)</li>
+            <li>CS-A publishes message to <strong>Redis pub/sub</strong> channel <code>user:{bob_id}</code></li>
+            <li>CS-B (Bob's server) is subscribed to <code>user:{bob_id}</code> → receives message → pushes over WebSocket to Bob</li>
+            <li>Bob's client ACKs → CS-B updates status to DELIVERED in Cassandra</li>
+          </ol>
+
+          <h3>Message Send (Recipient Offline)</h3>
+          <ol>
+            <li>CS-A checks Redis → Bob has no active WebSocket session</li>
+            <li>CS-A saves message to Cassandra (status=SENT)</li>
+            <li>CS-A triggers <strong>Push Notification Service</strong> (APNs/FCM)</li>
+            <li>When Bob comes online, his client sends last-seen message_id → server fetches all newer messages from Cassandra → delivers in order</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// WebSocket protocol (JSON messages over wss://)
+// Client → Server: SEND message
+{
+  "type": "SEND",
+  "conversationId": "conv_123",
+  "recipientId": "user_456",
+  "contentBytes": "base64-encoded-e2ee-ciphertext",
+  "clientMessageId": "local-uuid-for-dedup"
+}
+
+// Server → Client: DELIVER message
+{
+  "type": "DELIVER",
+  "messageId": "server-snowflake-id",
+  "conversationId": "conv_123",
+  "senderId": "user_789",
+  "contentBytes": "base64-encoded-e2ee-ciphertext",
+  "timestamp": 1700000000000
+}
+
+// Client → Server: ACK delivery (triggers double tick)
+{ "type": "ACK", "messageId": "server-snowflake-id" }
+
+// REST: GET /api/v1/conversations/{conversationId}/messages?before={messageId}&limit=50
+// Fetches paginated history from Cassandra for initial load or gap-fill on reconnect</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: WebSocket Routing at Scale
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>The fundamental problem: WebSocket connections are stateful and pinned to a specific server. If Alice is on CS-A and Bob is on CS-B, how does CS-A deliver a message to Bob?</p>
+
+          <h3>Solution: Redis Pub/Sub for Cross-Server Routing</h3>
+          <ol>
+            <li>Every chat server subscribes to a Redis pub/sub channel for each connected user: <code>SUBSCRIBE user:{user_id}</code></li>
+            <li>When CS-A needs to send to Bob, it publishes to <code>PUBLISH user:{bob_id} &lt;message&gt;</code></li>
+            <li>Redis fan-outs to all subscribers — CS-B receives it and pushes to Bob's WebSocket</li>
+          </ol>
+
+          <h3>Why Not Just Route HTTP Between Chat Servers?</h3>
+          <p>It works but requires CS-A to know Bob's specific server IP (stored in Redis anyway) and make an HTTP call. Pub/sub decouples this — CS-A doesn't need to know which server Bob is on. Also handles the case where Bob has multiple devices.</p>
+
+          <h3>Group Messages</h3>
+          <p>For a group with 1,000 members, the sending server publishes to each member's pub/sub channel. 1,000 PUBLISH calls per group message. For very large groups, use a dedicated group fanout service that shards members across workers.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Chat Server failure:</strong> Clients detect WebSocket disconnection and reconnect to any available server (via load balancer). On reconnect, client sends its last seen message_id and server delivers missed messages.</li>
+            <li><strong>Redis pub/sub failure:</strong> Messages fail to route in real-time. Fall back to push notifications for delivery guarantee. Messages are in Cassandra — none are lost.</li>
+            <li><strong>Message ordering:</strong> Cassandra rows sorted by Snowflake message_id (time-ordered). Client uses this as display order. No server-side sorting needed.</li>
+            <li><strong>Duplicate messages:</strong> Client includes <code>clientMessageId</code> (UUID). Server deduplicates on Cassandra insert using <code>IF NOT EXISTS</code>.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"Clients maintain persistent WebSocket connections to stateful chat servers. Cross-server message routing uses Redis pub/sub — each user has a channel, and their connected server subscribes on their behalf. Messages are durably stored in Cassandra before routing, ensuring no loss on server failure. Offline users receive push notifications and gap-fill on reconnect. Delivery receipts flow back via the same WebSocket channel."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Real-time Protocol</td>
+                <td>Long polling (HTTP)</td>
+                <td>WebSocket (persistent TCP)</td>
+                <td><strong>WebSocket</strong> — &lt;100ms latency requirement; long polling adds 1–5s</td>
+              </tr>
+              <tr>
+                <td>Cross-server Routing</td>
+                <td>Direct HTTP between servers</td>
+                <td>Redis pub/sub</td>
+                <td><strong>Redis pub/sub</strong> — decoupled; sender doesn't need to track recipient's server</td>
+              </tr>
+              <tr>
+                <td>Offline Delivery</td>
+                <td>Push notification only</td>
+                <td>Push notification + Cassandra gap-fill</td>
+                <td><strong>Both</strong> — push wakes app; gap-fill delivers all missed messages in order</td>
+              </tr>
+              <tr>
+                <td>Message Storage</td>
+                <td>MySQL with conversation sharding</td>
+                <td>Cassandra partitioned by conversation_id</td>
+                <td><strong>Cassandra</strong> — 1.16M QPS write throughput; append-only time-series</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ChatServer — handles WebSocket connections and routes messages via Redis pub/sub.
+ * One instance handles ~100K concurrent WebSocket connections.
+ */
+public class ChatServer {
+    private static final String SESSION_KEY_PREFIX = "ws_session:";
+    private static final String PUBSUB_CHANNEL_PREFIX = "user:";
+    private static final int SESSION_TTL_SECONDS = 60;
+
+    private final Map<Long, WebSocketSession> activeSessionsByUserId = new ConcurrentHashMap<>();
+    private final MessageRepository messageRepository;
+    private final RedisClient redisClient;
+    private final RedisPubSubClient redisPubSubClient;
+    private final String serverIpAddress;
+
+    public ChatServer(MessageRepository messageRepository,
+                      RedisClient redisClient,
+                      RedisPubSubClient redisPubSubClient,
+                      String serverIpAddress) {
+        this.messageRepository = messageRepository;
+        this.redisClient = redisClient;
+        this.redisPubSubClient = redisPubSubClient;
+        this.serverIpAddress = serverIpAddress;
+    }
+
+    /**
+     * Called when a client establishes a WebSocket connection.
+     * Registers session in Redis and subscribes to pub/sub for message routing.
+     */
+    public void onClientConnected(long userId, WebSocketSession session) {
+        activeSessionsByUserId.put(userId, session);
+
+        // Register this user → this server in Redis
+        redisClient.setex(SESSION_KEY_PREFIX + userId, SESSION_TTL_SECONDS, serverIpAddress);
+
+        // Subscribe to Redis pub/sub channel for this user
+        // When another server publishes to "user:{userId}", this server receives it
+        redisPubSubClient.subscribe(PUBSUB_CHANNEL_PREFIX + userId,
+                (channel, messagePayload) -> deliverMessageToClient(userId, messagePayload));
+    }
+
+    /**
+     * Called when a client disconnects (WebSocket closed).
+     */
+    public void onClientDisconnected(long userId) {
+        activeSessionsByUserId.remove(userId);
+        redisClient.delete(SESSION_KEY_PREFIX + userId);
+        redisPubSubClient.unsubscribe(PUBSUB_CHANNEL_PREFIX + userId);
+    }
+
+    /**
+     * Processes an incoming SEND message from a connected client.
+     * Persists to Cassandra, then routes to recipient.
+     *
+     * @param sendEvent The parsed message send request from the WebSocket frame
+     */
+    public void handleSendMessage(MessageSendEvent sendEvent) {
+        // Persist first — durability before delivery
+        Message persistedMessage = messageRepository.saveMessage(
+                sendEvent.getConversationId(),
+                sendEvent.getSenderId(),
+                sendEvent.getRecipientId(),
+                sendEvent.getContentBytes(),
+                sendEvent.getClientMessageId()
+        );
+
+        // Route to recipient via Redis pub/sub
+        // CS-B (recipient's server) is subscribed to "user:{recipientId}"
+        String channelName = PUBSUB_CHANNEL_PREFIX + sendEvent.getRecipientId();
+        String serializedMessage = serializeForDelivery(persistedMessage);
+        redisPubSubClient.publish(channelName, serializedMessage);
+
+        // Acknowledge to sender with the server-assigned message ID
+        sendAckToSender(sendEvent.getSenderId(), persistedMessage.getMessageId());
+    }
+
+    /**
+     * Delivers a message received from Redis pub/sub to the connected client.
+     * Called on the pub/sub callback thread.
+     */
+    private void deliverMessageToClient(long userId, String messagePayload) {
+        WebSocketSession recipientSession = activeSessionsByUserId.get(userId);
+
+        if (recipientSession == null || !recipientSession.isOpen()) {
+            // Client disconnected between pub/sub subscribe and delivery
+            // Message is in Cassandra — client will gap-fill on next reconnect
+            return;
+        }
+
+        try {
+            recipientSession.sendText(messagePayload);
+        } catch (IOException ioException) {
+            // Log and let gap-fill handle it — do not lose the message
+            System.err.println("[ChatServer.deliverMessageToClient] Send failed for user "
+                    + userId + ": " + ioException.getMessage());
+        }
+    }
+
+    /**
+     * Gap-fill: delivers all messages missed since lastSeenMessageId.
+     * Called when a client reconnects and sends its last seen message ID.
+     */
+    public void deliverMissedMessages(long userId, long conversationId, long lastSeenMessageId) {
+        WebSocketSession session = activeSessionsByUserId.get(userId);
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+
+        List<Message> missedMessages = messageRepository.fetchMessagesSince(
+                conversationId, lastSeenMessageId);
+
+        for (Message message : missedMessages) {
+            try {
+                session.sendText(serializeForDelivery(message));
+            } catch (IOException ioException) {
+                System.err.println("[ChatServer.deliverMissedMessages] Failed: " + ioException.getMessage());
+                break; // Stop on error — client will retry on next reconnect
+            }
+        }
+    }
+
+    /**
+     * Handles delivery ACK from client — updates message status to DELIVERED.
+     */
+    public void handleDeliveryAck(long userId, long messageId) {
+        messageRepository.updateMessageStatus(messageId, userId, MessageStatus.DELIVERED);
+
+        // Notify original sender of delivery receipt via pub/sub
+        Message message = messageRepository.findById(messageId);
+        if (message != null) {
+            String receiptPayload = buildDeliveryReceiptJson(messageId, MessageStatus.DELIVERED);
+            redisPubSubClient.publish(PUBSUB_CHANNEL_PREFIX + message.getSenderId(), receiptPayload);
+        }
+    }
+
+    private void sendAckToSender(long senderId, long serverMessageId) {
+        WebSocketSession senderSession = activeSessionsByUserId.get(senderId);
+        if (senderSession != null && senderSession.isOpen()) {
+            try {
+                senderSession.sendText("{\"type\":\"SENT_ACK\",\"messageId\":" + serverMessageId + "}");
+            } catch (IOException ioException) {
+                System.err.println("[ChatServer.sendAckToSender] Failed: " + ioException.getMessage());
+            }
+        }
+    }
+
+    private String serializeForDelivery(Message message) {
+        return "{\"type\":\"DELIVER\""
+                + ",\"messageId\":" + message.getMessageId()
+                + ",\"conversationId\":" + message.getConversationId()
+                + ",\"senderId\":" + message.getSenderId()
+                + ",\"contentBytes\":\"" + message.getContentBytesBase64() + "\""
+                + ",\"timestamp\":" + message.getCreatedAtMs()
+                + "}";
+    }
+
+    private String buildDeliveryReceiptJson(long messageId, MessageStatus status) {
+        return "{\"type\":\"RECEIPT\",\"messageId\":" + messageId
+                + ",\"status\":\"" + status.name() + "\"}";
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-whatsapp-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Alice (connected to CS-A) sends a message to Bob (connected to CS-B). How does CS-A deliver it to Bob without knowing his server's IP address?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">CS-A broadcasts to all chat servers and they each check if Bob is connected</button></li>
+              <li><button class="quiz__option" data-correct="true">CS-A publishes to Redis pub/sub channel user:{bob_id} — CS-B is subscribed and forwards to Bob's WebSocket</button></li>
+              <li><button class="quiz__option" data-correct="false">CS-A writes to Cassandra and CS-B polls every 100ms for new messages</button></li>
+              <li><button class="quiz__option" data-correct="false">CS-A uses a Zookeeper service registry to look up CS-B's address then makes an HTTP call</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">Why must a message be persisted to Cassandra BEFORE being routed to the recipient?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Cassandra is faster than Redis pub/sub</button></li>
+              <li><button class="quiz__option" data-correct="true">If routing fails or the recipient's server crashes, the message is still in Cassandra for gap-fill on reconnect</button></li>
+              <li><button class="quiz__option" data-correct="false">Cassandra automatically triggers push notifications to offline users</button></li>
+              <li><button class="quiz__option" data-correct="false">The message_id is only generated after Cassandra write</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">When Bob reconnects after being offline for 2 hours, how does he receive the messages he missed?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">The push notification system re-sends all missed messages</button></li>
+              <li><button class="quiz__option" data-correct="false">Bob's client reconnects and the server automatically pushes everything</button></li>
+              <li><button class="quiz__option" data-correct="true">Bob's client sends its lastSeenMessageId; server queries Cassandra for all newer messages and delivers them in order</button></li>
+              <li><button class="quiz__option" data-correct="false">Redis stores missed messages for 7 days and delivers on reconnect</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">Why is Cassandra chosen over MySQL for message storage?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Cassandra supports SQL; MySQL does not scale</button></li>
+              <li><button class="quiz__option" data-correct="true">1.16M QPS append-only writes and time-series range queries by conversation_id are exactly Cassandra's strengths</button></li>
+              <li><button class="quiz__option" data-correct="false">Cassandra provides end-to-end encryption natively</button></li>
+              <li><button class="quiz__option" data-correct="false">MySQL cannot store binary (BLOB) message content</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="youtube.html" class="btn btn--outline">← YouTube</a>
+        <a href="rate-limiter.html" class="btn btn--primary">Next: Rate Limiter →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Gaming Leaderboard — RESHADED walkthrough covering Redis sorted sets, sharding for 100M users, friend leaderboards, and real-time rank updates for MAANG interviews.">
+  <title>Design Gaming Leaderboard — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-leaderboard" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=leaderboard" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Redis data structures</span>
+        </div>
+        <h1 class="module-header__title">Design Gaming Leaderboard</h1>
+        <p class="module-header__desc">Redis Sorted Set is the perfect data structure for leaderboards: O(log N) insert, O(log N) rank lookup, O(log N + M) range query. Know the operations cold. The challenge: a single sorted set can't hold 100M entries in one Redis node — sharding is required.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Riot Games, Activision, Epic</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> 100M players</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Update player score after each game</li>
+            <li>View global top-N leaderboard (e.g., top 100)</li>
+            <li>Look up a specific player's rank and score</li>
+            <li>Friend leaderboard — ranking among friends only</li>
+            <li>Weekly/monthly/all-time leaderboard windows</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 100M players, 10M score updates/day, 50M leaderboard reads/day</li>
+            <li><strong>Latency:</strong> Score update &lt;50ms; rank lookup &lt;100ms; top-N &lt;200ms</li>
+            <li><strong>Read/write ratio:</strong> 5:1 (more reads than score updates)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>100M players × (8 bytes score + 8 bytes player_id + 40 bytes overhead) = ~5.6GB for the sorted set — fits in one Redis node RAM but is large</li>
+            <li>10M score updates/day = ~115 updates/sec average; peak 10K/sec during game completion spike</li>
+            <li>Redis ZADD: 500K ops/sec single-threaded → can handle peak comfortably on one node</li>
+            <li>Sharded across 10 nodes: 10M players/node → 560MB/node → very manageable</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Redis Sorted Set (primary leaderboard)
+// Key: leaderboard:{gameId}:{period}  e.g., leaderboard:fortnite:weekly:2024-W52
+// Score: player score (double)
+// Member: player_id
+
+// Redis key operations:
+// ZADD leaderboard:fortnite:global {score} {playerId}      -- O(log N)
+// ZRANK leaderboard:fortnite:global {playerId}             -- O(log N), 0-indexed
+// ZSCORE leaderboard:fortnite:global {playerId}            -- O(1)
+// ZREVRANGE leaderboard:fortnite:global 0 99 WITHSCORES   -- O(log N + M) top 100
+
+// Player profile (PostgreSQL — source of truth for scores)
+players: player_id, username, all_time_score, weekly_score, monthly_score, last_updated
+
+// Redis populated from DB on startup; DB is the durable source of truth</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Score Update Flow:</strong> Game server → Score Update Service → atomically update PostgreSQL + ZADD to Redis sorted set.</li>
+            <li><strong>Top-N Query:</strong> ZREVRANGE leaderboard:game:global 0 99 from Redis. Enrich with player usernames from Redis hash (cached) or PostgreSQL.</li>
+            <li><strong>Rank Lookup:</strong> ZREVRANK leaderboard:game:global {playerId} → returns 0-based rank. Add 1 for display rank.</li>
+            <li><strong>Friend Leaderboard:</strong> Fetch friend list from social graph. For each friend, ZSCORE to get score. Sort in application layer. (For large friend counts: create a temporary sorted set with ZUNIONSTORE.)</li>
+            <li><strong>Weekly reset:</strong> Weekly leaderboard keys have week suffix. New key each week. Old key expires after 1 month (Redis TTL).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/scores                         // update player score
+  Body: { gameId, playerId, newScore, period: "global|weekly|monthly" }
+
+GET  /v1/leaderboard/{gameId}/top?limit=100&period=weekly
+  Returns: [{ rank, playerId, username, score }]
+
+GET  /v1/leaderboard/{gameId}/rank?playerId={}&period=global
+  Returns: { rank, score, percentile }
+
+GET  /v1/leaderboard/{gameId}/friends?playerId={}&period=weekly
+  Returns: [{ rank, playerId, username, score }]</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Sharded Leaderboard for 100M Players<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Problem:</strong> Single Redis sorted set with 100M members = 5.6GB. While it fits in memory, a single Redis node has throughput limits (~500K ops/sec). For games with burst score updates (e.g., 10K/sec at end-of-match), sharding helps.</p>
+          <p><strong>Shard by score range:</strong></p>
+          <ul>
+            <li>Shard 0: scores 0–999 (leaderboard:game:shard:0)</li>
+            <li>Shard 1: scores 1000–9999</li>
+            <li>Shard 2: scores 10000–99999</li>
+            <li>Shard 3: scores 100000+ (top players)</li>
+          </ul>
+          <p><strong>Score update:</strong> Determine shard from score, ZADD to that shard.</p>
+          <p><strong>Top-N query:</strong> Query top shard (Shard 3) for top N. If shard has fewer than N players, also query Shard 2, etc. Merge results in application layer.</p>
+          <p><strong>Rank lookup:</strong> Sum of (ZCARD of all higher shards) + ZREVRANK within own shard = global rank.</p>
+          <p><strong>Alternative: hash sharding:</strong> Shard by hash(player_id) % N. Top-N requires querying all shards and merging — O(shards × top_N) comparisons.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Score tie-breaking:</strong> Two players with the same score: ZADD uses lexicographic ordering of member names. For fair tie-breaking, encode time-of-achievement in score (e.g., score × 10000 + (MAX_TIME - time_achieved)).</li>
+            <li><strong>Weekly reset:</strong> At week boundary, create a new sorted set key. Don't clear the old key — use expiry. Use Redis keyspace notifications to trigger reset logic.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a leaderboard handling 100M players with sub-100ms rank lookups. Key decisions: Redis Sorted Set for O(log N) all operations, score-range sharding for large datasets, application-layer merge for top-N queries, PostgreSQL as durable source of truth, and Redis TTL for time-windowed leaderboards.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Primary data structure</td><td>Redis Sorted Set</td><td>PostgreSQL with ORDER BY</td><td>Redis ZRANK is O(log N) vs PostgreSQL COUNT(*) which is O(N) without pre-computed rank column. Redis handles 500K ops/sec.</td></tr>
+              <tr><td>Sharding strategy</td><td>Score-range sharding</td><td>Hash sharding</td><td>Score-range: top-N query hits only the top shard (fast). Hash sharding: top-N requires querying all shards and merging.</td></tr>
+              <tr><td>Friend leaderboard</td><td>Per-request ZSCORE for each friend</td><td>Dedicated friend leaderboard sorted set</td><td>Friend lists are dynamic (constantly changing). Per-request ZSCORE is accurate. Dedicated sorted set requires maintenance on every friend add/remove.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ShardedLeaderboard — distributes a global leaderboard across multiple Redis
+ * sorted sets using score-range sharding for efficient top-N queries.
+ */
+public class ShardedLeaderboard {
+
+    private static final String SHARD_KEY_PREFIX = "leaderboard:shard:";
+    private static final int[] SHARD_THRESHOLDS = {1_000, 10_000, 100_000, Integer.MAX_VALUE};
+
+    private final JedisPool jedisPool;
+    private final String leaderboardName;
+
+    public ShardedLeaderboard(JedisPool jedisPool, String leaderboardName) {
+        this.jedisPool = jedisPool;
+        this.leaderboardName = leaderboardName;
+    }
+
+    /**
+     * Updates a player's score in the appropriate shard.
+     * If the score crosses a shard boundary, the player is moved between shards.
+     */
+    public void updateScore(String playerId, double newScore) {
+        int newShardIndex = resolveShardIndex(newScore);
+        String newShardKey = buildShardKey(newShardIndex);
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Remove from all other shards (player may have been in a different shard before)
+            for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
+                if (shardIndex != newShardIndex) {
+                    jedis.zrem(buildShardKey(shardIndex), playerId);
+                }
+            }
+            jedis.zadd(newShardKey, newScore, playerId);
+        }
+    }
+
+    /**
+     * Returns the top-N players globally by merging results from shards top-down.
+     * Starts from the highest shard (top players) and works down until N players found.
+     */
+    public List&lt;PlayerRank&gt; getTopPlayers(int topN) {
+        List&lt;PlayerRank&gt; results = new ArrayList&lt;&gt;();
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Iterate shards from highest score to lowest
+            for (int shardIndex = SHARD_THRESHOLDS.length - 1; shardIndex &gt;= 0; shardIndex--) {
+                if (results.size() &gt;= topN) break;
+
+                int remaining = topN - results.size();
+                String shardKey = buildShardKey(shardIndex);
+                Set&lt;Tuple&gt; shardTopPlayers = jedis.zrevrangeWithScores(shardKey, 0, remaining - 1);
+
+                for (Tuple playerTuple : shardTopPlayers) {
+                    results.add(new PlayerRank(playerTuple.getElement(), playerTuple.getScore(),
+                                               results.size() + 1));
+                }
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Computes a player's global rank by summing the cardinality of higher shards
+     * plus their rank within their own shard.
+     */
+    public long getGlobalRank(String playerId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            Double score = null;
+            int playerShardIndex = -1;
+
+            // Find which shard this player is in
+            for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
+                score = jedis.zscore(buildShardKey(shardIndex), playerId);
+                if (score != null) {
+                    playerShardIndex = shardIndex;
+                    break;
+                }
+            }
+            if (score == null) return -1; // player not found
+
+            // Count players in higher-scoring shards (they all rank ahead of this player)
+            long playersAhead = 0;
+            for (int higherShard = playerShardIndex + 1; higherShard &lt; SHARD_THRESHOLDS.length; higherShard++) {
+                playersAhead += jedis.zcard(buildShardKey(higherShard));
+            }
+
+            // Rank within this player's shard (0-indexed)
+            long rankWithinShard = jedis.zrevrank(buildShardKey(playerShardIndex), playerId);
+            return playersAhead + rankWithinShard + 1; // 1-indexed global rank
+        }
+    }
+
+    private int resolveShardIndex(double score) {
+        for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
+            if (score &lt; SHARD_THRESHOLDS[shardIndex]) {
+                return shardIndex;
+            }
+        }
+        return SHARD_THRESHOLDS.length - 1;
+    }
+
+    private String buildShardKey(int shardIndex) {
+        return SHARD_KEY_PREFIX + leaderboardName + ":" + shardIndex;
+    }
+
+    public record PlayerRank(String playerId, double score, int rank) {}
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-leaderboard-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="What is the time complexity of ZRANK (find a player's rank) in Redis Sorted Set?" data-options='["O(1) — Redis hashes all members","O(log N) — Redis sorted sets use a skip list internally for O(log N) rank operations","O(N) — Redis must scan all members to count those with higher scores","O(N log N) — requires a sort operation"]' data-correct="1" data-explanation="Redis sorted sets use a combination of skip list + hash table. The skip list provides O(log N) ordered access. ZRANK counts elements less than the given score using the skip list structure — O(log N). ZADD is also O(log N). This is why Redis sorted sets are the standard leaderboard data structure." style="display:none"></div>
+          <div data-question="For a leaderboard with 100M players, why is score-range sharding better than hash sharding?" data-options='["Hash sharding uses more memory","With score-range sharding, the top-100 query only hits the top shard (top players are concentrated there). With hash sharding, top players are distributed across all shards — a top-100 query must query all shards and merge, doing N_shards times more work.","Score-range sharding provides better load balancing","Hash sharding doesn't support sorted operations"]' data-correct="1" data-explanation="This is the key insight. Score-range sharding creates a natural hierarchy: top shard has ~1% of players but serves all top-N queries with one Redis call. Hash sharding distributes evenly — great for writes but requires all-shard fanout for every read. Given that leaderboards are read-heavy (5:1), score-range sharding wins." style="display:none"></div>
+          <div data-question="How is a friend leaderboard implemented efficiently without maintaining a dedicated per-user sorted set?" data-options='["Query the global leaderboard and filter for friends","For each friend, call ZSCORE on the global leaderboard to get their score — O(1) per friend. Collect (friend, score) pairs in application layer and sort. Accurate, always up-to-date, and requires no maintenance on friend graph changes.","Use ZINTERSTORE to intersect the global leaderboard with a friends set","Friend leaderboards always require a separate Redis sorted set per user"]' data-correct="1" data-explanation="ZSCORE is O(1) per call. For 200 friends: 200 ZSCORE calls, then sort in application layer. This is O(F log F) where F=friends. Maintaining a dedicated sorted set per user would require updating it on every friend's score change — with 10M score updates/day and 500 avg friends, that's 5B sorted set updates/day." style="display:none"></div>
+          <div data-question="When two players have the same score in a Redis Sorted Set, how does Redis determine their relative ordering?" data-options='["Redis returns an error for duplicate scores","Redis orders members with equal scores lexicographically by member name. ZADD with the same score means they share the same rank unless tie-breaking is encoded in the score itself (e.g., score * 10000 + (MAX_TIME - time_achieved)).","Redis assigns random ordering to tied scores","The last-inserted member always wins in a tie"]' data-correct="1" data-explanation="Redis spec: when scores are equal, members are sorted by lexicographic order. 'alice' would rank before 'zach' at the same score. For fair game leaderboards where earlier achievers should rank higher, encode the time in the score: effectiveScore = score * LARGE_FACTOR + (EPOCH_MAX - achievedAt). This makes earlier achievers fractionally higher." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../tier3/distributed-db.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed DB →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="metrics-dashboard.html" class="btn btn--outline">← Metrics Dashboard</a>
+        <a href="../tier3/distributed-db.html" class="btn btn--primary">Next: Distributed DB →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

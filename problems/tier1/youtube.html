@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design YouTube video streaming — full RESHADED walkthrough covering adaptive bitrate, CDN, async transcoding pipeline, and S3 storage for MAANG interviews.">
+  <title>Design YouTube — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/youtube/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-youtube" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=youtube" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Media Systems</span>
+        </div>
+        <h1 class="module-header__title">Design YouTube / Video Streaming</h1>
+        <p class="module-header__desc">500 hours of video uploaded per minute. The interview is really about two things: async transcoding pipelines and adaptive bitrate streaming. Nail those and you win.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Netflix, Meta</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📺</span> 2B MAU</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Upload a video (up to 10GB)</li>
+            <li>Stream video adaptively (quality adjusts to bandwidth)</li>
+            <li>Search videos by title/description</li>
+            <li>Like, comment, subscribe</li>
+            <li>View recommendations (out of scope — ML team owns this)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 2B MAU, 500 hours uploaded per minute, 5B views/day</li>
+            <li><strong>Streaming latency:</strong> Playback starts within 2 seconds</li>
+            <li><strong>Availability:</strong> 99.99% for streaming (revenue-critical)</li>
+            <li><strong>Durability:</strong> Videos must never be lost</li>
+            <li><strong>Consistency:</strong> Upload confirmation is async — video may not be watchable for 30 seconds after upload while transcoding runs</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Upload storage:</strong> 500 hrs/min × 60 = 30,000 hrs/hr → at 1GB/hr compressed = 30TB new data/day</li>
+            <li><strong>Transcoding:</strong> Each video transcoded to 5 resolutions → 150TB/day processed</li>
+            <li><strong>CDN bandwidth:</strong> 5B views × 300MB avg (30 min at 720p) = 1.5 exabytes/day — YouTube uses all major CDNs</li>
+            <li><strong>Streaming QPS:</strong> 5B / 86,400 ≈ 58,000 stream-start requests/sec</li>
+            <li><strong>Metadata DB:</strong> 500 hrs/min × 60 × 24 × 365 = 263M videos/year × 5KB metadata = ~1.3TB/year (trivial)</li>
+          </ul>
+          <div class="callout callout--info">
+            The bottleneck is not metadata — it's CDN bandwidth and transcoding throughput. Design decisions should reflect this.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// videos table (MySQL / Spanner for strong consistency on metadata)
+CREATE TABLE videos (
+    video_id       BIGINT PRIMARY KEY,    -- Snowflake ID
+    user_id        BIGINT NOT NULL,
+    title          VARCHAR(100) NOT NULL,
+    description    TEXT,
+    status         ENUM('UPLOADING','PROCESSING','READY','FAILED') DEFAULT 'UPLOADING',
+    raw_storage_url TEXT,                 -- S3 path of original uploaded file
+    duration_secs  INT,
+    created_at     TIMESTAMP NOT NULL,
+    view_count     BIGINT DEFAULT 0
+);
+
+// video_chunks table (Cassandra — key-value by video + resolution + chunk)
+CREATE TABLE video_chunks (
+    video_id       BIGINT,
+    resolution     VARCHAR(10),           -- "360p", "720p", "1080p", "4k"
+    chunk_index    INT,
+    cdn_url        TEXT NOT NULL,         -- CDN URL for this 2-second chunk
+    size_bytes     INT,
+    PRIMARY KEY ((video_id, resolution), chunk_index)
+);
+
+// S3 structure:
+// raw/      {video_id}/original.mp4         (upload target, temp)
+// chunks/   {video_id}/{resolution}/{n}.ts  (transcoded HLS chunks)
+// manifests/{video_id}/master.m3u8          (HLS master playlist)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Upload Path</h3>
+          <ol>
+            <li>Client requests an upload URL from <strong>Upload Service</strong></li>
+            <li>Upload Service returns a pre-signed S3 URL — client uploads directly to S3 (bypasses app servers)</li>
+            <li>S3 triggers a <strong>Kafka event</strong> (ObjectCreated) → <strong>Transcoding Service</strong> picks it up</li>
+            <li>Transcoding Service spawns workers to convert to 360p/480p/720p/1080p/4K — each resolution is a separate job</li>
+            <li>Chunked output (.ts files + .m3u8 manifest) written to S3; metadata updated to READY</li>
+          </ol>
+
+          <h3>Stream Path</h3>
+          <ol>
+            <li>Client requests <code>/watch?v={videoId}</code> → Video Service returns metadata + CDN URL of master manifest</li>
+            <li>Client fetches <code>master.m3u8</code> from CDN → receives list of resolution-specific playlists</li>
+            <li>Client selects resolution based on current bandwidth → fetches 2–10 second chunks from CDN</li>
+            <li>On CDN miss: CDN pulls chunk from S3 origin and caches it</li>
+          </ol>
+
+          <div class="callout callout--tip">
+            <strong>Key insight:</strong> Never stream directly from S3 to clients. CDN edge servers handle 99% of streaming traffic. S3 is origin-of-record, not a streaming server.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// POST /api/v1/videos/upload-url
+// Body: { "fileName": "my-video.mp4", "fileSizeBytes": 524288000 }
+// Response 200: { "uploadUrl": "https://s3.amazonaws.com/...", "videoId": "12345" }
+// Client then PUTs directly to the S3 pre-signed URL
+
+// GET /api/v1/videos/{videoId}
+// Response 200:
+{
+  "videoId": "12345",
+  "title": "My Video",
+  "status": "READY",
+  "manifestUrl": "https://cdn.example.com/manifests/12345/master.m3u8",
+  "thumbnailUrl": "https://cdn.example.com/thumbs/12345.jpg",
+  "durationSecs": 342,
+  "viewCount": 150000
+}
+
+// GET /api/v1/videos/search?q={query}&page=0&limit=20
+// Response 200: { "results": [...], "totalCount": 500 }
+
+// POST /api/v1/videos/{videoId}/views  (fire-and-forget, 204)
+// POST /api/v1/videos/{videoId}/likes  (toggle, 200 with { "liked": true })</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Video Transcoding Pipeline
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>Transcoding is CPU-intensive and takes minutes per video. It must be asynchronous and resilient to node failures.</p>
+
+          <h3>Adaptive Bitrate (ABR) with HLS</h3>
+          <ul>
+            <li>Input: raw MP4. Output: multiple resolution streams, each split into 2-second <code>.ts</code> chunks.</li>
+            <li><code>master.m3u8</code>: index pointing to per-resolution playlists</li>
+            <li>Client player selects quality automatically based on available bandwidth</li>
+            <li>Switching quality = fetching next chunk from a different resolution playlist — seamless</li>
+          </ul>
+
+          <h3>Job State Machine</h3>
+          <p>Each upload triggers a job with states: <code>QUEUED → TRANSCODING → UPLOADING_CHUNKS → DONE / FAILED</code>. Failed jobs are retried up to 3 times with exponential backoff. If permanently failed, mark video status as FAILED and notify uploader.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Transcoding worker crash:</strong> Job remains in Kafka, another worker picks it up. Idempotent — re-transcoding overwrites same S3 paths.</li>
+            <li><strong>CDN outage in one region:</strong> GeoDNS reroutes to nearest available CDN PoP. Higher latency but service stays up.</li>
+            <li><strong>Hot video (viral):</strong> CDN handles 99%+ of traffic. Origin S3 only serves cache misses. S3 is effectively infinite-scale object storage.</li>
+            <li><strong>Storage cost:</strong> Move videos not viewed in 90 days to S3 Glacier (10× cheaper). Manifest/chunk pointers remain; streaming triggers a restore job.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"Videos are uploaded directly to S3 via pre-signed URLs, then transcoded asynchronously via a Kafka-driven worker pipeline into HLS chunks at multiple resolutions. Streaming uses CDN edge delivery — the client fetches a manifest and adaptively switches quality based on bandwidth. S3 is origin storage; CDN handles all streaming load. The design is resilient: transcoding failures are retried via Kafka, and CDN provides geographic redundancy."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Upload Target</td>
+                <td>Client → App Server → S3</td>
+                <td>Client → S3 direct (pre-signed URL)</td>
+                <td><strong>Direct S3</strong> — avoids double transfer, removes app server bottleneck</td>
+              </tr>
+              <tr>
+                <td>CDN Strategy</td>
+                <td>Push CDN (pre-load all videos)</td>
+                <td>Pull CDN (cache on first request)</td>
+                <td><strong>Pull CDN</strong> — 500M videos; push would be cost-prohibitive</td>
+              </tr>
+              <tr>
+                <td>Streaming Protocol</td>
+                <td>HLS (HTTP Live Streaming)</td>
+                <td>DASH (Dynamic Adaptive Streaming)</td>
+                <td><strong>HLS</strong> — native iOS support; DASH for Android/web (support both in practice)</td>
+              </tr>
+              <tr>
+                <td>Transcoding</td>
+                <td>Synchronous (user waits)</td>
+                <td>Asynchronous (Kafka + workers)</td>
+                <td><strong>Async</strong> — 1080p transcoding takes minutes; blocking upload is unacceptable</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TranscodingJob — represents a single video transcoding task with state machine.
+ */
+public class TranscodingJob {
+    public enum Status { QUEUED, TRANSCODING, UPLOADING_CHUNKS, DONE, FAILED }
+
+    private final String jobId;
+    private final long videoId;
+    private final String rawS3Path;
+    private volatile Status status;
+    private int retryCount;
+    private static final int MAX_RETRIES = 3;
+
+    public TranscodingJob(String jobId, long videoId, String rawS3Path) {
+        this.jobId = jobId;
+        this.videoId = videoId;
+        this.rawS3Path = rawS3Path;
+        this.status = Status.QUEUED;
+        this.retryCount = 0;
+    }
+
+    public boolean canRetry() {
+        return retryCount < MAX_RETRIES;
+    }
+
+    public void incrementRetry() { retryCount++; }
+
+    // Getters
+    public String getJobId() { return jobId; }
+    public long getVideoId() { return videoId; }
+    public String getRawS3Path() { return rawS3Path; }
+    public Status getStatus() { return status; }
+    public void setStatus(Status status) { this.status = status; }
+}
+
+/**
+ * VideoTranscodingPipeline — Kafka consumer that orchestrates transcoding.
+ * Each video is transcoded to multiple resolutions in parallel.
+ */
+public class VideoTranscodingPipeline {
+    private static final List<String> TARGET_RESOLUTIONS =
+            List.of("360p", "480p", "720p", "1080p", "4k");
+    private static final int CHUNK_DURATION_SECONDS = 2;
+    private static final String CHUNKS_S3_PREFIX = "chunks/";
+    private static final String MANIFESTS_S3_PREFIX = "manifests/";
+
+    private final FFmpegTranscoder ffmpegTranscoder;
+    private final S3Client s3Client;
+    private final VideoRepository videoRepository;
+    private final TranscodingJobRepository jobRepository;
+
+    public VideoTranscodingPipeline(FFmpegTranscoder ffmpegTranscoder,
+                                    S3Client s3Client,
+                                    VideoRepository videoRepository,
+                                    TranscodingJobRepository jobRepository) {
+        this.ffmpegTranscoder = ffmpegTranscoder;
+        this.s3Client = s3Client;
+        this.videoRepository = videoRepository;
+        this.jobRepository = jobRepository;
+    }
+
+    /**
+     * Entry point called by Kafka consumer thread.
+     * Processes one video upload event.
+     *
+     * @param event Kafka event from S3 ObjectCreated notification
+     */
+    public void processUploadEvent(VideoUploadedEvent event) {
+        TranscodingJob job = new TranscodingJob(
+                UUID.randomUUID().toString(), event.getVideoId(), event.getRawS3Path());
+        jobRepository.save(job);
+
+        try {
+            transcodeAllResolutions(job);
+            generateMasterManifest(job.getVideoId());
+            videoRepository.updateStatus(job.getVideoId(), VideoStatus.READY);
+            job.setStatus(TranscodingJob.Status.DONE);
+            jobRepository.save(job);
+        } catch (TranscodingException transcodingException) {
+            handleTranscodingFailure(job, transcodingException);
+        }
+    }
+
+    /**
+     * Transcodes a video to all target resolutions in parallel using a thread pool.
+     * Each resolution produces a set of .ts chunks and a resolution-specific .m3u8 playlist.
+     */
+    private void transcodeAllResolutions(TranscodingJob job) throws TranscodingException {
+        job.setStatus(TranscodingJob.Status.TRANSCODING);
+        jobRepository.save(job);
+
+        ExecutorService transcodingExecutor = Executors.newFixedThreadPool(TARGET_RESOLUTIONS.size());
+        List<Future<ResolutionResult>> transcodingFutures = new ArrayList<>();
+
+        for (String resolution : TARGET_RESOLUTIONS) {
+            Future<ResolutionResult> future = transcodingExecutor.submit(
+                    () -> transcodeToResolution(job, resolution));
+            transcodingFutures.add(future);
+        }
+
+        List<ResolutionResult> resolutionResults = new ArrayList<>();
+        for (Future<ResolutionResult> future : transcodingFutures) {
+            try {
+                resolutionResults.add(future.get(30, TimeUnit.MINUTES));
+            } catch (TimeoutException | ExecutionException | InterruptedException exception) {
+                throw new TranscodingException("Resolution transcoding failed", exception);
+            }
+        }
+
+        transcodingExecutor.shutdown();
+        uploadChunksToS3(job, resolutionResults);
+    }
+
+    private ResolutionResult transcodeToResolution(TranscodingJob job, String resolution) {
+        // Download raw file from S3 to local temp dir
+        Path rawLocalPath = s3Client.downloadToTemp(job.getRawS3Path());
+
+        // Run FFmpeg to produce .ts chunks
+        List<Path> chunkPaths = ffmpegTranscoder.transcodeToHlsChunks(
+                rawLocalPath, resolution, CHUNK_DURATION_SECONDS);
+
+        // Generate per-resolution .m3u8 playlist
+        String resolutionPlaylistContent = buildResolutionPlaylist(job.getVideoId(), resolution, chunkPaths);
+
+        return new ResolutionResult(resolution, chunkPaths, resolutionPlaylistContent);
+    }
+
+    private void uploadChunksToS3(TranscodingJob job, List<ResolutionResult> resolutionResults) {
+        job.setStatus(TranscodingJob.Status.UPLOADING_CHUNKS);
+        jobRepository.save(job);
+
+        for (ResolutionResult result : resolutionResults) {
+            for (int chunkIndex = 0; chunkIndex < result.getChunkPaths().size(); chunkIndex++) {
+                String s3Key = CHUNKS_S3_PREFIX + job.getVideoId()
+                        + "/" + result.getResolution()
+                        + "/" + chunkIndex + ".ts";
+                s3Client.upload(result.getChunkPaths().get(chunkIndex), s3Key);
+            }
+            // Upload per-resolution playlist
+            String playlistKey = CHUNKS_S3_PREFIX + job.getVideoId()
+                    + "/" + result.getResolution() + "/playlist.m3u8";
+            s3Client.uploadString(result.getPlaylistContent(), playlistKey);
+        }
+    }
+
+    /**
+     * Generates the HLS master manifest referencing all resolution playlists.
+     * Example output:
+     *   #EXTM3U
+     *   #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
+     *   chunks/{videoId}/360p/playlist.m3u8
+     */
+    private void generateMasterManifest(long videoId) {
+        StringBuilder masterManifest = new StringBuilder("#EXTM3U\n");
+        Map<String, Integer> resolutionBandwidthMap = Map.of(
+                "360p", 800_000, "480p", 1_500_000,
+                "720p", 3_000_000, "1080p", 5_000_000, "4k", 15_000_000);
+
+        for (String resolution : TARGET_RESOLUTIONS) {
+            int bandwidth = resolutionBandwidthMap.get(resolution);
+            masterManifest.append("#EXT-X-STREAM-INF:BANDWIDTH=").append(bandwidth)
+                          .append(",RESOLUTION=").append(resolutionToWidthHeight(resolution)).append("\n");
+            masterManifest.append(CHUNKS_S3_PREFIX).append(videoId)
+                          .append("/").append(resolution).append("/playlist.m3u8\n");
+        }
+
+        String masterKey = MANIFESTS_S3_PREFIX + videoId + "/master.m3u8";
+        s3Client.uploadString(masterManifest.toString(), masterKey);
+    }
+
+    private String buildResolutionPlaylist(long videoId, String resolution, List<Path> chunks) {
+        StringBuilder playlist = new StringBuilder("#EXTM3U\n#EXT-X-VERSION:3\n");
+        playlist.append("#EXT-X-TARGETDURATION:").append(CHUNK_DURATION_SECONDS).append("\n");
+        for (int index = 0; index < chunks.size(); index++) {
+            playlist.append("#EXTINF:").append(CHUNK_DURATION_SECONDS).append(",\n");
+            playlist.append(CHUNKS_S3_PREFIX).append(videoId).append("/")
+                    .append(resolution).append("/").append(index).append(".ts\n");
+        }
+        playlist.append("#EXT-X-ENDLIST\n");
+        return playlist.toString();
+    }
+
+    private void handleTranscodingFailure(TranscodingJob job, TranscodingException exception) {
+        if (job.canRetry()) {
+            job.incrementRetry();
+            job.setStatus(TranscodingJob.Status.QUEUED);
+            jobRepository.save(job);
+            // Re-enqueue to Kafka with exponential backoff delay
+            long backoffMs = (long) Math.pow(2, job.getRetryCount()) * 1000L;
+            scheduleRetry(job, backoffMs);
+        } else {
+            job.setStatus(TranscodingJob.Status.FAILED);
+            jobRepository.save(job);
+            videoRepository.updateStatus(job.getVideoId(), VideoStatus.FAILED);
+        }
+    }
+
+    private void scheduleRetry(TranscodingJob job, long delayMs) {
+        // In production: send to a Kafka delayed-retry topic
+        // Simplified: use ScheduledExecutorService
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.schedule(() -> processUploadEvent(
+                new VideoUploadedEvent(job.getVideoId(), job.getRawS3Path())),
+                delayMs, TimeUnit.MILLISECONDS);
+    }
+
+    private String resolutionToWidthHeight(String resolution) {
+        return switch (resolution) {
+            case "360p" -> "640x360";
+            case "480p" -> "854x480";
+            case "720p" -> "1280x720";
+            case "1080p" -> "1920x1080";
+            case "4k" -> "3840x2160";
+            default -> throw new IllegalArgumentException("Unknown resolution: " + resolution);
+        };
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-youtube-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why should video uploads go directly from the client to S3 (via pre-signed URL) rather than through the application server?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">S3 supports resumable uploads; app servers do not</button></li>
+              <li><button class="quiz__option" data-correct="true">It avoids routing gigabytes of video data through app servers, which would create a massive bandwidth bottleneck</button></li>
+              <li><button class="quiz__option" data-correct="false">App servers cannot handle binary data uploads</button></li>
+              <li><button class="quiz__option" data-correct="false">Pre-signed URLs provide better encryption than TLS through app servers</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">What is adaptive bitrate streaming (ABR) and why does it matter?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">It compresses video files dynamically to reduce storage costs</button></li>
+              <li><button class="quiz__option" data-correct="true">The client fetches small chunks and switches video quality based on current bandwidth — preventing buffering on slow connections</button></li>
+              <li><button class="quiz__option" data-correct="false">It distributes transcoding work across multiple client devices</button></li>
+              <li><button class="quiz__option" data-correct="false">It adjusts frame rate instead of resolution to maintain quality</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">Why is transcoding handled asynchronously via Kafka rather than synchronously during upload?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Kafka supports FFmpeg natively; other message queues do not</button></li>
+              <li><button class="quiz__option" data-correct="false">Synchronous transcoding would require expensive GPU instances on every API server</button></li>
+              <li><button class="quiz__option" data-correct="true">1080p transcoding takes minutes — blocking the upload response would cause timeouts and terrible UX</button></li>
+              <li><button class="quiz__option" data-correct="false">Asynchronous transcoding uses less CPU than synchronous transcoding</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">What is the role of the CDN in video streaming, and what does S3 serve?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">CDN handles uploads; S3 handles streaming</button></li>
+              <li><button class="quiz__option" data-correct="false">S3 serves all streaming traffic; CDN only caches metadata</button></li>
+              <li><button class="quiz__option" data-correct="true">CDN edge nodes serve 99%+ of streaming traffic from geographic cache; S3 is the durable origin pulled only on cache misses</button></li>
+              <li><button class="quiz__option" data-correct="false">CDN transcodes video; S3 only stores raw uploads</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="twitter-feed.html" class="btn btn--outline">← Twitter Feed</a>
+        <a href="whatsapp.html" class="btn btn--primary">Next: WhatsApp →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Ad Click Aggregator — RESHADED walkthrough covering click ingestion, stream processing with Kafka and Flink, windowed aggregation, and deduplication for MAANG interviews.">
+  <title>Design Ad Click Aggregator — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-ad-click" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=ad-click" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Stream processing</span>
+        </div>
+        <h1 class="module-header__title">Design Ad Click Aggregator</h1>
+        <p class="module-header__desc">Ad systems generate billions of click events daily. You can't store raw clicks forever — you aggregate them. The key tradeoff: stream processing (fast but approximate) vs batch (accurate but slow). Click fraud requires deduplication at scale.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Meta, Twitter</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📊</span> 10B clicks/day</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Ingest click events: {ad_id, user_id, timestamp, ip_address, device}</li>
+            <li>Aggregate click counts per ad per time window (1-min, 1-hour, 1-day)</li>
+            <li>Query API: "how many clicks did ad X get in the last 5 minutes?"</li>
+            <li>Click deduplication: same user clicking same ad within 5 minutes = 1 click</li>
+            <li>Top-N ads by click count in time window</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 10B clicks/day = ~115K clicks/sec average; peak 500K/sec</li>
+            <li><strong>Latency:</strong> Aggregations available within 1 minute of click (near-real-time)</li>
+            <li><strong>Accuracy:</strong> &lt;1% error in click counts acceptable; billing reports need exact counts (batch)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>10B clicks/day × 100 bytes/click = 1TB/day raw click data → too expensive to store long-term</li>
+            <li>Aggregate to 1-min buckets: 10M ads × 1440 min/day × 8 bytes = 115GB/day (100× smaller)</li>
+            <li>Kafka: 115K events/sec across 100 partitions = 1,150 events/sec/partition → manageable</li>
+            <li>Dedup window: 5 min × 115K clicks/sec = 34M in-flight dedup checks → Bloom filter in Redis: 34M bits = 4MB</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Raw click events (Kafka — ephemeral, 7-day retention)
+// Also archived to S3 for batch reprocessing
+click_event: { click_id: UUID, ad_id, user_id, ip, device, timestamp, page_url }
+
+// Aggregated counts (ClickHouse / TimeSeries DB)
+// Partition by ad_id; cluster by window_start for time-range queries
+ad_click_agg:
+    ad_id          UUID,
+    window_start   TIMESTAMP,  -- truncated to minute
+    window_end     TIMESTAMP,
+    click_count    BIGINT,
+    unique_users   BIGINT,     -- HyperLogLog approximation
+    PRIMARY KEY (ad_id, window_start)
+
+// Top-N cache (Redis Sorted Set)
+// Key: top_ads:{window_minute}  Score: click_count  Member: ad_id
+// TTL: 2 hours (only recent top-N matters)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Click Ingestion API:</strong> Lightweight HTTP endpoint. Validates click, publishes to Kafka. Returns 200 immediately (fire-and-forget semantics).</li>
+            <li><strong>Kafka:</strong> Click events partitioned by ad_id (so all clicks for an ad go to the same partition → no cross-partition aggregation needed).</li>
+            <li><strong>Stream Processor (Flink):</strong> Consumes Kafka. Deduplicates clicks (Bloom filter). Aggregates per ad_id per 1-min tumbling window. Writes to ClickHouse.</li>
+            <li><strong>Batch Reconciliation (Spark):</strong> Nightly. Reads raw clicks from S3. Produces exact counts. Reconciles with stream counts. Used for billing.</li>
+            <li><strong>Query API:</strong> Reads from ClickHouse for time-range queries. Reads from Redis for top-N queries.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/clicks                    // record a click event
+  Body: { adId, userId, pageUrl, device }
+  Returns: 200 OK (fire-and-forget)
+
+GET  /v1/ads/{adId}/clicks?start={}&end={}&granularity=1min
+  // Returns: [{ windowStart, clickCount, uniqueUsers }]
+
+GET  /v1/ads/top?window=1h&limit=10
+  // Returns: [{ adId, clickCount }] — top 10 by clicks in last hour</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Windowed Aggregation + Deduplication<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Tumbling windows:</strong> Non-overlapping fixed-time buckets. 00:00–01:00, 01:00–02:00, etc. Every click in the 1-minute window is counted together. Simple aggregation; query by truncating timestamp to minute.</p>
+          <p><strong>Sliding windows:</strong> Overlapping. "Last 5 minutes" = window slides with every new event. More complex; requires maintaining counts for multiple overlapping windows.</p>
+          <p><strong>Click deduplication with Bloom filter:</strong></p>
+          <ul>
+            <li>Key: <code>hash(user_id + ad_id + 5-min-bucket)</code></li>
+            <li>Bloom filter: probabilistic set membership. False positives (deduplicate a genuine click) ≤0.1%. No false negatives (a duplicate is never missed).</li>
+            <li>4MB per 5-min window; expire old windows.</li>
+            <li>For exact deduplication: Redis SET with TTL — but 34M keys at 64 bytes each = 2GB RAM. Bloom filter is 500× more memory-efficient.</li>
+          </ul>
+          <p><strong>Late data handling:</strong> Network delays mean clicks arrive up to 5 min late. Flink's watermark mechanism: process events up to W minutes late before closing a window. Reprocess late events via batch job.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Billing accuracy:</strong> Stream counts have &lt;1% error (Bloom filter false positives). For billing, use nightly Spark batch on raw S3 data for exact counts. Advertisers see stream counts in real-time, billed on batch counts.</li>
+            <li><strong>Hot ad problem:</strong> A viral ad gets 1M clicks/min. Single Kafka partition for that ad_id becomes a bottleneck. Solution: sub-partition by (ad_id, random_shard), aggregate per shard, then sum shards at query time.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed an ad click aggregator handling 10B clicks/day. Key decisions: Kafka partitioned by ad_id for ordered aggregation, Flink for stream processing with tumbling windows, Bloom filter for memory-efficient click deduplication, ClickHouse for time-series storage, and nightly Spark batch for billing-accurate exact counts.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Deduplication</td><td>Bloom filter (probabilistic)</td><td>Redis SET (exact)</td><td>34M unique (user,ad,window) combos. Bloom = 4MB; Redis SET = 2GB. &lt;0.1% false positive rate is acceptable for ad analytics (not billing).</td></tr>
+                <tr><td>Stream vs batch</td><td>Both (Lambda architecture)</td><td>Stream-only (Kappa)</td><td>Stream for real-time dashboard; batch for billing accuracy. Trade-off: operational complexity of two pipelines vs guaranteed accuracy for financial reporting.</td></tr>
+                <tr><td>Aggregation storage</td><td>ClickHouse</td><td>PostgreSQL</td><td>ClickHouse is columnar, optimized for time-series aggregation queries (SUM over millions of rows in ms). PostgreSQL would be too slow for ad-hoc time range queries at this scale.</td></tr>
+                <tr><td>Kafka partition key</td><td>ad_id</td><td>Random / round-robin</td><td>Partitioning by ad_id co-locates all clicks for an ad to one partition — enables stateful per-ad aggregation without cross-partition joins.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ClickAggregator — sliding window click counter with Bloom filter deduplication.
+ * Uses a circular buffer of fixed-size buckets (one per minute).
+ * Memory: O(WINDOW_MINUTES × BUCKET_SIZE) regardless of click volume.
+ */
+public class ClickAggregator {
+
+    private static final int WINDOW_MINUTES = 5;
+    private static final int BLOOM_FILTER_BITS = 4_000_000; // 4MB per window
+    private static final double BLOOM_FALSE_POSITIVE_RATE = 0.001;
+
+    // Circular buffer: one bucket per minute, WINDOW_MINUTES buckets total
+    private final long[] clickBuckets = new long[WINDOW_MINUTES];
+    private final BloomFilter[] deduplicationFilters = new BloomFilter[WINDOW_MINUTES];
+    private int currentBucketIndex = 0;
+    private long currentWindowMinute = 0;
+
+    public ClickAggregator() {
+        for (int bucketIndex = 0; bucketIndex &lt; WINDOW_MINUTES; bucketIndex++) {
+            deduplicationFilters[bucketIndex] = BloomFilter.create(
+                Funnels.stringFunnel(), BLOOM_FILTER_BITS, BLOOM_FALSE_POSITIVE_RATE
+            );
+        }
+    }
+
+    /**
+     * Records a click event if it passes deduplication check.
+     * Thread-safe: synchronized to protect circular buffer rotation.
+     *
+     * @param adId    the ad that was clicked
+     * @param userId  the user who clicked
+     */
+    public synchronized void recordClick(String adId, String userId) {
+        long nowMinute = System.currentTimeMillis() / 60_000;
+        advanceWindowIfNeeded(nowMinute);
+
+        // Deduplication key: same user clicking same ad within 5-min window = one click
+        String deduplicationKey = userId + ":" + adId;
+        if (!deduplicationFilters[currentBucketIndex].mightContain(deduplicationKey)) {
+            deduplicationFilters[currentBucketIndex].put(deduplicationKey);
+            clickBuckets[currentBucketIndex]++;
+        }
+        // Bloom filter may report false positive (mightContain=true for new click)
+        // This means we occasionally miss a genuine click — acceptable at &lt;0.1% rate
+    }
+
+    /**
+     * Returns total click count for the sliding window (last WINDOW_MINUTES minutes).
+     */
+    public synchronized long getWindowClickCount() {
+        long total = 0;
+        for (long bucketCount : clickBuckets) {
+            total += bucketCount;
+        }
+        return total;
+    }
+
+    /**
+     * Advances the circular buffer when the current minute has changed.
+     * Clears the bucket that's being overwritten (it's now older than the window).
+     */
+    private void advanceWindowIfNeeded(long nowMinute) {
+        long minutesElapsed = nowMinute - currentWindowMinute;
+        if (minutesElapsed &lt;= 0) {
+            return; // Still in the same minute
+        }
+
+        long bucketsToAdvance = Math.min(minutesElapsed, WINDOW_MINUTES);
+        for (long advancement = 0; advancement &lt; bucketsToAdvance; advancement++) {
+            currentBucketIndex = (currentBucketIndex + 1) % WINDOW_MINUTES;
+            clickBuckets[currentBucketIndex] = 0; // clear expired bucket
+            deduplicationFilters[currentBucketIndex] = BloomFilter.create(
+                Funnels.stringFunnel(), BLOOM_FILTER_BITS, BLOOM_FALSE_POSITIVE_RATE
+            );
+        }
+        currentWindowMinute = nowMinute;
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-ad-click-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why partition Kafka clicks by ad_id rather than using random round-robin partitioning?" data-options='["Round-robin causes uneven partition sizes","Partitioning by ad_id co-locates all clicks for the same ad on one partition — enabling stateful aggregation (maintaining a running count per ad) without cross-partition coordination or network shuffles","ad_id is a UUID which distributes evenly without the clustering problems of user_id","Kafka requires numeric partition keys"]' data-correct="1" data-explanation="Stream aggregation requires all events for the same key to reach the same Flink operator instance. If clicks for ad_X are scattered across 100 partitions, you'd need a global reduce — expensive and slow. Partitioning by ad_id ensures locality: one Flink operator owns all clicks for a given ad." style="display:none"></div>
+          <div data-question="A Bloom filter for click deduplication may return a false positive. What does this mean in practice?" data-options='["A duplicate click is incorrectly counted (worst case)","A genuine new click is incorrectly identified as a duplicate and not counted — slightly under-counting clicks. This is acceptable for real-time dashboards but not for billing, which uses exact batch counts.","The Bloom filter crashes with an out-of-memory error","A Bloom filter never returns false positives by definition"]' data-correct="1" data-explanation="Bloom filters have no false negatives (a true duplicate is always caught) but can have false positives (a genuine click incorrectly flagged as duplicate). At 0.1% rate with 10B clicks/day = 10M missed genuine clicks — about 0.1% undercounting. Acceptable for analytics; for billing, use exact batch processing." style="display:none"></div>
+          <div data-question="What is the difference between a tumbling window and a sliding window in stream processing?" data-options='["Tumbling windows are real-time; sliding windows are batch","Tumbling windows are non-overlapping (00:00-01:00, 01:00-02:00); sliding windows overlap and advance continuously ('last 5 minutes' updates every second). Tumbling is simpler to implement; sliding gives smoother rolling metrics.","Tumbling windows are only supported in Kafka; sliding only in Flink","They are the same concept with different names"]' data-correct="1" data-explanation="Tumbling: fixed, non-overlapping buckets. Simple aggregation: each event belongs to exactly one window. Sliding: overlapping windows that move continuously. An event can belong to multiple windows. Use tumbling for 'clicks per minute'; use sliding for 'clicks in the last 5 minutes' that updates smoothly." style="display:none"></div>
+          <div data-question="Why does the ad click system use both a stream pipeline and a batch pipeline (Lambda architecture)?" data-options='["Batch pipelines are required by ad industry regulations","Stream processing is fast (~1 min latency) but slightly inaccurate (Bloom filter deduplication, late events). Batch processing is accurate but slow (~hours). Lambda architecture uses stream for real-time dashboards and batch for billing — getting both speed and accuracy, at the cost of operational complexity.","The stream pipeline only handles mobile clicks; batch handles desktop","A single pipeline cannot handle 10B clicks/day"]' data-correct="1" data-explanation="This is the fundamental Lambda architecture trade-off: speed vs accuracy. Stream = fast, approximate (good for monitoring, real-time bidding decisions). Batch = slow, exact (required for billing advertisers — charging $100.10 instead of $100.00 due to stream overcounting would be a serious issue)." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="task-scheduler.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Task Scheduler →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="stock-exchange.html" class="btn btn--outline">← Stock Exchange</a>
+        <a href="task-scheduler.html" class="btn btn--primary">Next: Task Scheduler →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

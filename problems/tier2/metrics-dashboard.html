@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Metrics Dashboard like Datadog — RESHADED walkthrough covering time-series storage, metric ingestion, cardinality problems, and alerting engine for MAANG interviews.">
+  <title>Design Metrics Dashboard (Datadog) — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-metrics" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=metrics" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Observability</span>
+        </div>
+        <h1 class="module-header__title">Design Metrics Dashboard (Datadog)</h1>
+        <p class="module-header__desc">Metrics systems have a specific storage problem called the cardinality explosion: adding even one high-cardinality tag (like user_id) can increase storage by 1,000×. Understanding why, and how to mitigate it, is the signal the interviewer is looking for.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Datadog, Prometheus, New Relic</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Time-series at scale</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Ingest metrics: metric_name, tags (key:value pairs), timestamp, value</li>
+            <li>Query: time-range aggregations (avg, sum, p99) by metric + tag filters</li>
+            <li>Dashboard: visualize metrics as line/bar charts</li>
+            <li>Alerting: trigger alert when metric crosses threshold for N minutes</li>
+            <li>Downsampling: roll up high-resolution data to lower resolution over time</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 1M metrics/sec ingestion; 10B data points/day</li>
+            <li><strong>Query latency:</strong> &lt;1s for dashboard queries over last 24h</li>
+            <li><strong>Retention:</strong> Raw (1s) for 7 days; 1-min aggregates for 1 year; 1-hour for 5 years</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>1M metrics/sec × 16 bytes per data point = 16MB/sec = 1.4TB/day raw</li>
+            <li>After 7-day raw retention + rollup: 1.4TB × 7 + (1-min aggregate: 1.4TB/60 × 365) + (1-hour: ~250GB × 5) = ~15TB total</li>
+            <li>Compression (Gorilla XOR encoding): ~10× ratio → 1.5TB actual storage</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Time-series data (column-oriented storage — ClickHouse or custom like Gorilla)
+// Each unique (metric_name, tag_set) combination = one time series
+metric_data:
+    metric_name  VARCHAR(200),    -- "http.request.latency"
+    tags         MAP&lt;STRING, STRING&gt;, -- {service: "auth", region: "us-east"}
+    timestamp    UINT32,          -- Unix epoch seconds (not ms — saves 50% space)
+    value        DOUBLE,
+
+// Series index (Inverted index — for tag-based queries)
+// "Find all series for service=auth" → lookup tag index → get series IDs
+tag_index: tag_key, tag_value → [series_id_1, series_id_2, ...]</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Metric Agent:</strong> Runs on each monitored host. Collects system/app metrics every 10s. Sends to Kafka in batch.</li>
+            <li><strong>Ingestion Service:</strong> Consumes Kafka. Assigns series IDs. Writes to write buffer (in-memory, 2h). Flushes to SSD in compressed blocks (Gorilla format).</li>
+            <li><strong>Time-Series Store (TSDB):</strong> Hot data in SSD (last 7 days), warm in HDD, cold in S3. Read path: merge SSD + in-memory buffer.</li>
+            <li><strong>Query Engine:</strong> Parses PromQL-like queries. Resolves tag filters to series IDs via inverted index. Fetches and merges time series data. Aggregates per time bucket.</li>
+            <li><strong>Alerting Engine:</strong> Evaluates alert rules every 60s. Checks if metric crosses threshold for configured duration. Triggers PagerDuty/Slack on alert fire.</li>
+            <li><strong>Downsampling Job:</strong> Runs every hour. Aggregates 1s data to 1-min buckets. Runs nightly for 1-min to 1-hour rollup.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/metrics/ingest          // batch metric ingestion from agents
+  Body: [{ metricName, tags, timestamp, value }, ...]
+
+GET  /v1/metrics/query
+  ?query=avg(http.request.latency{service=auth})&from=now-1h&to=now&step=1m
+
+POST /v1/alerts
+  Body: { name, query, condition: "value > 500", for: "5m", severity }
+GET  /v1/alerts                  // list active alerts</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Cardinality Problem + Gorilla Compression<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Cardinality explosion:</strong> Metric http.request.latency with tags {service, region} = 10 services × 5 regions = 50 unique time series. Add tag {user_id} with 10M users = 500M time series. Storage × 10,000,000. This is cardinality explosion.</p>
+          <p><strong>Mitigation:</strong> Never use high-cardinality tags (user_id, request_id, trace_id) in metrics. Use histograms/percentiles for distribution. Use logs/traces for per-request data.</p>
+          <p><strong>Gorilla compression (Facebook's TSDB):</strong></p>
+          <ul>
+            <li><strong>Timestamp delta-delta encoding:</strong> Store timestamp differences (deltas), then differences of differences. Regular 10s intervals → delta = 10, delta-delta = 0. Encodes to ~1.5 bits per timestamp vs 4 bytes uncompressed.</li>
+            <li><strong>Value XOR encoding:</strong> XOR consecutive doubles. If value changes little (e.g., CPU% 45.1, 45.3, 44.9), the XOR has many leading zeros. Use variable-length encoding: XOR=0 (1 bit), XOR changes only trailing bits (shorter code), full XOR (worst case).</li>
+            <li><strong>Result:</strong> ~10× compression. 1.4TB/day → 140GB/day.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Alert evaluation latency:</strong> Evaluating 1M alert rules every 60s = 1M queries/min on TSDB. Pre-compute common aggregations; evaluate alert rules from pre-aggregated data, not raw.</li>
+            <li><strong>Stale metrics:</strong> If an agent stops sending (host dies), the last data point should not project forward. TSDB should mark series as stale after missing N intervals.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a metrics system handling 1M metrics/sec. Key decisions: Kafka for ingestion buffering, Gorilla compression for 10× storage reduction, inverted tag index for fast series lookup, tiered storage (SSD→HDD→S3) for retention, and downsampling jobs for long-term rollup.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Storage format</td><td>Column-oriented (Gorilla blocks)</td><td>Row-oriented (RDBMS)</td><td>Time-series queries access one column (value) across many rows (time). Column store reads only the value column — 10× less I/O than row store.</td></tr>
+              <tr><td>Timestamp compression</td><td>Delta-delta encoding</td><td>Raw 4-byte timestamps</td><td>Metrics arrive at regular intervals; delta-delta of a constant interval = 0, encodes to 1–2 bits instead of 32 bits.</td></tr>
+              <tr><td>Retention strategy</td><td>Tiered (raw→1min→1hr rollup)</td><td>Keep raw data forever</td><td>Raw 1s data for 5 years = 250TB. Downsampled data captures trends at 100× compression. Use raw only for short-term (7 days) debugging.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TimeSeriesStore — Gorilla-style delta-delta encoding for timestamps
+ * and XOR encoding for double values.
+ * Stores a single time series as a compact byte sequence.
+ */
+public class TimeSeriesStore {
+
+    private final List&lt;Long&gt; timestamps = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; values = new ArrayList&lt;&gt;();
+
+    // For delta-delta encoding
+    private long previousTimestamp = 0;
+    private long previousDelta = 0;
+
+    // For XOR encoding
+    private long previousValueBits = 0;
+
+    /**
+     * Appends a data point to the time series.
+     * In a real implementation, this would write compressed bits to a buffer.
+     * Here we compute the compression metrics to illustrate the algorithm.
+     */
+    public void append(long timestamp, double value) {
+        long delta = timestamp - previousTimestamp;
+        long deltaOfDelta = delta - previousDelta;
+
+        // Delta-delta encoding: small changes encode in few bits
+        // deltaOfDelta == 0: encode as 1 bit (regular interval, the common case)
+        // deltaOfDelta in [-64, 64]: 7 bits
+        // deltaOfDelta in [-512, 512]: 9 bits
+        // Otherwise: full 64 bits
+        int timestampBitsUsed = estimateTimestampBits(deltaOfDelta);
+
+        // XOR encoding for value
+        long currentValueBits = Double.doubleToLongBits(value);
+        long xorValue = currentValueBits ^ previousValueBits;
+        int valueBitsUsed = estimateValueBits(xorValue);
+
+        timestamps.add(timestamp);
+        values.add(value);
+
+        previousTimestamp = timestamp;
+        previousDelta = delta;
+        previousValueBits = currentValueBits;
+    }
+
+    private int estimateTimestampBits(long deltaOfDelta) {
+        if (deltaOfDelta == 0) return 1;
+        if (deltaOfDelta &gt;= -64 && deltaOfDelta &lt;= 63) return 7;
+        if (deltaOfDelta &gt;= -512 && deltaOfDelta &lt;= 511) return 9;
+        if (deltaOfDelta &gt;= -65536 && deltaOfDelta &lt;= 65535) return 12;
+        return 64;
+    }
+
+    private int estimateValueBits(long xorValue) {
+        if (xorValue == 0) return 1; // identical value — just flag bit
+        // Count leading and trailing zeros to find meaningful bits
+        int leadingZeros = Long.numberOfLeadingZeros(xorValue);
+        int trailingZeros = Long.numberOfTrailingZeros(xorValue);
+        int meaningfulBits = 64 - leadingZeros - trailingZeros;
+        return 1 + 5 + 6 + meaningfulBits; // flag + leading_zeros_count + length + bits
+    }
+
+    /**
+     * Returns the theoretical compression ratio compared to storing raw values.
+     * Raw: 8 bytes timestamp + 8 bytes value = 16 bytes per point.
+     */
+    public double getCompressionRatio() {
+        if (timestamps.isEmpty()) return 1.0;
+        int rawBits = timestamps.size() * 128; // 16 bytes × 8 bits
+
+        int compressedBits = 0;
+        long prevTs = 0;
+        long prevDelta = 0;
+        long prevValBits = 0;
+        for (int i = 0; i &lt; timestamps.size(); i++) {
+            long ts = timestamps.get(i);
+            long delta = ts - prevTs;
+            compressedBits += estimateTimestampBits(delta - prevDelta);
+            long valBits = Double.doubleToLongBits(values.get(i));
+            compressedBits += estimateValueBits(valBits ^ prevValBits);
+            prevTs = ts;
+            prevDelta = delta;
+            prevValBits = valBits;
+        }
+        return (double) rawBits / compressedBits;
+    }
+
+    public int getDataPointCount() { return timestamps.size(); }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-metrics-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A developer adds tag user_id to an HTTP latency metric. How does this affect the TSDB?" data-options='["The query becomes faster because data is more granular","user_id has millions of unique values. Each unique (metric, tag_set) is a separate time series. Adding user_id explodes cardinality from ~50 series to millions of series — potentially exhausting RAM for the series index and making query performance degrade dramatically.","Tags are stored separately from values so storage is not affected","user_id is automatically hashed to reduce cardinality"]' data-correct="1" data-explanation="This is cardinality explosion. http.latency{service=auth, user_id=u123} is a distinct series from http.latency{service=auth, user_id=u456}. With 10M users × 10 services × 5 regions = 500M series. At 1KB metadata per series = 500GB just for the series index. This is why 'never use request_id or user_id as metric tags' is a cardinal rule." style="display:none"></div>
+          <div data-question="Why is column-oriented storage (ClickHouse, Gorilla) preferred over row-oriented (PostgreSQL) for time-series metrics?" data-options='["Column stores have faster inserts","Time-series queries access one dimension (value) across millions of rows (timestamps). Column stores co-locate all values together — one disk read fetches all values for a time range. Row stores co-locate all fields for one timestamp — to get values only, you read all fields unnecessarily.","PostgreSQL cannot store double-precision values","Column stores support more concurrent queries"]' data-correct="1" data-explanation="Classic OLAP vs OLTP storage pattern. For 'SELECT value FROM metrics WHERE time BETWEEN X AND Y': column store reads only the value column (1/N of the data). Row store reads every row including timestamp, tags, and other fields. At 10B data points, this difference is enormous — orders of magnitude I/O reduction." style="display:none"></div>
+          <div data-question="Gorilla delta-delta encoding achieves ~1-2 bits per timestamp instead of 32 bits. Why?" data-options='["Gorilla rounds timestamps to the nearest second","Metrics typically arrive at regular intervals (every 10 seconds). The delta between consecutive timestamps is constant (10). The delta-of-delta = 0. Gorilla encodes delta-of-delta=0 as a single bit — 32× compression for regular-interval metrics.","Gorilla only supports timestamps up to 2023","Delta encoding requires integer timestamps which are smaller than floating point"]' data-correct="1" data-explanation="The insight: if metrics arrive every 10s, delta = 10 always. Delta-of-delta = 10-10 = 0. Gorilla encodes 0 as one bit (a control bit). Only when the arrival time is irregular (late packet, clock drift) do you need more bits. Regular metrics (the common case) compress to ~1 bit. This is the key to Gorilla's ~10× compression ratio." style="display:none"></div>
+          <div data-question="The alerting engine must evaluate 1 million alert rules every 60 seconds. What strategy handles this at scale?" data-options='["Run all 1M queries sequentially on the raw TSDB — modern hardware is fast enough","Pre-aggregate common metrics into 1-minute rollup buckets. Alert rules evaluate against pre-aggregated data (fast index scan) rather than raw 1-second data. Partition alert rules across multiple evaluator nodes — each node handles a subset.","Evaluate alerts lazily only when a user views their dashboard","Use a separate Elasticsearch cluster just for alert evaluation"]' data-correct="1" data-explanation="1M complex queries/min on raw TSDB is infeasible. Solutions: (1) Pre-aggregate at write time — alert rules on avg/p99 evaluate against already-computed values. (2) Shard alert evaluation — 100 evaluator nodes × 10K rules each = manageable. (3) Query caching — if 10K rules query the same metric, evaluate once and fanout the result." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="leaderboard.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Leaderboard →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="google-docs.html" class="btn btn--outline">← Google Docs</a>
+        <a href="leaderboard.html" class="btn btn--primary">Next: Leaderboard →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Distributed Cache like Memcached or Redis — RESHADED walkthrough covering consistent hashing with virtual nodes, LRU eviction, and horizontal scaling for MAANG interviews.">
+  <title>Design a Distributed Cache — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/distributed-cache/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-distributed-cache" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=distributed-cache" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Algorithms-heavy</span>
+        </div>
+        <h1 class="module-header__title">Design a Distributed Cache (like Memcached/Redis)</h1>
+        <p class="module-header__desc">This problem tests one core algorithm interviewers care about deeply: consistent hashing. Naive modulo hashing remaps 100% of keys when you add a node. Consistent hashing remaps only K/N keys. Know this cold.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Amazon, Meta, Google</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> &lt;1ms p99</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><code>put(key, value, ttl)</code> — store value with optional TTL</li>
+            <li><code>get(key)</code> — retrieve value, return null on miss or expired</li>
+            <li><code>delete(key)</code> — explicitly remove a key</li>
+            <li>Auto-eviction when cache node is full (LRU)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> &lt; 1ms p99 for get and put operations</li>
+            <li><strong>Availability:</strong> 99.99% — cache is in the hot path of most requests</li>
+            <li><strong>Scale:</strong> 10TB total cache storage, 1M QPS</li>
+            <li><strong>Horizontal scaling:</strong> Adding a node should not require rehashing all existing keys</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Storage:</strong> 10TB / 1KB avg value = 10B entries</li>
+            <li><strong>Node count:</strong> 10TB / 100GB RAM per node = <strong>100 nodes</strong></li>
+            <li><strong>QPS per node:</strong> 1M / 100 = 10,000 QPS/node — well within in-memory hashtable capacity</li>
+            <li><strong>Network:</strong> 1M × 1KB = 1GB/s peak bandwidth — need 10Gbps NICs</li>
+            <li><strong>Consistent hash ring size:</strong> Use 150 virtual nodes per physical node → 15,000 ring points for 100 nodes — excellent key distribution</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// No traditional schema — distributed cache is a key-value store.
+
+// Key constraints:
+// - Key: string, max 250 bytes
+// - Value: bytes, max 1MB
+// - TTL: long (seconds), 0 = no expiry
+
+// Internal node data structure:
+// CacheEntry { key, value, expiryMs (Long, nullable), prev, next (for LRU list) }
+
+// Node topology — stored in ZooKeeper / etcd:
+// /cache/nodes/{nodeId} = { "ip": "10.0.1.5", "port": 11211, "capacity": 107374182400 }
+
+// Consistent hash ring — maintained in client library:
+// TreeMap<Integer, CacheNode>  (hash_point → node)
+// Each physical node has 150 virtual nodes: hash("node_id#1") ... hash("node_id#150")
+
+// Client routing (client-side, no proxy):
+// 1. Hash the key → ring position
+// 2. TreeMap.ceilingKey(hash) → nearest node clockwise
+// 3. Send get/put directly to that node IP:port</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Components</h3>
+          <ul>
+            <li><strong>Client Library:</strong> Embedded in every application server. Maintains a copy of the ring topology. Routes requests directly to the correct cache node — no proxy hop.</li>
+            <li><strong>Cache Nodes:</strong> Stateless in terms of routing — each node only stores its own key space. In-memory hashmap + LRU doubly-linked list per node.</li>
+            <li><strong>Config Service (ZooKeeper):</strong> Source of truth for node membership. Client library watches ZooKeeper for topology changes (node added/removed) and updates its ring.</li>
+          </ul>
+
+          <h3>Why Client-Side Routing?</h3>
+          <p>A proxy (like Twemproxy) adds an extra network hop — doubles latency. Client-side routing keeps it at one hop: client → cache node. The cost: every client must maintain ring state (a TreeMap of ~15,000 entries = ~1MB per client).</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Client API (used by application code):
+interface DistributedCache {
+    void put(String key, byte[] value, long ttlSeconds);
+    byte[] get(String key);         // returns null on miss or expiry
+    void delete(String key);
+    boolean exists(String key);
+}
+
+// Internal node protocol (binary protocol over TCP — like Memcached):
+// GET {key}\r\n          → VALUE {key} {flags} {bytes}\r\n{data}\r\nEND\r\n
+// SET {key} {ttl} {bytes}\r\n{data}\r\n → STORED\r\n  (or NOT_STORED on error)
+// DELETE {key}\r\n       → DELETED\r\n  (or NOT_FOUND)
+
+// Admin API (internal only):
+// GET /admin/stats  → { "hitRate": 0.94, "memUsedBytes": 85899345920, "keyCount": 8500000 }
+// POST /admin/flush → clears entire node (emergency use only)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Consistent Hashing with Virtual Nodes
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Why Not Simple Modulo Hashing?</h3>
+          <p><code>hash(key) % numNodes</code> — when you add a node, <code>numNodes</code> changes → almost every key remaps to a different node. A cache with 100 nodes adding 1 new node would invalidate ~99% of cached keys. Catastrophic for a cache.</p>
+
+          <h3>Consistent Hashing</h3>
+          <p>Imagine a ring of 2³² hash values (0 to ~4 billion). Each node maps to one or more points on the ring (virtual nodes). To find the node for a key: hash the key → find the nearest node clockwise on the ring. When you add a node, only the keys between the new node and its predecessor move. That's K/N keys (where K = total keys, N = nodes), or ~1% when adding the 101st node.</p>
+
+          <h3>Virtual Nodes for Balance</h3>
+          <p>Without virtual nodes, real nodes cluster unevenly on the ring. With 150 virtual nodes per physical node, the load distribution is near-uniform (within 5% per node).</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Node failure:</strong> If a node goes down, its keys become cache misses. Clients fall through to the database (cache is a performance optimization, not a source of truth). Replication (write to 2 nodes) reduces miss rate but doubles write cost.</li>
+            <li><strong>Hot keys:</strong> A single key (e.g., a viral post) could overload one node. Solution: client-side replication for hot keys — write to N nodes, read from any. Or prefix-sharding: store the hot key as key#1, key#2, ... and round-robin reads.</li>
+            <li><strong>LRU correctness:</strong> Each node runs its own LRU independently. Eviction is per-node, not global. This is correct — there's no cross-node LRU needed.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"We use consistent hashing with 150 virtual nodes per physical node to distribute keys evenly across 100 cache nodes. Adding a node remaps only ~1% of keys instead of ~99%. Each node stores its key space in an LRU cache (ConcurrentHashMap + doubly-linked list). Client-side routing eliminates proxy hops. Node topology is managed by ZooKeeper and watched by client libraries for real-time ring updates."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Key Distribution</td>
+                <td>Modulo hashing</td>
+                <td>Consistent hashing with virtual nodes</td>
+                <td><strong>Consistent hashing</strong> — only K/N keys move on node add/remove</td>
+              </tr>
+              <tr>
+                <td>Routing</td>
+                <td>Proxy (Twemproxy)</td>
+                <td>Client-side library</td>
+                <td><strong>Client-side</strong> — saves one network hop; proxy is a SPOF and adds latency</td>
+              </tr>
+              <tr>
+                <td>Consistency</td>
+                <td>Strong (synchronous replication)</td>
+                <td>Eventual (async replication)</td>
+                <td><strong>Eventual</strong> — cache is a perf layer; stale reads are acceptable</td>
+              </tr>
+              <tr>
+                <td>Eviction Policy</td>
+                <td>LRU (Least Recently Used)</td>
+                <td>LFU (Least Frequently Used)</td>
+                <td><strong>LRU</strong> — simpler, most cache workloads are recency-biased; LFU better for skewed access patterns</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ConsistentHashRouter — maps cache keys to cache nodes using a virtual node ring.
+ * Uses MD5 hashing for good distribution. TreeMap provides O(log n) key lookup.
+ */
+public class ConsistentHashRouter {
+    private static final int VIRTUAL_NODES_PER_PHYSICAL_NODE = 150;
+    private final TreeMap<Long, CacheNode> hashRing = new TreeMap<>();
+    private final Map<String, CacheNode> nodesByNodeId = new HashMap<>();
+
+    /**
+     * Adds a physical cache node to the ring with VIRTUAL_NODES_PER_PHYSICAL_NODE virtual points.
+     *
+     * @param cacheNode The physical cache node to add
+     */
+    public synchronized void addNode(CacheNode cacheNode) {
+        nodesByNodeId.put(cacheNode.getNodeId(), cacheNode);
+        for (int virtualIndex = 0; virtualIndex < VIRTUAL_NODES_PER_PHYSICAL_NODE; virtualIndex++) {
+            long ringPosition = hashToLong(cacheNode.getNodeId() + "#" + virtualIndex);
+            hashRing.put(ringPosition, cacheNode);
+        }
+    }
+
+    /**
+     * Removes a physical node and all its virtual nodes from the ring.
+     *
+     * @param nodeId The ID of the node to remove
+     */
+    public synchronized void removeNode(String nodeId) {
+        nodesByNodeId.remove(nodeId);
+        for (int virtualIndex = 0; virtualIndex < VIRTUAL_NODES_PER_PHYSICAL_NODE; virtualIndex++) {
+            long ringPosition = hashToLong(nodeId + "#" + virtualIndex);
+            hashRing.remove(ringPosition);
+        }
+    }
+
+    /**
+     * Returns the cache node responsible for the given key.
+     * Finds the nearest node clockwise on the ring.
+     *
+     * @param key The cache key to route
+     * @return The CacheNode that owns this key
+     * @throws IllegalStateException if no nodes are registered
+     */
+    public CacheNode getNodeForKey(String key) {
+        if (hashRing.isEmpty()) {
+            throw new IllegalStateException("No cache nodes registered in the ring");
+        }
+        long keyHash = hashToLong(key);
+        Map.Entry<Long, CacheNode> entry = hashRing.ceilingEntry(keyHash);
+        // Wrap around — if no node clockwise from keyHash, take the first node on the ring
+        if (entry == null) {
+            entry = hashRing.firstEntry();
+        }
+        return entry.getValue();
+    }
+
+    public int getRingSize() { return hashRing.size(); }
+    public int getNodeCount() { return nodesByNodeId.size(); }
+
+    private long hashToLong(String input) {
+        try {
+            MessageDigest md5Digest = MessageDigest.getInstance("MD5");
+            byte[] digestBytes = md5Digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            // Take first 8 bytes of MD5 output → long
+            long hashValue = 0;
+            for (int byteIndex = 0; byteIndex < 8; byteIndex++) {
+                hashValue = (hashValue << 8) | (digestBytes[byteIndex] & 0xFF);
+            }
+            return hashValue;
+        } catch (NoSuchAlgorithmException algorithmException) {
+            throw new RuntimeException("MD5 not available", algorithmException);
+        }
+    }
+}
+
+/**
+ * LRUCache — per-node in-memory LRU cache using ConcurrentHashMap + doubly-linked list.
+ * Thread-safe for concurrent get/put/delete from multiple client connections.
+ */
+public class LRUCache {
+    private final int maxCapacityBytes;
+    private volatile int currentUsedBytes = 0;
+    private final Map<String, CacheEntry> cacheMap;
+    private final CacheEntry lruHead;  // Dummy head (most recently used side)
+    private final CacheEntry lruTail;  // Dummy tail (least recently used side)
+    private final ReentrantReadWriteLock cacheLock = new ReentrantReadWriteLock();
+
+    public LRUCache(int maxCapacityBytes) {
+        this.maxCapacityBytes = maxCapacityBytes;
+        this.cacheMap = new ConcurrentHashMap<>();
+        this.lruHead = new CacheEntry("__head__", null, 0, Long.MAX_VALUE);
+        this.lruTail = new CacheEntry("__tail__", null, 0, Long.MAX_VALUE);
+        lruHead.next = lruTail;
+        lruTail.prev = lruHead;
+    }
+
+    /**
+     * Returns the cached value for the key, or null if missing or expired.
+     * Moves the accessed entry to the MRU (head) position.
+     */
+    public byte[] get(String key) {
+        cacheLock.writeLock().lock(); // Write lock because we update LRU position
+        try {
+            CacheEntry entry = cacheMap.get(key);
+            if (entry == null) {
+                return null;
+            }
+            if (isExpired(entry)) {
+                removeEntry(entry);
+                return null;
+            }
+            moveToHead(entry); // Mark as most recently used
+            return entry.getValue();
+        } finally {
+            cacheLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Stores a key-value pair with optional TTL.
+     * Evicts LRU entries if capacity is exceeded.
+     */
+    public void put(String key, byte[] value, long ttlSeconds) {
+        cacheLock.writeLock().lock();
+        try {
+            long expiryMs = ttlSeconds > 0
+                    ? System.currentTimeMillis() + ttlSeconds * 1000L
+                    : Long.MAX_VALUE;
+            int entryBytes = key.getBytes(StandardCharsets.UTF_8).length + value.length;
+
+            // Update existing entry
+            CacheEntry existingEntry = cacheMap.get(key);
+            if (existingEntry != null) {
+                currentUsedBytes -= existingEntry.getSizeBytes();
+                existingEntry.setValue(value);
+                existingEntry.setExpiryMs(expiryMs);
+                existingEntry.setSizeBytes(entryBytes);
+                currentUsedBytes += entryBytes;
+                moveToHead(existingEntry);
+                return;
+            }
+
+            // Evict until there's room
+            while (currentUsedBytes + entryBytes > maxCapacityBytes && lruTail.prev != lruHead) {
+                CacheEntry lruEntry = lruTail.prev;
+                removeEntry(lruEntry);
+            }
+
+            CacheEntry newEntry = new CacheEntry(key, value, entryBytes, expiryMs);
+            cacheMap.put(key, newEntry);
+            addToHead(newEntry);
+            currentUsedBytes += entryBytes;
+        } finally {
+            cacheLock.writeLock().unlock();
+        }
+    }
+
+    public void delete(String key) {
+        cacheLock.writeLock().lock();
+        try {
+            CacheEntry entry = cacheMap.get(key);
+            if (entry != null) {
+                removeEntry(entry);
+            }
+        } finally {
+            cacheLock.writeLock().unlock();
+        }
+    }
+
+    public int getKeyCount() { return cacheMap.size(); }
+    public int getCurrentUsedBytes() { return currentUsedBytes; }
+
+    private boolean isExpired(CacheEntry entry) {
+        return System.currentTimeMillis() > entry.getExpiryMs();
+    }
+
+    private void addToHead(CacheEntry entry) {
+        entry.next = lruHead.next;
+        entry.prev = lruHead;
+        lruHead.next.prev = entry;
+        lruHead.next = entry;
+    }
+
+    private void removeFromList(CacheEntry entry) {
+        entry.prev.next = entry.next;
+        entry.next.prev = entry.prev;
+    }
+
+    private void moveToHead(CacheEntry entry) {
+        removeFromList(entry);
+        addToHead(entry);
+    }
+
+    private void removeEntry(CacheEntry entry) {
+        removeFromList(entry);
+        cacheMap.remove(entry.getKey());
+        currentUsedBytes -= entry.getSizeBytes();
+    }
+
+    /**
+     * Internal node for the LRU doubly-linked list.
+     */
+    private static class CacheEntry {
+        private final String key;
+        private byte[] value;
+        private int sizeBytes;
+        private long expiryMs;
+        CacheEntry prev;
+        CacheEntry next;
+
+        CacheEntry(String key, byte[] value, int sizeBytes, long expiryMs) {
+            this.key = key;
+            this.value = value;
+            this.sizeBytes = sizeBytes;
+            this.expiryMs = expiryMs;
+        }
+
+        public String getKey() { return key; }
+        public byte[] getValue() { return value; }
+        public void setValue(byte[] value) { this.value = value; }
+        public int getSizeBytes() { return sizeBytes; }
+        public void setSizeBytes(int sizeBytes) { this.sizeBytes = sizeBytes; }
+        public long getExpiryMs() { return expiryMs; }
+        public void setExpiryMs(long expiryMs) { this.expiryMs = expiryMs; }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-distributed-cache-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">With simple modulo hashing across 10 nodes, if you add an 11th node, approximately what fraction of keys need to be remapped?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">About 10% (1 in 10)</button></li>
+              <li><button class="quiz__option" data-correct="true">About 90% — since hash(key) % 11 produces a different result than hash(key) % 10 for almost every key</button></li>
+              <li><button class="quiz__option" data-correct="false">Exactly 1/11 of keys (about 9%)</button></li>
+              <li><button class="quiz__option" data-correct="false">None — modulo hashing is consistent</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">What problem do virtual nodes solve in consistent hashing?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">They reduce the number of hash collisions</button></li>
+              <li><button class="quiz__option" data-correct="true">Without virtual nodes, physical nodes cluster unevenly on the ring, causing some nodes to handle far more keys than others</button></li>
+              <li><button class="quiz__option" data-correct="false">They prevent a single node from becoming a hotspot for popular keys</button></li>
+              <li><button class="quiz__option" data-correct="false">They allow nodes with more RAM to store more keys</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">Why does the LRU cache implementation use a write lock for get() operations?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Reading from a HashMap requires exclusive access to prevent data corruption</button></li>
+              <li><button class="quiz__option" data-correct="true">get() must move the accessed entry to the head of the LRU list — a structural modification that needs exclusive access</button></li>
+              <li><button class="quiz__option" data-correct="false">Java's ConcurrentHashMap does not support concurrent reads</button></li>
+              <li><button class="quiz__option" data-correct="false">The TTL check modifies the entry's expiry timestamp</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">Why is client-side routing preferred over a proxy for cache request routing?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">A proxy requires more CPU than a client library</button></li>
+              <li><button class="quiz__option" data-correct="false">Client-side routing supports more consistent hashing algorithms</button></li>
+              <li><button class="quiz__option" data-correct="true">Client-side routing eliminates an extra network hop and removes the proxy as a SPOF and latency bottleneck</button></li>
+              <li><button class="quiz__option" data-correct="false">Proxies cannot handle binary protocols</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="rate-limiter.html" class="btn btn--outline">← Rate Limiter</a>
+        <a href="search-autocomplete.html" class="btn btn--primary">Next: Autocomplete →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Live Video Streaming like Twitch — RESHADED walkthrough covering RTMP ingest, HLS delivery, low-latency streaming, and live chat at scale for MAANG interviews.">
+  <title>Design Live Video Streaming (Twitch) — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-live" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=live" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Live media</span>
+        </div>
+        <h1 class="module-header__title">Design Live Video Streaming (Twitch)</h1>
+        <p class="module-header__desc">Live streaming differs from VOD in one key way: content is generated in real-time and must reach viewers within seconds. Standard HLS has 30s latency. Low-Latency HLS (LLHLS) cuts this to 2–3s using smaller segment sizes and push delivery.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Twitch, YouTube Live, Instagram</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📡</span> &lt;5s latency</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Broadcaster streams live video via RTMP from OBS/mobile</li>
+            <li>Viewers watch the live stream at adaptive quality (720p/1080p/4K)</li>
+            <li>Live chat alongside the stream</li>
+            <li>Viewer count display (real-time)</li>
+            <li>Stream recording and VOD playback after stream ends</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> &lt;5s glass-to-glass (broadcaster camera → viewer screen)</li>
+            <li><strong>Scale:</strong> 10M concurrent viewers, 100K concurrent streams</li>
+            <li><strong>Availability:</strong> 99.99% — stream drops are catastrophic for viewer retention</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>100K streams × 4 Mbps ingest = 400 Gbps ingest bandwidth</li>
+            <li>10M concurrent viewers × 2.5 Mbps avg = 25 Tbps egress → CDN essential</li>
+            <li>Transcoding: 100K streams × 3 quality tiers = 300K concurrent encode jobs → GPU cluster</li>
+            <li>Chat: 10M concurrent users in chat; avg 100 msg/min per channel → 1B msg/min at peak → Kafka fan-out essential</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">streams: stream_id, user_id, title, is_live, viewer_count,
+         rtmp_ingest_url, hls_playlist_url, started_at
+
+// Segments stored in object storage (S3) with short TTL for live, long TTL for VOD
+// Key: streams/{streamId}/{quality}/{segmentNumber}.ts
+// Manifest: streams/{streamId}/{quality}/playlist.m3u8 (updated every 2s)
+
+// Chat messages (Redis for live; Cassandra for history)
+// Redis list per channel: LPUSH + LTRIM to keep last 100 messages
+// Cassandra for full history with partition by stream_id</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>RTMP Ingest Servers:</strong> Broadcaster connects via RTMP. Ingest server receives raw video stream. RTMP is TCP-based, reliable, &lt;1s buffer.</li>
+            <li><strong>Transcoding Farm:</strong> Ingest server sends raw stream to transcoding cluster. FFmpeg/GPU-based real-time encoding to 360p/720p/1080p simultaneously. Outputs HLS segments every 2s.</li>
+            <li><strong>Segment Storage:</strong> Segments written to S3 as they complete. Manifest file (playlist.m3u8) updated every 2s with new segment URL.</li>
+            <li><strong>CDN:</strong> Viewers fetch manifest + segments from CDN edge. Edge pulls from origin (S3) on first request, caches subsequent. Live segments have 5s TTL (just long enough to cache but not stale).</li>
+            <li><strong>Chat:</strong> WebSocket connections to chat servers. Redis Pub/Sub for cross-server fan-out (same as Slack design). Messages persisted to Cassandra.</li>
+            <li><strong>Viewer Count:</strong> Increment Redis counter on viewer connect; decrement on disconnect. Broadcast updated count via WebSocket every 5s.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/streams/start              // broadcaster starts stream → returns RTMP ingest URL
+POST /v1/streams/{streamId}/end     // end stream
+GET  /v1/streams/{streamId}/watch   // returns HLS manifest URL + chat WebSocket URL
+GET  /v1/streams/live?category={}&limit=20  // discover live streams
+// WebSocket /ws/chat/{streamId}   // real-time chat</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Low-Latency HLS (LLHLS)<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Standard HLS latency:</strong> 6 segments × 5s each = 30s latency from broadcast to viewer.</p>
+          <p><strong>Low-Latency HLS (Apple LLHLS, RFC 8216 extension):</strong></p>
+          <ul>
+            <li>Segment size reduced to 2s (was 5–10s)</li>
+            <li>Partial segments: CDN pushes partial segment data as it's being written (every 200ms). Client can start playing before the full 2s segment is complete.</li>
+            <li>Playlist update push: CDN uses HTTP/2 server push or long-poll to notify client of new playlist version — no client polling delay.</li>
+          </ul>
+          <p><strong>Result:</strong> 2–3s glass-to-glass latency vs 30s for standard HLS.</p>
+          <p><strong>Trade-off:</strong> Smaller segments = more S3 write operations (1 per 2s per quality = 1.5 writes/sec per stream × 3 qualities × 100K streams = 450K writes/sec on S3).</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Transcoding bottleneck:</strong> Real-time transcoding requires GPU acceleration. A GPU can transcode ~10 streams simultaneously at 1080p. 100K streams need 10K GPUs — expensive. Twitch uses custom ASIC encoders for cost efficiency.</li>
+            <li><strong>CDN cache for live:</strong> Live segments have very short TTL (live content changes every 2s). CDN hit rate is lower for live vs VOD — many viewers will hit origin. Use CDN with push model (transcoder pushes segments to CDN proactively) rather than pull-on-miss.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a live streaming system handling 10M concurrent viewers. Key decisions: RTMP ingest → real-time GPU transcoding → LLHLS (2s segments) → CDN push model for low latency, Redis Pub/Sub for live chat routing, and Redis counters for real-time viewer counts.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Ingest protocol</td><td>RTMP</td><td>WebRTC</td><td>RTMP: widely supported by broadcast software (OBS, XSplit), TCP-based (reliable). WebRTC: lower latency but complex, no broad OBS support.</td></tr>
+              <tr><td>Delivery protocol</td><td>LLHLS</td><td>WebRTC</td><td>LLHLS: CDN-compatible, scales to millions via HTTP infrastructure. WebRTC: sub-second latency but requires SFU servers, doesn't scale as cheaply via CDN.</td></tr>
+              <tr><td>CDN model</td><td>Push (transcoder pushes to CDN)</td><td>Pull (CDN fetches on miss)</td><td>Live segments: cache miss on every new segment causes origin spike. Push pre-populates CDN before viewers request — smoother delivery.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * StreamIngestionPipeline — receives transcoded HLS segments,
+ * writes to S3, updates the live manifest, and pushes to CDN.
+ */
+public class StreamIngestionPipeline {
+    private final S3Client s3Client;
+    private final CdnPushClient cdnPushClient;
+    private final String bucketName;
+    private static final int MANIFEST_MAX_SEGMENTS = 6; // keep last 6 segments in live manifest
+
+    public StreamIngestionPipeline(S3Client s3Client, CdnPushClient cdnPushClient, String bucketName) {
+        this.s3Client = s3Client;
+        this.cdnPushClient = cdnPushClient;
+        this.bucketName = bucketName;
+    }
+
+    /**
+     * Called by the transcoder when a new 2-second segment is ready.
+     * Writes segment to S3, updates manifest, pushes both to CDN.
+     *
+     * @param streamId       unique stream identifier
+     * @param qualityLabel   e.g. "1080p", "720p", "360p"
+     * @param segmentNumber  monotonically increasing segment sequence number
+     * @param segmentData    raw .ts segment bytes
+     */
+    public void ingestSegment(String streamId, String qualityLabel, int segmentNumber, byte[] segmentData) {
+        String segmentKey = buildSegmentKey(streamId, qualityLabel, segmentNumber);
+        uploadSegmentToS3(segmentKey, segmentData);
+
+        String manifestContent = buildLiveManifest(streamId, qualityLabel, segmentNumber);
+        String manifestKey = buildManifestKey(streamId, qualityLabel);
+        uploadManifestToS3(manifestKey, manifestContent);
+
+        // Push to CDN proactively (push model — don't wait for viewer request)
+        cdnPushClient.pushFile(segmentKey, segmentData);
+        cdnPushClient.pushFile(manifestKey, manifestContent.getBytes());
+    }
+
+    /**
+     * Builds an HLS manifest listing the last MANIFEST_MAX_SEGMENTS segments.
+     * Only recent segments are listed — older ones are removed from the live window.
+     */
+    private String buildLiveManifest(String streamId, String qualityLabel, int latestSegmentNumber) {
+        StringBuilder manifest = new StringBuilder();
+        manifest.append("#EXTM3U\n");
+        manifest.append("#EXT-X-VERSION:3\n");
+        manifest.append("#EXT-X-TARGETDURATION:2\n");
+        manifest.append("#EXT-X-MEDIA-SEQUENCE:").append(Math.max(0, latestSegmentNumber - MANIFEST_MAX_SEGMENTS + 1)).append("\n");
+
+        int startSegment = Math.max(0, latestSegmentNumber - MANIFEST_MAX_SEGMENTS + 1);
+        for (int segIndex = startSegment; segIndex &lt;= latestSegmentNumber; segIndex++) {
+            manifest.append("#EXTINF:2.0,\n");
+            manifest.append(buildSegmentKey(streamId, qualityLabel, segIndex)).append("\n");
+        }
+        return manifest.toString();
+    }
+
+    private String buildSegmentKey(String streamId, String qualityLabel, int segmentNumber) {
+        return "streams/" + streamId + "/" + qualityLabel + "/" + segmentNumber + ".ts";
+    }
+
+    private String buildManifestKey(String streamId, String qualityLabel) {
+        return "streams/" + streamId + "/" + qualityLabel + "/playlist.m3u8";
+    }
+
+    private void uploadSegmentToS3(String key, byte[] data) {
+        s3Client.putObject(builder -> builder.bucket(bucketName).key(key).contentType("video/MP2T"),
+                           RequestBody.fromBytes(data));
+    }
+
+    private void uploadManifestToS3(String key, String content) {
+        s3Client.putObject(builder -> builder.bucket(bucketName).key(key)
+                               .contentType("application/vnd.apple.mpegurl")
+                               .cacheControl("max-age=2"),  // short TTL for live content
+                           RequestBody.fromString(content));
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-live-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Standard HLS with 10-second segments has approximately what latency from broadcast to viewer?" data-options='["Under 1 second","About 30 seconds — the player must buffer 3 segments before playing, and each segment takes 10 seconds to fill","About 5 seconds","About 60 seconds"]' data-correct="1" data-explanation="Standard HLS players buffer 3 segments before starting playback for reliable streaming. With 10s segments: 30s latency. Even with 5s segments: 15s latency. LLHLS with 2s segments and partial segment push achieves 2–3s total latency." style="display:none"></div>
+          <div data-question="Why is RTMP preferred over WebRTC for broadcaster ingest at Twitch scale?" data-options='["WebRTC doesn't support video","RTMP is TCP-based (reliable, widely supported by broadcast software like OBS). WebRTC is UDP-based with lower latency but requires complex SFU server infrastructure and isn't natively supported by professional broadcast tools.","RTMP provides lower latency than WebRTC","WebRTC cannot handle video resolutions above 720p"]' data-correct="1" data-explanation="The broadcaster side cares about reliability (no dropped frames) more than latency — a second of extra latency is fine for the broadcaster. RTMP's TCP foundation prevents packet loss at the cost of some latency. For ultra-low latency streaming (like live sports betting), WebRTC ingest is used but requires specialized infrastructure." style="display:none"></div>
+          <div data-question="Why is CDN push preferred over CDN pull for live stream segment delivery?" data-options='["CDN pull is not supported for video content","Live segments are generated every 2 seconds. With pull-on-demand, the first viewer request causes a cache miss to origin — under load this creates an origin spike every 2 seconds per stream. Push pre-populates the CDN as each segment is generated, ensuring the CDN serves the segment immediately when viewers request it.","CDN push provides stronger security guarantees","Pull CDN has a maximum segment count limitation"]' data-correct="1" data-explanation="For VOD, CDN pull works well — content is stable and cache-fills happen once. For live, every segment is brand new every 2 seconds. Pull CDN = cache miss on every segment for the first viewer, creating constant origin load proportional to viewer count. Push eliminates this by pre-warming the CDN proactively." style="display:none"></div>
+          <div data-question="A popular stream suddenly gets 500,000 concurrent viewers. What system components are most at risk of becoming bottlenecks?" data-options='["The RTMP ingest server (broadcaster connection)","The CDN edges (serving viewer requests) and the real-time chat system. CDN scales horizontally but a sudden 10× spike requires edge capacity headroom. Chat fan-out for a 500K-member channel requires efficient pub/sub routing — naive per-user delivery would be 500K messages per chat message.","The transcoding farm (encoding the single stream)","The PostgreSQL database storing stream metadata"]' data-correct="1" data-explanation="The ingest/transcoding is proportional to the number of streams (not viewers) — adding viewers doesn't add transcoding load. The bottlenecks are: (1) CDN edges must serve 500K concurrent video streams, and (2) chat messages must be fan-out to 500K WebSocket connections — requiring efficient pub/sub and enough chat server capacity." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="flash-sale.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Flash Sale →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="task-scheduler.html" class="btn btn--outline">← Task Scheduler</a>
+        <a href="flash-sale.html" class="btn btn--primary">Next: Flash Sale →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

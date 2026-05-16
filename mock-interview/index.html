@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Simulate a real MAANG system design interview with a 45-minute countdown timer, problem selection, and collapsible step-by-step RESHADED guide revealed on demand.">
+  <title>Mock Interview Simulator — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/mock-interview/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/css/main.css">
+  <style>
+    /* ── Mock Interview Page Specific Styles ──────────────────────── */
+    .mock-problem-select {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: var(--space-16) var(--space-6);
+      text-align: center;
+    }
+
+    .mock-problem-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: var(--space-3);
+      text-align: left;
+      margin-top: var(--space-8);
+    }
+
+    .mock-problem-btn {
+      background: var(--color-bg-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      font-weight: var(--font-medium);
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      text-align: left;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .mock-problem-btn:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .mock-problem-btn--selected {
+      border-color: var(--color-primary);
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--color-primary);
+    }
+
+    .mock-problem-btn__tier {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .mock-problem-btn__tier--1 { background: var(--color-tier1); }
+    .mock-problem-btn__tier--2 { background: var(--color-tier2); }
+    .mock-problem-btn__tier--3 { background: var(--color-tier3); }
+
+    .mock-settings {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-6);
+      margin-top: var(--space-8);
+      flex-wrap: wrap;
+    }
+
+    .mock-setting {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      font-size: var(--text-sm);
+      color: var(--color-text-secondary);
+    }
+
+    .mock-setting label {
+      font-weight: var(--font-medium);
+    }
+
+    .mock-setting select {
+      background: var(--color-bg-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      color: var(--color-text-primary);
+      padding: var(--space-2) var(--space-3);
+      font-family: inherit;
+      font-size: var(--text-sm);
+    }
+
+    .mock-interview-wrapper {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - var(--nav-height));
+    }
+
+    .mock-top-bar {
+      background: var(--color-bg-surface);
+      border-bottom: 1px solid var(--color-border);
+      padding: var(--space-3) var(--space-6);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      flex-shrink: 0;
+    }
+
+    .mock-timer-display {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .mock-timer-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      font-weight: var(--font-semibold);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .mock-main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .mock-problem-pane {
+      overflow-y: auto;
+      padding: var(--space-8);
+    }
+
+    .mock-guide-pane {
+      overflow-y: auto;
+      background: var(--color-bg-surface);
+      border-left: 1px solid var(--color-border);
+    }
+
+    .mock-guide-header {
+      padding: var(--space-4) var(--space-5);
+      border-bottom: 1px solid var(--color-border);
+      font-size: var(--text-sm);
+      font-weight: var(--font-bold);
+      color: var(--color-text-secondary);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .mock-controls {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .mock-phase-indicator {
+      display: flex;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    .mock-phase-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--color-border);
+      transition: background var(--transition-fast);
+    }
+
+    .mock-phase-dot--active { background: var(--color-primary); }
+    .mock-phase-dot--done   { background: var(--color-accent-green); }
+
+    .mock-problem-title {
+      font-size: var(--text-2xl);
+      font-weight: var(--font-extrabold);
+      margin-bottom: var(--space-4);
+    }
+
+    .mock-problem-section {
+      margin-bottom: var(--space-6);
+      padding-bottom: var(--space-6);
+      border-bottom: 1px solid var(--color-border-subtle);
+    }
+
+    .mock-problem-section:last-child {
+      border-bottom: none;
+    }
+
+    .mock-problem-section h3 {
+      font-size: var(--text-base);
+      font-weight: var(--font-bold);
+      color: var(--color-text-secondary);
+      margin-bottom: var(--space-3);
+      text-transform: uppercase;
+      font-size: var(--text-xs);
+      letter-spacing: 0.08em;
+    }
+
+    .mock-problem-section ul {
+      list-style: disc;
+      padding-left: var(--space-5);
+      color: var(--color-text-secondary);
+      font-size: var(--text-sm);
+      line-height: var(--leading-relaxed);
+    }
+
+    .mock-problem-section li {
+      margin-bottom: var(--space-2);
+    }
+
+    .mock-problem-notes {
+      width: 100%;
+      min-height: 200px;
+      background: var(--color-bg-elevated);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      color: var(--color-text-primary);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      resize: vertical;
+      line-height: var(--leading-relaxed);
+    }
+
+    .mock-problem-notes:focus {
+      outline: 2px solid var(--color-primary);
+      border-color: transparent;
+    }
+
+    .mock-result-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: var(--z-modal);
+      backdrop-filter: blur(4px);
+    }
+
+    .mock-result-card {
+      background: var(--color-bg-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-2xl);
+      padding: var(--space-10);
+      max-width: 500px;
+      width: 90%;
+      text-align: center;
+    }
+
+    @media (max-width: 768px) {
+      .mock-main {
+        grid-template-columns: 1fr;
+      }
+      .mock-guide-pane {
+        border-left: none;
+        border-top: 1px solid var(--color-border);
+        max-height: 400px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="index.html" class="site-nav__link site-nav__link--active">Mock Interview</a></li>
+        <li><a href="../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../index.html" class="site-nav__cta">← Home</a>
+    </div>
+  </nav>
+
+  <main id="main">
+
+    <!-- Problem Selection Screen -->
+    <div id="js-select-screen">
+      <div class="mock-problem-select">
+        <div class="section__label">Simulate the Real Thing</div>
+        <h1 style="font-size:var(--text-4xl);font-weight:var(--font-extrabold);margin-bottom:var(--space-4)">
+          Mock Interview Simulator
+        </h1>
+        <p style="color:var(--color-text-secondary);max-width:500px;margin:0 auto var(--space-6)">
+          Select a problem. Set your timer. The step-by-step guide is hidden — reveal hints only when you're stuck.
+          Simulate the exact conditions of a 45-minute MAANG interview.
+        </p>
+
+        <div class="insight-box insight-box--info" style="text-align:left;max-width:600px;margin:0 auto var(--space-6)">
+          <div class="insight-box__icon">💡</div>
+          <div class="insight-box__body">
+            <div class="insight-box__title">How to use this simulator</div>
+            <div class="insight-box__text">
+              1. Pick a problem → 2. Start the timer → 3. Design in the notes area → 
+              4. Reveal RESHADED hints only when stuck → 5. After 45 min, compare with the full solution.
+              Do this daily for 2 weeks to build muscle memory.
+            </div>
+          </div>
+        </div>
+
+        <div id="js-problem-grid" class="mock-problem-grid" role="group" aria-label="Select a problem">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="mock-settings">
+          <div class="mock-setting">
+            <label for="js-timer-select">Duration</label>
+            <select id="js-timer-select">
+              <option value="2700">45 minutes (real interview)</option>
+              <option value="1800">30 minutes (fast practice)</option>
+              <option value="900">15 minutes (concept check)</option>
+              <option value="3600">60 minutes (deep dive)</option>
+            </select>
+          </div>
+          <div class="mock-setting">
+            <label for="js-hints-select">Guide mode</label>
+            <select id="js-hints-select">
+              <option value="locked">Locked — reveal hints manually</option>
+              <option value="auto">Auto — hints visible immediately</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:var(--space-8)">
+          <button class="btn btn--primary" id="js-start-btn" type="button" disabled>
+            Start Interview →
+          </button>
+          <p style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted)">
+            Select a problem above to begin
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interview Screen (hidden until start) -->
+    <div id="js-interview-screen" class="mock-interview-wrapper is-hidden">
+      <!-- Top Bar -->
+      <div class="mock-top-bar" role="banner">
+        <div class="mock-timer-display">
+          <div class="mock-timer-label">Time Remaining</div>
+          <div class="mock-timer" id="js-timer" aria-live="polite" aria-label="Time remaining">45:00</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:var(--space-3)">
+          <div class="mock-phase-indicator" id="js-phase-dots" aria-label="Phase progress" role="progressbar">
+            <!-- 8 dots for 8 RESHADED phases -->
+          </div>
+        </div>
+
+        <div class="mock-controls">
+          <button class="btn btn--outline btn--sm" id="js-pause-btn" type="button">Pause</button>
+          <button class="btn btn--outline btn--sm" id="js-end-btn" type="button">End Interview</button>
+        </div>
+      </div>
+
+      <!-- Main Interview Area -->
+      <div class="mock-main">
+        <!-- Problem Pane -->
+        <div class="mock-problem-pane">
+          <div id="js-problem-display"></div>
+
+          <div style="margin-top:var(--space-8)">
+            <h3 style="font-size:var(--text-sm);font-weight:var(--font-bold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-3)">
+              Your Design Notes
+            </h3>
+            <label for="js-notes" class="visually-hidden">Design notes scratchpad</label>
+            <textarea
+              id="js-notes"
+              class="mock-problem-notes"
+              placeholder="Use this area to sketch your design:&#10;&#10;Requirements:&#10;- ...&#10;&#10;Estimation:&#10;- DAU: ...&#10;- QPS: ...&#10;&#10;Schema:&#10;- Table 1: ...&#10;&#10;High-level Design:&#10;[Client] → [LB] → [Service] → [DB]&#10;&#10;APIs:&#10;GET /v1/...&#10;POST /v1/..."
+              aria-label="Design notes scratchpad"
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- Guide Pane -->
+        <div class="mock-guide-pane" id="js-guide-pane" aria-label="RESHADED guide">
+          <div class="mock-guide-header">
+            <span aria-hidden="true">🗺️</span>
+            RESHADED Guide
+            <span id="js-guide-mode-label" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted);font-weight:var(--font-normal)"></span>
+          </div>
+          <div id="js-guide-sections">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result Overlay (hidden until time up or end) -->
+    <div id="js-result-overlay" class="mock-result-overlay is-hidden" role="dialog" aria-modal="true" aria-labelledby="result-title">
+      <div class="mock-result-card">
+        <div style="font-size:3rem;margin-bottom:var(--space-4)">🎯</div>
+        <h2 id="result-title" style="font-size:var(--text-2xl);margin-bottom:var(--space-2)">Interview Complete!</h2>
+        <p id="js-result-summary" style="color:var(--color-text-secondary);margin-bottom:var(--space-6)"></p>
+
+        <div id="js-result-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin-bottom:var(--space-6)"></div>
+
+        <div style="display:flex;flex-direction:column;gap:var(--space-3)">
+          <a id="js-result-solution-link" href="#" class="btn btn--primary">View Full Solution →</a>
+          <button id="js-result-retry-btn" class="btn btn--outline" type="button">Try Another Problem</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // ── Problem Data ─────────────────────────────────────────────
+    const PROBLEMS = [
+      { id: 'url-shortener', title: 'URL Shortener', tier: 1, url: '../problems/tier1/url-shortener.html',
+        companies: 'Amazon, Google, Meta',
+        functional: ['Shorten long URL to 7-char code', 'Redirect short URL to original', 'Track click analytics', 'Optional expiry and custom aliases'],
+        nonfunctional: ['100M URL shortenings/day', '10B redirects/day', 'Redirect latency < 10ms p99', '99.9% availability'],
+        constraints: ['7-character alphanumeric codes', 'Globally unique codes — no collisions', 'Read:write ratio ~100:1'],
+      },
+      { id: 'twitter-feed', title: 'Twitter Feed', tier: 1, url: '../problems/tier1/twitter-feed.html',
+        companies: 'Meta, Twitter, LinkedIn',
+        functional: ['Post tweets (text + media)', 'View home feed (people you follow)', 'Follow / unfollow users', 'Like and retweet'],
+        nonfunctional: ['300M DAU', '~17,000 feed read QPS', '~175 tweet write QPS', 'Feed load < 200ms p99'],
+        constraints: ['Celebrity problem: some users have 100M+ followers', 'Eventual consistency acceptable for feed', 'Tweets are 280 chars max'],
+      },
+      { id: 'youtube', title: 'YouTube', tier: 1, url: '../problems/tier1/youtube.html',
+        companies: 'Google, Netflix, Meta',
+        functional: ['Upload video (any resolution)', 'Stream video adaptively', 'Search videos by title/tag', 'Like, comment, subscribe'],
+        nonfunctional: ['2B MAU, 500 hrs video uploaded/minute', 'Streaming latency < 2s', '99.99% availability for streaming', '5B video views/day'],
+        constraints: ['Videos must be transcoded to multiple resolutions', 'CDN required for global low-latency delivery', 'Uploads can be interrupted and resumed'],
+      },
+      { id: 'whatsapp', title: 'WhatsApp', tier: 1, url: '../problems/tier1/whatsapp.html',
+        companies: 'Meta, Apple, Google',
+        functional: ['1:1 messaging', 'Group chat up to 1000 members', 'Message delivery receipts (sent/delivered/read)', 'Online presence indicators'],
+        nonfunctional: ['2B users', '100B messages/day', 'End-to-end encrypted', 'Messages persist 7 days for offline users', '< 100ms delivery when online'],
+        constraints: ['Users can be offline for up to 7 days', 'All messages must be end-to-end encrypted', 'WebSocket preferred for real-time delivery'],
+      },
+      { id: 'rate-limiter', title: 'Rate Limiter', tier: 1, url: '../problems/tier1/rate-limiter.html',
+        companies: 'Google, Amazon, Stripe',
+        functional: ['Limit N requests per time window per user/IP/API key', 'Return 429 when limit exceeded', 'Support multiple limit windows (per second AND per day)'],
+        nonfunctional: ['< 1ms added latency per request', '99.9% availability (fail open)', 'Distributed across 50 nodes', '1M active rate limit keys'],
+        constraints: ['No single point of failure', 'Redis-based shared state for distributed accuracy', 'Race condition safety required'],
+      },
+      { id: 'distributed-cache', title: 'Distributed Cache', tier: 1, url: '../problems/tier1/distributed-cache.html',
+        companies: 'Amazon, Meta, Google',
+        functional: ['get(key)', 'put(key, value, ttl)', 'delete(key)'],
+        nonfunctional: ['< 1ms p99 latency', '99.99% availability', '10TB total storage', '1M QPS', 'Horizontal scaling by adding nodes'],
+        constraints: ['Consistent hashing for distribution', 'LRU eviction when full', 'No single point of failure'],
+      },
+      { id: 'search-autocomplete', title: 'Search Autocomplete', tier: 1, url: '../problems/tier1/search-autocomplete.html',
+        companies: 'Google, Amazon, Meta',
+        functional: ['Return top 5 suggestions as user types each character', 'Results ranked by search frequency', 'Update suggestions hourly from analytics'],
+        nonfunctional: ['10M DAU, ~5800 autocomplete QPS', '< 100ms response time', 'Up to 1s stale results acceptable'],
+        constraints: ['Prefix matching only (not fuzzy)', 'Top-K per prefix must be pre-computed', 'Trie partitioned across nodes for scale'],
+      },
+      { id: 'notification', title: 'Notification System', tier: 1, url: '../problems/tier1/notification-system.html',
+        companies: 'Meta, Amazon, Netflix',
+        functional: ['Send push (iOS/Android), email, SMS notifications', 'Scheduled and triggered notifications', 'Track delivery status per notification'],
+        nonfunctional: ['10M notifications/minute peak', '< 5s delivery latency', 'Deduplicate duplicate notifications'],
+        constraints: ['Must handle iOS (APNs) + Android (FCM) + email + SMS', 'Broadcasting to millions needs batch fanout', 'Retry with exponential backoff on gateway failure'],
+      },
+      { id: 'uber', title: 'Uber / Ride Sharing', tier: 1, url: '../problems/tier1/uber.html',
+        companies: 'Google Maps, Lyft, Amazon',
+        functional: ['Match rider to nearest available driver', 'Real-time driver location tracking', 'Fare estimation before trip', 'Trip status tracking'],
+        nonfunctional: ['10M trips/day', 'Driver location updates every 4s', 'Match latency < 3s', '250K location writes/second'],
+        constraints: ['Geospatial nearest-neighbor search at scale', 'Matching must be fair and low-latency', 'WebSocket for real-time location streaming'],
+      },
+      { id: 'web-crawler', title: 'Web Crawler', tier: 1, url: '../problems/tier1/web-crawler.html',
+        companies: 'Google, Bing, Amazon',
+        functional: ['Crawl web from seed URLs', 'Extract and store page content', 'Discover and queue new URLs', 'Respect robots.txt'],
+        nonfunctional: ['Crawl 1B pages/day', '10B URLs total', 'Politeness: respect per-domain rate limits', 'Handle duplicate content'],
+        constraints: ['URL deduplication via Bloom filter', 'Content deduplication via SimHash', 'BFS prioritized crawl order'],
+      },
+      { id: 'pastebin', title: 'Pastebin', tier: 1, url: '../problems/tier1/pastebin.html',
+        companies: 'Amazon, Google',
+        functional: ['Create paste (text/code up to 10MB)', 'Retrieve by short URL', 'Optional expiry and password', 'View count'],
+        nonfunctional: ['5M pastes/day', '50M reads/day (10:1)', '99.9% availability', 'Pastes up to 10MB'],
+        constraints: ['Content stored in S3, metadata in DB', 'Short code uniqueness required', 'CDN for popular pastes'],
+      },
+      { id: 'key-value', title: 'Key-Value Store', tier: 1, url: '../problems/tier1/key-value-store.html',
+        companies: 'Amazon, Google, Meta',
+        functional: ['get(key)', 'put(key, value)', 'delete(key)', 'Configurable consistency level'],
+        nonfunctional: ['1M QPS', '10TB data', '99.999% durability', 'Horizontal scaling'],
+        constraints: ['Consistent hashing for routing', 'Quorum reads/writes (W+R > N)', 'Vector clocks for conflict resolution'],
+      },
+      { id: 'message-queue', title: 'Distributed Message Queue', tier: 1, url: '../problems/tier1/message-queue.html',
+        companies: 'Amazon SQS, Google Pub/Sub',
+        functional: ['Publish messages to topics', 'Consume by consumer group', 'Messages persist 7 days', 'Replay from any offset'],
+        nonfunctional: ['1M msgs/second write throughput', '1TB/day', 'At-least-once delivery', 'Horizontal scaling'],
+        constraints: ['Partition-based for parallelism', 'ISR (In-Sync Replica) for durability', 'Consumer offset tracking per partition'],
+      },
+      { id: 'news-feed', title: 'News Feed', tier: 1, url: '../problems/tier1/news-feed.html',
+        companies: 'Meta, LinkedIn, Twitter',
+        functional: ['View ranked feed of posts from followed users', 'Post text/image/video', 'Like and comment', 'Paginated infinite scroll'],
+        nonfunctional: ['500M DAU', '6000 feed QPS', 'Celebrity problem', 'Ranked (not just chronological)'],
+        constraints: ['Hybrid fanout (push for normal, pull for celebrities)', 'Ranking by recency + engagement + relationship', 'Feed staleness acceptable up to a few seconds'],
+      },
+      { id: 'dropbox', title: 'Dropbox / File Storage', tier: 1, url: '../problems/tier1/dropbox.html',
+        companies: 'Google Drive, Amazon S3',
+        functional: ['Upload files up to 5GB', 'Download files', 'Sync across devices', 'Share files/folders'],
+        nonfunctional: ['500M users', '1B files', '10PB storage', 'Resume interrupted uploads', 'Sync latency < 30s'],
+        constraints: ['File chunking (4MB chunks)', 'Delta sync (only changed chunks)', 'Content-hash deduplication', 'WebSocket or long-polling for sync events'],
+      },
+    ];
+
+    const RESHADED_GUIDE = [
+      { letter: 'R', title: 'Requirements', time: '3–5 min',
+        content: 'Clarify functional (what users do) and non-functional (scale, latency, availability) requirements. Pin a scale number. End with: "To confirm, I\'ll design X for Y users focusing on these flows: [A, B, C]."' },
+      { letter: 'E', title: 'Estimation', time: '3–5 min',
+        content: 'Back-of-envelope: DAU → QPS → storage → bandwidth. Every architecture choice should trace back to a number. Read:write ratio determines caching need.' },
+      { letter: 'S', title: 'Schema / Data Model', time: '3–5 min',
+        content: 'Show 3–5 core entities and relationships. Decide SQL vs NoSQL and justify it. The data model often reveals the hardest design challenges.' },
+      { letter: 'H', title: 'High-level Design', time: '10 min',
+        content: 'Draw boxes (services/stores) and labeled arrows (protocols). Client → LB → API servers → services → data stores. Keep it simple — this is a skeleton, not a masterpiece.' },
+      { letter: 'A', title: 'APIs', time: '5 min',
+        content: 'Define 3–5 critical endpoints: method, path, key request params, response shape. Prove the system is actionable and the schema can support the operations.' },
+      { letter: 'D', title: 'Deep Dive', time: '10 min',
+        content: 'Pick the HARDEST sub-problem. Go to code/pseudocode level. This is where L5/L6 separates from L4. Typical hard problems: celebrity fanout, deduplication at scale, distributed locking, real-time consistency.' },
+      { letter: 'E', title: 'Evaluate', time: '3 min',
+        content: 'Self-evaluate: Where are the SPOFs? What are the bottlenecks? What trade-offs did you accept? Never say the system is perfect — show senior maturity by naming weaknesses.' },
+      { letter: 'D', title: 'Deliver', time: '2 min',
+        content: 'Summarize in 60 seconds: what you built, the primary constraint, the key trade-off you accepted. Then open for questions and show you can adapt.' },
+    ];
+
+    // ── State ────────────────────────────────────────────────────
+    let selectedProblem = null;
+    let isPaused = false;
+    let hintsMode = 'locked';
+    let revealedPhases = new Set();
+
+    // ── DOM References ────────────────────────────────────────────
+    const selectScreenElement  = document.getElementById('js-select-screen');
+    const interviewScreenElement = document.getElementById('js-interview-screen');
+    const resultOverlayElement  = document.getElementById('js-result-overlay');
+    const problemGridElement    = document.getElementById('js-problem-grid');
+    const startButtonElement    = document.getElementById('js-start-btn');
+    const timerDisplayElement   = document.getElementById('js-timer');
+    const pauseButtonElement    = document.getElementById('js-pause-btn');
+    const endButtonElement      = document.getElementById('js-end-btn');
+    const guideSectionsElement  = document.getElementById('js-guide-sections');
+    const problemDisplayElement = document.getElementById('js-problem-display');
+    const guideModeLabelElement = document.getElementById('js-guide-mode-label');
+    const timerSelectElement    = document.getElementById('js-timer-select');
+    const hintsSelectElement    = document.getElementById('js-hints-select');
+
+    // ── Render Problem Grid ───────────────────────────────────────
+    function renderProblemGrid() {
+      PROBLEMS.forEach(problem => {
+        const buttonElement = document.createElement('button');
+        buttonElement.className = 'mock-problem-btn';
+        buttonElement.setAttribute('type', 'button');
+        buttonElement.setAttribute('aria-pressed', 'false');
+        buttonElement.innerHTML = `
+          <span class="mock-problem-btn__tier mock-problem-btn__tier--${problem.tier}" aria-hidden="true"></span>
+          ${problem.title}
+        `;
+        buttonElement.addEventListener('click', () => selectProblem(problem, buttonElement));
+        problemGridElement.appendChild(buttonElement);
+      });
+    }
+
+    function selectProblem(problem, buttonElement) {
+      selectedProblem = problem;
+      document.querySelectorAll('.mock-problem-btn').forEach(buttonEl => {
+        buttonEl.classList.remove('mock-problem-btn--selected');
+        buttonEl.setAttribute('aria-pressed', 'false');
+      });
+      buttonElement.classList.add('mock-problem-btn--selected');
+      buttonElement.setAttribute('aria-pressed', 'true');
+      startButtonElement.disabled = false;
+      startButtonElement.textContent = `Start "${problem.title}" →`;
+    }
+
+    // ── Pre-select from URL query param ──────────────────────────
+    function preselectFromUrl() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const problemIdParam = urlParams.get('problem');
+      if (problemIdParam === null) return;
+      const matchingProblem = PROBLEMS.find(problem => problem.id === problemIdParam);
+      if (matchingProblem === undefined) return;
+      const buttonElements = problemGridElement.querySelectorAll('.mock-problem-btn');
+      const matchingIndex = PROBLEMS.findIndex(problem => problem.id === problemIdParam);
+      if (matchingIndex !== -1 && buttonElements[matchingIndex] !== undefined) {
+        selectProblem(matchingProblem, buttonElements[matchingIndex]);
+      }
+    }
+
+    // ── Start Interview ───────────────────────────────────────────
+    function startInterview() {
+      if (selectedProblem === null) return;
+      hintsMode = hintsSelectElement.value;
+      const durationSeconds = parseInt(timerSelectElement.value, 10);
+
+      selectScreenElement.classList.add('is-hidden');
+      interviewScreenElement.classList.remove('is-hidden');
+
+      renderProblemStatement();
+      renderGuide();
+      renderPhaseDots();
+      guideModeLabelElement.textContent = hintsMode === 'auto' ? 'Hints: visible' : 'Hints: locked';
+
+      MockInterviewTimer.start(durationSeconds, timerDisplayElement, onTimeUp);
+    }
+
+    // ── Render Problem Statement ──────────────────────────────────
+    function renderProblemStatement() {
+      const problem = selectedProblem;
+      problemDisplayElement.innerHTML = `
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4)">
+          <span class="tag tag--green">Tier ${problem.tier}</span>
+          <span style="font-size:var(--text-sm);color:var(--color-text-muted)">${problem.companies}</span>
+        </div>
+        <h1 class="mock-problem-title">Design ${problem.title}</h1>
+        <div class="mock-problem-section">
+          <h3>Functional Requirements</h3>
+          <ul>${problem.functional.map(requirement => `<li>${requirement}</li>`).join('')}</ul>
+        </div>
+        <div class="mock-problem-section">
+          <h3>Non-Functional Requirements</h3>
+          <ul>${problem.nonfunctional.map(requirement => `<li>${requirement}</li>`).join('')}</ul>
+        </div>
+        <div class="mock-problem-section">
+          <h3>Constraints & Clarifications</h3>
+          <ul>${problem.constraints.map(constraint => `<li>${constraint}</li>`).join('')}</ul>
+        </div>
+        <div class="insight-box insight-box--info" style="margin-top:var(--space-4)">
+          <div class="insight-box__icon">💡</div>
+          <div class="insight-box__body">
+            <div class="insight-box__title">Remember</div>
+            <div class="insight-box__text">Follow RESHADED. Use the guide on the right only when stuck. Ask clarifying questions out loud even when alone — it builds the habit.</div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ── Render RESHADED Guide ─────────────────────────────────────
+    function renderGuide() {
+      guideSectionsElement.innerHTML = '';
+      RESHADED_GUIDE.forEach((phaseData, phaseIndex) => {
+        const sectionElement = document.createElement('div');
+        sectionElement.className = 'mock-guide__section';
+        const isLocked = hintsMode === 'locked';
+        sectionElement.dataset.locked = isLocked ? 'true' : 'false';
+        sectionElement.dataset.phaseIndex = phaseIndex;
+
+        const isOpen = !isLocked;
+        sectionElement.innerHTML = `
+          <button class="mock-guide__toggle ${isOpen ? 'mock-guide__toggle--revealed' : ''}"
+                  type="button"
+                  aria-expanded="${isOpen}"
+                  aria-controls="guide-content-${phaseIndex}">
+            <span style="display:flex;align-items:center;gap:var(--space-2)">
+              <span style="font-weight:var(--font-extrabold);color:var(--color-primary);font-size:var(--text-base)">${phaseData.letter}</span>
+              <span>${phaseData.title}</span>
+              <span style="font-size:var(--text-xs);color:var(--color-accent-yellow)">${phaseData.time}</span>
+            </span>
+            <svg class="mock-guide__chevron ${isOpen ? 'mock-guide__chevron--open' : ''}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          ${isLocked ? `<div class="mock-guide__locked" id="guide-locked-${phaseIndex}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+            <span>Click to reveal this phase</span>
+          </div>` : ''}
+          <div class="mock-guide__content ${isOpen ? 'mock-guide__content--open' : ''}"
+               id="guide-content-${phaseIndex}">
+            <p>${phaseData.content}</p>
+          </div>
+        `;
+
+        const toggleButtonElement = sectionElement.querySelector('.mock-guide__toggle');
+        toggleButtonElement.addEventListener('click', () => revealPhase(sectionElement, phaseIndex));
+
+        guideSectionsElement.appendChild(sectionElement);
+      });
+    }
+
+    function revealPhase(sectionElement, phaseIndex) {
+      sectionElement.dataset.locked = 'false';
+      const lockedElement = sectionElement.querySelector('.mock-guide__locked');
+      if (lockedElement !== null) lockedElement.remove();
+
+      const contentElement = sectionElement.querySelector('.mock-guide__content');
+      const toggleButtonElement = sectionElement.querySelector('.mock-guide__toggle');
+      const chevronElement = sectionElement.querySelector('.mock-guide__chevron');
+      const isOpen = contentElement.classList.contains('mock-guide__content--open');
+
+      contentElement.classList.toggle('mock-guide__content--open', !isOpen);
+      toggleButtonElement.classList.toggle('mock-guide__toggle--revealed', !isOpen);
+      toggleButtonElement.setAttribute('aria-expanded', (!isOpen).toString());
+      if (chevronElement !== null) {
+        chevronElement.classList.toggle('mock-guide__chevron--open', !isOpen);
+      }
+
+      revealedPhases.add(phaseIndex);
+      updatePhaseDot(phaseIndex);
+    }
+
+    // ── Phase Dots ────────────────────────────────────────────────
+    function renderPhaseDots() {
+      const phasDotsContainer = document.getElementById('js-phase-dots');
+      phasDotsContainer.innerHTML = '';
+      RESHADED_GUIDE.forEach((_, dotIndex) => {
+        const dotElement = document.createElement('span');
+        dotElement.className = 'mock-phase-dot';
+        dotElement.setAttribute('title', RESHADED_GUIDE[dotIndex].title);
+        phasDotsContainer.appendChild(dotElement);
+      });
+    }
+
+    function updatePhaseDot(phaseIndex) {
+      const phasDotsContainer = document.getElementById('js-phase-dots');
+      const dotElements = phasDotsContainer.querySelectorAll('.mock-phase-dot');
+      if (dotElements[phaseIndex] !== undefined) {
+        dotElements[phaseIndex].classList.add('mock-phase-dot--done');
+      }
+    }
+
+    // ── Timer ─────────────────────────────────────────────────────
+    const MockInterviewTimer = (() => {
+      let intervalId = null;
+      let remainingSeconds = 0;
+      let onComplete = null;
+
+      function pad(numberValue) { return String(numberValue).padStart(2, '0'); }
+
+      function update() {
+        remainingSeconds--;
+        render();
+        if (remainingSeconds <= 0) {
+          clearInterval(intervalId);
+          intervalId = null;
+          if (onComplete !== null) onComplete();
+        }
+      }
+
+      function render() {
+        if (timerDisplayElement === null) return;
+        const minutes = Math.floor(remainingSeconds / 60);
+        const seconds = remainingSeconds % 60;
+        timerDisplayElement.textContent = `${pad(minutes)}:${pad(seconds)}`;
+        timerDisplayElement.className = 'mock-timer';
+        if (remainingSeconds <= 300) timerDisplayElement.classList.add('mock-timer--danger');
+        else if (remainingSeconds <= 600) timerDisplayElement.classList.add('mock-timer--warning');
+      }
+
+      function start(durationSeconds, displayElement, completionCallback) {
+        remainingSeconds = durationSeconds;
+        onComplete = completionCallback;
+        render();
+        intervalId = setInterval(update, 1000);
+      }
+
+      function pause() {
+        if (intervalId !== null) { clearInterval(intervalId); intervalId = null; return true; }
+        return false;
+      }
+
+      function resume() {
+        if (intervalId === null && remainingSeconds > 0) {
+          intervalId = setInterval(update, 1000);
+          return true;
+        }
+        return false;
+      }
+
+      function getRemaining() { return remainingSeconds; }
+
+      return { start, pause, resume, getRemaining };
+    })();
+
+    // ── Event Handlers ────────────────────────────────────────────
+    function handleStartClick() { startInterview(); }
+
+    function handlePauseClick() {
+      if (isPaused) {
+        MockInterviewTimer.resume();
+        pauseButtonElement.textContent = 'Pause';
+        isPaused = false;
+      } else {
+        MockInterviewTimer.pause();
+        pauseButtonElement.textContent = 'Resume';
+        isPaused = true;
+      }
+    }
+
+    function handleEndClick() {
+      MockInterviewTimer.pause();
+      showResult(false);
+    }
+
+    function onTimeUp() { showResult(true); }
+
+    // ── Show Result ───────────────────────────────────────────────
+    function showResult(isTimeUp) {
+      const problem = selectedProblem;
+      const totalSeconds = parseInt(timerSelectElement.value, 10);
+      const usedSeconds = totalSeconds - MockInterviewTimer.getRemaining();
+      const minutesUsed = Math.round(usedSeconds / 60);
+      const phasesRevealed = revealedPhases.size;
+
+      document.getElementById('js-result-summary').textContent = isTimeUp
+        ? `Time's up! You worked for ${minutesUsed} minutes on "${problem.title}".`
+        : `You ended the interview after ${minutesUsed} minutes on "${problem.title}".`;
+
+      document.getElementById('js-result-stats').innerHTML = `
+        <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-4);text-align:center">
+          <div style="font-size:var(--text-2xl);font-weight:var(--font-extrabold);color:var(--color-primary)">${minutesUsed}m</div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-1)">Time used</div>
+        </div>
+        <div style="background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-4);text-align:center">
+          <div style="font-size:var(--text-2xl);font-weight:var(--font-extrabold);color:${phasesRevealed <= 2 ? 'var(--color-accent-green)' : 'var(--color-accent-yellow)'}">${phasesRevealed}/8</div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-1)">Hints revealed</div>
+        </div>
+      `;
+
+      const solutionLinkElement = document.getElementById('js-result-solution-link');
+      solutionLinkElement.href = problem.url;
+      solutionLinkElement.textContent = `View Full Solution for "${problem.title}" →`;
+
+      resultOverlayElement.classList.remove('is-hidden');
+
+      // Save to progress
+      try {
+        const raw = localStorage.getItem('sdcourse_mock_history_v1');
+        const history = raw !== null ? JSON.parse(raw) : [];
+        history.push({ problemId: problem.id, minutesUsed, phasesRevealed, completedAt: Date.now() });
+        localStorage.setItem('sdcourse_mock_history_v1', JSON.stringify(history.slice(-50)));
+      } catch {
+        // Non-critical
+      }
+    }
+
+    function handleRetryClick() {
+      resultOverlayElement.classList.add('is-hidden');
+      interviewScreenElement.classList.add('is-hidden');
+      selectScreenElement.classList.remove('is-hidden');
+      revealedPhases.clear();
+      selectedProblem = null;
+      startButtonElement.disabled = true;
+      startButtonElement.textContent = 'Start Interview →';
+      document.querySelectorAll('.mock-problem-btn').forEach(buttonEl => {
+        buttonEl.classList.remove('mock-problem-btn--selected');
+        buttonEl.setAttribute('aria-pressed', 'false');
+      });
+      document.getElementById('js-notes').value = '';
+    }
+
+    // ── Setup ─────────────────────────────────────────────────────
+    function setupEventListeners() {
+      startButtonElement.addEventListener('click', handleStartClick);
+      pauseButtonElement.addEventListener('click', handlePauseClick);
+      endButtonElement.addEventListener('click', handleEndClick);
+      document.getElementById('js-result-retry-btn').addEventListener('click', handleRetryClick);
+    }
+
+    function init() {
+      renderProblemGrid();
+      setupEventListeners();
+      preselectFromUrl();
+    }
+
+    init();
+  </script>
+
+</body>
+</html>

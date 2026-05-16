@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Instagram — RESHADED walkthrough covering photo upload pipeline, CDN delivery, social feed fanout, and explore page ranking for MAANG interviews.">
+  <title>Design Instagram — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-instagram" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=instagram" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Media heavy</span>
+        </div>
+        <h1 class="module-header__title">Design Instagram</h1>
+        <p class="module-header__desc">Instagram combines two distinct hard problems: media storage/delivery at scale (photos/video) and social graph feed fanout. The celebrity problem (Kylie Jenner has 400M followers) forces a hybrid fanout strategy.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Google, Pinterest</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📸</span> 100M photos/day</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Upload photos and short videos; view posts from followed accounts</li>
+            <li>Like, comment, and share posts</li>
+            <li>Follow/unfollow users; public and private accounts</li>
+            <li>Explore page — content discovery from non-followed accounts</li>
+            <li>Stories — 24-hour expiry content</li>
+            <li>Search users and hashtags</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 1B MAU, 100M photos uploaded/day, 10B feed views/day</li>
+            <li><strong>Latency:</strong> Feed load &lt;500ms; image render &lt;200ms from CDN</li>
+            <li><strong>Availability:</strong> 99.99%; eventual consistency acceptable for feed</li>
+            <li><strong>Storage:</strong> Each photo stored at 3 resolutions; ~1PB new data per year</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>100M photos/day × 3 resolutions avg 200KB each = 60TB/day storage</li>
+            <li>10B feed views/day = 115K read QPS; 100M uploads/day = 1,150 write QPS → 100:1 read/write ratio</li>
+            <li>CDN serves 99% of media reads; origin only sees cache misses</li>
+            <li>Fan-out: avg 500 followers × 1,150 writes/sec = 575K feed writes/sec at peak</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// PostgreSQL — users and social graph
+users: user_id, username, bio, is_private, follower_count, following_count
+follows: follower_id, followee_id, created_at  // INDEX on followee_id for fan-out
+
+// Posts table (PostgreSQL for metadata)
+posts: post_id (Snowflake), user_id, caption, location, created_at
+post_media: media_id, post_id, media_type (photo/video), s3_key, width, height
+
+// Feed table (Redis Sorted Set per user — fanout-on-write)
+// Key: feed:{user_id}  Value: sorted set of post_ids scored by timestamp
+// Max 300 posts per feed, trim on overflow
+
+// Cassandra — likes and comments (high write volume)
+likes: (post_id, user_id) PRIMARY KEY  → for dedup
+like_counts: post_id → counter column (atomic increment)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Upload flow:</strong> Client → Upload Service → S3 (original) → Image Processing Service (async) → 3 resolutions → CDN push</li>
+            <li><strong>Feed flow:</strong> Client → Feed Service → Redis (pre-built feed) → return post_ids → Post Metadata Service → render</li>
+            <li><strong>Fanout Service:</strong> Triggered after upload. Reads follower list from DB, writes post_id to each follower's Redis feed sorted set. For celebrities: skip fanout-on-write, use fanout-on-read (pull).</li>
+            <li><strong>CDN:</strong> Images served from CDN edge nodes. URL format: <code>cdn.instagram.com/{user_id}/{post_id}/720w.jpg</code></li>
+            <li><strong>Explore page:</strong> ML ranking service. Candidate generation (posts from similar users, trending hashtags) + re-ranking by engagement signals.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/posts                         // upload post (multipart/form-data)
+GET  /v1/feed?cursor={lastPostId}      // paginated home feed
+GET  /v1/posts/{postId}                // single post + metadata
+POST /v1/posts/{postId}/likes          // like a post
+GET  /v1/explore?page={n}             // explore page
+GET  /v1/users/{userId}/posts          // user's profile grid
+POST /v1/users/{userId}/follow         // follow user</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Image Processing Pipeline<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p>Raw uploads are large (5–20MB DSLR JPEGs, 500MB 4K videos). The pipeline must produce multiple optimized variants asynchronously.</p>
+          <ol>
+            <li>Client uploads original to S3 via pre-signed URL (bypasses app servers)</li>
+            <li>S3 event notification triggers Image Processing Service via SQS</li>
+            <li>Processing service generates: thumbnail (150×150), mobile (720px wide), full (1080px wide), WebP variants</li>
+            <li>Processed images written back to S3 with CDN-friendly keys</li>
+            <li>CDN origin pull: first request pulls from S3, subsequent requests served from edge cache (TTL: 1 year for immutable media)</li>
+          </ol>
+          <p><strong>Why async?</strong> Processing a single image takes 100ms–2s. Doing it synchronously blocks the upload API. By queuing via SQS, the upload API returns immediately (201 Created) and the post becomes visible once processing completes (typically &lt;5s).</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Celebrity problem:</strong> Fanout-on-write for Kylie Jenner (400M followers) = 400M Redis writes per post. Use fanout-on-read: pull from celebrity's post list at feed read time, merge with pre-built fanout feeds.</li>
+            <li><strong>Feed consistency:</strong> Eventual consistency is fine for Instagram. A follower seeing a post 1s late is acceptable.</li>
+            <li><strong>Storage cost:</strong> 3 resolutions × CDN replication across 100+ PoPs is expensive. Mitigate with on-the-fly resizing at CDN edge for rare sizes.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a photo-sharing system handling 1B MAU, 100M uploads/day, and 10B feed views/day. Key decisions: S3 + CDN for media, async image processing pipeline via SQS, Redis sorted sets for pre-built feeds (fanout-on-write for normal users, fanout-on-read for celebrities), and Cassandra for high-volume like/comment counters.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Feed generation</td><td>Hybrid (push normal, pull celebrities)</td><td>Pure push or pure pull</td><td>Pure push can't handle celebrities; pure pull is too slow for high-follower accounts</td></tr>
+                <tr><td>Image storage</td><td>S3 + CDN</td><td>Self-hosted object storage</td><td>S3 durability (11 9s), CDN edge serves 99% of reads without hitting origin</td></tr>
+                <tr><td>Like storage</td><td>Cassandra counters</td><td>Redis atomic increment</td><td>Redis is faster but Cassandra persists counts durably; Redis good as cache layer on top</td></tr>
+                <tr><td>Upload to S3</td><td>Pre-signed URL (direct client → S3)</td><td>Proxy through app server</td><td>Bypasses app servers entirely, reducing upload latency and server load</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ImageProcessingPipeline — async resize of uploaded photos to multiple resolutions.
+ * Triggered by S3 event via SQS. Processes one image per invocation.
+ */
+public class ImageProcessingPipeline {
+
+    private static final List&lt;ImageVariant&gt; VARIANTS = List.of(
+        new ImageVariant("thumbnail", 150, 150, true),   // square crop
+        new ImageVariant("mobile",    720, -1, false),   // width=720, height proportional
+        new ImageVariant("full",     1080, -1, false)    // width=1080, height proportional
+    );
+
+    private final S3Client s3Client;
+    private final String bucketName;
+
+    public ImageProcessingPipeline(S3Client s3Client, String bucketName) {
+        this.s3Client = s3Client;
+        this.bucketName = bucketName;
+    }
+
+    /**
+     * Entry point: download original from S3, generate all variants, upload back.
+     *
+     * @param originalS3Key e.g. "originals/user123/post456.jpg"
+     * @return list of S3 keys for each generated variant
+     */
+    public List&lt;String&gt; processImage(String originalS3Key) throws IOException {
+        byte[] originalImageBytes = downloadFromS3(originalS3Key);
+        BufferedImage originalImage = ImageIO.read(new ByteArrayInputStream(originalImageBytes));
+
+        List&lt;String&gt; generatedKeys = new ArrayList&lt;&gt;();
+        for (ImageVariant variant : VARIANTS) {
+            BufferedImage resizedImage = resizeImage(originalImage, variant);
+            byte[] resizedBytes = encodeAsJpeg(resizedImage);
+            String variantKey = buildVariantKey(originalS3Key, variant.getName());
+            uploadToS3(variantKey, resizedBytes, "image/jpeg");
+            generatedKeys.add(variantKey);
+        }
+        return generatedKeys;
+    }
+
+    private BufferedImage resizeImage(BufferedImage source, ImageVariant variant) {
+        int targetWidth = variant.getWidth();
+        int targetHeight = variant.isSquareCrop()
+            ? variant.getHeight()
+            : (int) ((double) source.getHeight() / source.getWidth() * targetWidth);
+
+        BufferedImage resized = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = resized.createGraphics();
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+        graphics.dispose();
+        return resized;
+    }
+
+    private byte[] encodeAsJpeg(BufferedImage image) throws IOException {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        ImageIO.write(image, "jpeg", outputStream);
+        return outputStream.toByteArray();
+    }
+
+    private String buildVariantKey(String originalKey, String variantName) {
+        // originals/user123/post456.jpg → processed/user123/post456_mobile.jpg
+        return originalKey.replace("originals/", "processed/")
+                          .replace(".jpg", "_" + variantName + ".jpg");
+    }
+
+    private byte[] downloadFromS3(String key) {
+        return s3Client.getObjectAsBytes(builder -> builder.bucket(bucketName).key(key)).asByteArray();
+    }
+
+    private void uploadToS3(String key, byte[] data, String contentType) {
+        s3Client.putObject(
+            builder -> builder.bucket(bucketName).key(key).contentType(contentType),
+            RequestBody.fromBytes(data)
+        );
+    }
+
+    private record ImageVariant(String name, int width, int height, boolean isSquareCrop) {
+        public String getName() { return name; }
+        public int getWidth() { return width; }
+        public int getHeight() { return height; }
+        public boolean isSquareCrop() { return isSquareCrop; }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-instagram-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why does Instagram use pre-signed S3 URLs for photo uploads instead of routing uploads through app servers?" data-options='["App servers cannot handle binary data","Pre-signed URLs allow direct client-to-S3 upload, bypassing app servers entirely — reducing latency and eliminating app servers as upload bottleneck","S3 requires pre-signed URLs; there is no alternative","Pre-signed URLs provide stronger encryption than app server proxies"]' data-correct="1" data-explanation="Pre-signed URLs are a signed token that grants the client temporary permission to upload directly to S3. The app server never sees the binary data — it only generates the token. This eliminates app server CPU/bandwidth as a bottleneck for large file uploads." style="display:none"></div>
+          <div data-question="Why is image processing done asynchronously via a queue rather than synchronously during upload?" data-options='["S3 cannot process images synchronously","Resizing images takes 100ms–2s per image. Doing this synchronously would block the upload API response and degrade user experience","Asynchronous processing is required for GDPR compliance","Queue-based processing allows lower AWS costs"]' data-correct="1" data-explanation="Image processing is CPU-intensive and variable-latency. By returning 201 Created immediately and processing via SQS, the upload API is fast and resilient — even if the processing service is slow or temporarily down, uploads still succeed and process when capacity is available." style="display:none"></div>
+          <div data-question="What is the 'celebrity problem' in Instagram's feed system, and how is it solved?" data-options='["Celebrities post too frequently and flood the database","Fanout-on-write for a user with 400M followers would require 400M Redis writes per post — solved by using fanout-on-read (pull) for accounts above a follower threshold","Celebrities require blue checkmarks which require a separate database table","High-profile accounts have higher read QPS so they need separate CDN nodes"]' data-correct="1" data-explanation="For normal users (500 followers), fanout-on-write is fine. For celebrities (millions of followers), writing to every follower's feed on every post creates write amplification that can't scale. The hybrid approach: push for normal users, pull (merge at feed-read time) for accounts above ~1M followers." style="display:none"></div>
+          <div data-question="Why is CDN TTL set to 1 year (immutable) for Instagram photos?" data-options='["Instagram photos are frequently updated so long TTLs ensure freshness","Photos are immutable — once uploaded they never change. Long TTLs maximize CDN hit rate and minimize origin load. Deleted photos use URL revocation not cache invalidation","A 1-year TTL is the HTTP standard for media files","Long TTLs are required for HTTPS certificates"]' data-correct="1" data-explanation="Immutable content (photos that are never edited) is a perfect fit for max-age TTLs. A CDN hit rate of 99%+ keeps origin load minimal. If content must be 'deleted', the URL is deactivated at the application layer — the CDN key becomes unreachable, not invalidated." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="netflix.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Netflix →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="slack.html" class="btn btn--outline">← Slack</a>
+        <a href="netflix.html" class="btn btn--primary">Next: Netflix →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

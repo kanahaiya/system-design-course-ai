@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Real-time Analytics Pipeline &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design Real-time Analytics Pipeline &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-analytics" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-analytics" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Data Engineering</span>
+        </div>
+        <h1 class="module-header__title">Design Real-time Analytics Pipeline</h1>
+        <p class="module-header__desc">Analytics pipelines face a fundamental tension: stream processing is fast but approximate; batch processing is accurate but slow. Lambda architecture runs both in parallel. Kappa architecture bets that stream processing is good enough. Know both trade-offs cold.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; Meta, Airbnb, Uber</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Ingest events in real-time (clicks, purchases, page views)</li>
+            <li>Compute aggregations with low latency: count, sum, avg, percentile</li>
+            <li>Support time-windowed queries: hourly, daily totals</li>
+            <li>Ad-hoc SQL queries over historical data</li>
+            <li>Dashboard with live metrics (seconds latency)</li></ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 10M events/sec, 100TB historical data</li>
+            <li><strong>Latency:</strong> Stream aggregations &lt;30s; batch queries &lt;60s</li>
+            <li><strong>Accuracy:</strong> Stream &lt;1% error for real-time; batch exact for reporting</li></ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li>10M events/sec &times; 100 bytes = 1GB/sec raw data &rarr; 86TB/day</li>
+            <li>Aggregated to 1-min buckets: much smaller &mdash; ~1TB/day aggregated</li>
+            <li>Kafka: 1GB/sec across 1000 partitions = 1MB/sec/partition &mdash; manageable</li></ul></div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Raw events (Kafka -- 7-day retention, archived to S3)
+event: { event_id, event_type, user_id, properties: JSONB, timestamp }
+
+// Stream aggregations (ClickHouse -- columnar OLAP)
+agg_metrics: (metric_name, dimensions, window_start, window_end, value)
+  // Written by Flink every 30s per metric+dimension combination
+
+// Historical raw events (S3 -- Parquet format, partitioned by date/hour)
+// Queried by Spark for batch jobs and ad-hoc analysis via Athena/Presto</code></pre></div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Lambda Architecture:</strong> Two paths: (1) Speed layer (Kafka &rarr; Flink): seconds latency, approximate. (2) Batch layer (S3 &rarr; Spark): hours latency, exact. (3) Serving layer (ClickHouse): merges results from both.</li>
+            <li><strong>Flink streaming:</strong> Tumbling and sliding windows. State management (RocksDB backend for large state). Watermarks for late data handling.</li>
+            <li><strong>ClickHouse:</strong> Columnar OLAP. MergeTree engine. Blazing fast for aggregation queries (SUM/COUNT/GROUP BY). Handles petabytes.</li>
+            <li><strong>Kappa Alternative:</strong> Single stream processing pipeline (Kafka + Flink). Simpler ops but cannot reprocess historical data easily &mdash; must retain raw Kafka for long periods.</li></ul></div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Ingestion API
+POST /api/v1/events
+Body: { event_type: "purchase", user_id: "u123", properties: {...}, timestamp: ISO8601 }
+
+// Query API (Serving Layer)
+GET /api/v1/metrics?metric=revenue&from=2024-01-01&to=2024-01-02&granularity=1h
+Response: { windows: [{start, end, value}, ...] }
+
+// Real-time streaming API
+GET /api/v1/metrics/live?metric=active_users   (Server-Sent Events)</code></pre></div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Windowing types:</strong></p>
+          <ul>
+            <li><strong>Tumbling window:</strong> Fixed, non-overlapping. "Orders per hour." Each event belongs to exactly one window. Simple, efficient.</li>
+            <li><strong>Sliding window:</strong> Overlapping. "Orders in the last 5 minutes, updated every minute." Each event may belong to multiple windows. More state.</li>
+            <li><strong>Session window:</strong> Dynamic, user-activity based. Window closes after N seconds of inactivity. Variable size.</li>
+          </ul>
+          <p><strong>Late data handling (watermarks):</strong></p>
+          <ul>
+            <li>Events may arrive out of order (mobile app offline 5 minutes, then bulk send).</li>
+            <li>Watermark = a marker that says all events before time T have arrived. Events before the watermark are considered complete.</li>
+            <li>Flink uses event-time watermarks: advance watermark to max(event_time) - allowed_lateness.</li>
+            <li>Events arriving after watermark: counted in a late-event side output, can trigger window recomputation.</li>
+          </ul></div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Lambda complexity:</strong> Maintaining two separate pipelines (stream + batch) with the same business logic is error-prone. Kappa (stream-only with long Kafka retention for replay) is gaining adoption as stream frameworks mature.</li>
+            <li><strong>ClickHouse at scale:</strong> For 100TB+, use distributed ClickHouse cluster. ZooKeeper-based replication. Shard by high-cardinality dimension (user_id) to distribute write load.</li></ul></div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body"><p>Lambda architecture: speed layer (Kafka + Flink) for real-time dashboards, batch layer (Spark + S3) for accurate reporting, serving layer (ClickHouse) merges both. Key insight: windowing + watermarks handle out-of-order events gracefully.</p></div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Decision</th><th>Lambda</th><th>Kappa</th></tr></thead>
+            <tbody>
+              <tr><td>Architecture</td><td>Two pipelines: stream + batch. High accuracy. High complexity.</td><td>One pipeline: stream only. Lower accuracy. Simpler ops.</td></tr>
+              <tr><td>Reprocessing</td><td>Easy: re-run Spark job over S3</td><td>Requires long Kafka retention or S3 compaction</td></tr>
+              <tr><td>Window type</td><td>Tumbling: simple, no overlap</td><td>Sliding: more insight, higher state/memory cost</td></tr>
+            </tbody>
+          </table></div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body"><pre><code class="language-java">/**
+ * StreamingAggregator -- implements tumbling window aggregation with
+ * circular buffer and bounded late data acceptance.
+ */
+public class StreamingAggregator {
+
+    private static final int WINDOW_SIZE_SECONDS = 60;
+    private static final int LATE_ARRIVAL_GRACE_SECONDS = 30;
+
+    private final long[] windowCounts;
+    private final long[] windowStartTimes;
+    private int currentWindowIndex = 0;
+    private long currentWindowStart;
+
+    public StreamingAggregator(int windowCount) {
+        this.windowCounts = new long[windowCount];
+        this.windowStartTimes = new long[windowCount];
+        this.currentWindowStart = System.currentTimeMillis() / 1000 / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
+    }
+
+    /**
+     * Processes an event with its event-time timestamp.
+     * Handles on-time and late events; ignores too-late events.
+     */
+    public void processEvent(long eventTimestampSeconds, long incrementValue) {
+        long eventWindowStart = eventTimestampSeconds / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
+        long ageSeconds = currentWindowStart - eventWindowStart;
+
+        if (ageSeconds < 0) {
+            incrementCurrentWindow(incrementValue); // future event (clock skew)
+        } else if (ageSeconds <= LATE_ARRIVAL_GRACE_SECONDS) {
+            int targetIndex = findWindowIndex(eventWindowStart);
+            if (targetIndex >= 0) {
+                windowCounts[targetIndex] += incrementValue;
+            }
+        }
+        // Too late -- drop or route to late-data side output
+    }
+
+    /**
+     * Advances to the current time window, flushing completed windows.
+     */
+    public List&lt;WindowResult&gt; advanceToCurrentTime() {
+        long nowWindowStart = System.currentTimeMillis() / 1000 / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
+        List&lt;WindowResult&gt; completedWindows = new ArrayList&lt;&gt;();
+
+        while (currentWindowStart &lt; nowWindowStart) {
+            completedWindows.add(new WindowResult(windowStartTimes[currentWindowIndex], windowCounts[currentWindowIndex]));
+            currentWindowIndex = (currentWindowIndex + 1) % windowCounts.length;
+            currentWindowStart += WINDOW_SIZE_SECONDS;
+            windowCounts[currentWindowIndex] = 0;
+            windowStartTimes[currentWindowIndex] = currentWindowStart;
+        }
+        return completedWindows;
+    }
+
+    private void incrementCurrentWindow(long value) { windowCounts[currentWindowIndex] += value; }
+
+    private int findWindowIndex(long targetWindowStart) {
+        for (int i = 0; i &lt; windowCounts.length; i++) {
+            if (windowStartTimes[i] == targetWindowStart) return i;
+        }
+        return -1;
+    }
+
+    public record WindowResult(long windowStart, long count) {}
+}</code></pre></div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-analytics-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="What is the core trade-off that motivates Lambda Architecture (stream + batch) over a pure stream-only approach?" data-options='["Stream processing cannot handle JSON data", "Stream processing provides low latency (seconds) but may have slight inaccuracies (late data, approximations). Batch processing is accurate but slow (hours). Lambda runs both: stream for real-time dashboards, batch for accurate reporting. Trade-off: operational complexity of two pipelines vs guaranteed accuracy.", "Batch processing is always more cost-effective than streaming", "Stream processing requires GPU hardware that most companies do not have"]' data-correct="1" data-explanation="The Lambda Architecture trade-off is explicitly: speed vs accuracy. For ad revenue reporting (billing), you need exact counts -- batch provides this. For operational dashboards (is our conversion rate dropping right now?), exact counts from 6-hour-ago data are useless -- stream provides timely signals." style="display:none"></div>
+          <div data-question="An event with timestamp 14:00:25 arrives at the stream processor at 14:05:40. How should the system handle this late event?" data-options='["Discard all late events immediately", "Check if it falls within the allowed lateness window (e.g., 5 minutes). If the delay is within the grace period, add the event to the 14:00 window and potentially trigger a window recomputation. If beyond grace period, route to a late-data side output for batch reconciliation.", "Always add late events to the current window regardless of timestamp", "Late events indicate a data pipeline bug and should trigger a PagerDuty alert"]' data-correct="1" data-explanation="Flink uses watermarks + allowed lateness. The watermark says all events before time T have arrived. The allowed lateness gives a grace period for stragglers. Events within the grace period are counted in the correct window. Events beyond grace go to a side output for batch reconciliation." style="display:none"></div>
+          <div data-question="Why is ClickHouse preferred over PostgreSQL for time-series analytics queries?" data-options='["PostgreSQL does not support GROUP BY aggregations", "ClickHouse is columnar -- it reads only the queried columns from storage. For SELECT sum(revenue) FROM events WHERE date BETWEEN X AND Y GROUP BY country, ClickHouse reads 2 columns from compressed column files. PostgreSQL reads every column in every row -- 10-100x more I/O for wide tables.", "ClickHouse supports more SQL functions than PostgreSQL", "PostgreSQL cannot handle more than 1TB of data"]' data-correct="1" data-explanation="This is the OLAP vs OLTP distinction. OLTP (PostgreSQL): optimized for row-level operations. OLAP (ClickHouse, BigQuery): optimized for scanning millions of rows and aggregating. Columnar storage + compression + vectorized execution = ClickHouse can scan a billion rows in seconds." style="display:none"></div>
+          <div data-question="What is a session window in stream processing, and what use case does it serve?" data-options='["A session window is a fixed 30-minute window", "A session window groups events by user inactivity: the window stays open as long as events keep arriving (up to a max gap of N seconds). If no event arrives for N seconds, the window closes. Session duration = end_event_time - start_event_time. Perfect for analytics: How long did users spend on a feature?", "Session windows are only supported in Kafka Streams, not Apache Flink", "A session window is equivalent to a 60-second tumbling window"]' data-correct="1" data-explanation="Session windows are event-driven, not time-driven. A user clicking rapidly might have a 2-minute session window; a user reading slowly might have a 20-minute one. The window size is determined by the user's behavior, not a fixed clock. This is fundamentally different from tumbling or sliding windows." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="distributed-tracing.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed Tracing &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="cdn.html" class="btn btn--outline">&larr; CDN</a>
+        <a href="distributed-tracing.html" class="btn btn--primary">Next: Distributed Tracing &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

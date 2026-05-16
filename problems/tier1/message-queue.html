@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a distributed message queue like Kafka or SQS: 1M messages/second, partitioned topics, consumer groups, 7-day retention, WAL-based storage, ISR replication for fault tolerance.">
+  <title>Design a Distributed Message Queue — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/message-queue/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-message-queue" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=message-queue" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design a Distributed Message Queue (like Kafka)</h1>
+        <p class="module-header__desc">Design a high-throughput distributed message queue handling 1M messages/second with partitioned topics, consumer groups with offset tracking, 7-day message retention, and ISR-based fault-tolerant replication.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> LinkedIn (Kafka), Amazon (SQS/Kinesis), Meta, Uber</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Producers publish messages to named topics</li>
+          <li>Consumers subscribe to topics via consumer groups; each message delivered to one consumer per group</li>
+          <li>Messages persist for 7 days (consumers can replay from any offset)</li>
+          <li>Message ordering guaranteed within a partition</li>
+          <li>Topics have configurable partition count and replication factor</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Throughput:</strong> 1M messages/second write; 5M messages/second read (fan-out)</li>
+          <li><strong>Message size:</strong> up to 1MB per message</li>
+          <li><strong>Retention:</strong> 7 days → 7 × 24 × 3600 × 1GB/s = 604TB total, 3x replication = 1.8PB</li>
+          <li><strong>Delivery guarantee:</strong> at-least-once (default); exactly-once with idempotent producers</li>
+          <li><strong>Latency:</strong> end-to-end &lt; 100ms p99</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>The key insight:</strong> Message queues are logs. A partition is an append-only log file. Consumer "consuming" just means advancing an offset pointer. The broker never deletes messages — time-based expiry does. This is why replay is free.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Write throughput</div>
+            <div class="estimation-card__value">1 GB/s</div>
+            <div class="estimation-card__note">1M msgs × 1KB avg</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Total retention storage</div>
+            <div class="estimation-card__value">1.8 PB</div>
+            <div class="estimation-card__note">604TB × 3 replicas</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Brokers needed</div>
+            <div class="estimation-card__value">~100</div>
+            <div class="estimation-card__note">6PB ÷ 20TB/broker (NVMe)</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Partitions</div>
+            <div class="estimation-card__value">~1000</div>
+            <div class="estimation-card__note">10 partitions/broker for parallelism</div>
+          </div>
+        </div>
+        <p>1GB/s write throughput × 100 brokers = 10MB/s per broker — very manageable with sequential disk writes. The 1.8PB storage is the main cost driver; use commodity HDDs (not SSDs) since message queues are write-once, read-once workloads that favor sequential I/O.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- ZooKeeper / internal metadata (not user-facing SQL)
+topics {
+    topic_name: "user-events",
+    partition_count: 10,
+    replication_factor: 3,
+    retention_ms: 604800000   // 7 days
+}
+
+partitions {
+    topic: "user-events",
+    partition_id: 0,
+    leader_broker_id: 42,
+    isr_broker_ids: [42, 17, 88]  // In-Sync Replicas
+}
+
+-- Consumer offset tracking (stored in __consumer_offsets internal topic)
+offsets {
+    consumer_group: "analytics-service",
+    topic: "user-events",
+    partition: 0,
+    committed_offset: 1_048_576   // next message to read = offset 1,048,576
+}
+
+-- On-disk partition log segment (binary, append-only)
+// Each segment: {base_offset}.log + {base_offset}.index + {base_offset}.timeindex
+// .log: [offset(8B)][timestamp(8B)][key_len(4B)][key][value_len(4B)][value][crc(4B)]
+// .index: sparse offset-to-file-position map for O(log n) seeks
+// Segment rolls when size > 1GB or age > 1 hour</code></pre>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">Producer</div>
+            <div class="hld-arrow">→ topic, key, value</div>
+            <div class="hld-box">Broker (Partition Leader)</div>
+            <div class="hld-arrow">WAL append</div>
+            <div class="hld-box hld-box--storage">Partition Log</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Partition Leader</div>
+            <div class="hld-arrow">async replicate</div>
+            <div class="hld-box">Follower Brokers (ISR)</div>
+            <div class="hld-arrow">ack when in ISR</div>
+            <div class="hld-box">Leader ACKs producer</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box hld-box--client">Consumer Group</div>
+            <div class="hld-arrow">poll(offset)</div>
+            <div class="hld-box">Broker</div>
+            <div class="hld-arrow">read from disk</div>
+            <div class="hld-box hld-box--storage">sendfile() zero-copy</div>
+          </div>
+        </div>
+        <ol>
+          <li><strong>Producer:</strong> Hashes message key → selects partition → connects to that partition's leader broker → sends batch of messages</li>
+          <li><strong>Broker (leader):</strong> Appends to Write-Ahead Log (WAL) on disk → replicates to ISR followers → when all ISR acknowledge, marks offset as committed → ACKs producer</li>
+          <li><strong>Consumer:</strong> Polls the broker with its current offset → broker responds with a batch of messages → consumer processes, commits new offset → repeat</li>
+          <li><strong>ZooKeeper / KRaft:</strong> Stores cluster metadata (topic configs, partition leaders, ISR lists, broker membership)</li>
+          <li><strong>Partition assignment:</strong> Consumer group coordinator assigns partitions to consumers in the group (1 partition → 1 consumer at most). If consumer count &gt; partition count, some consumers are idle.</li>
+        </ol>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Producer API
+interface MessageProducer {
+    /**
+     * Publishes a message to a topic.
+     * Partition assignment: hash(key) % partitionCount if key provided;
+     * round-robin if key is null.
+     *
+     * @param topic   the topic name
+     * @param key     optional partition key (same key → same partition → ordering)
+     * @param value   the message payload
+     * @param acks    0=fire-and-forget, 1=leader-ack, -1=all-ISR-ack
+     * @return RecordMetadata with partition and offset of written message
+     */
+    CompletableFuture&lt;RecordMetadata&gt; send(String topic, byte[] key, byte[] value, int acks);
+}
+
+// Consumer API
+interface MessageConsumer {
+    /**
+     * Subscribes to a list of topics as part of a consumer group.
+     * Partition assignments are rebalanced automatically.
+     */
+    void subscribe(List&lt;String&gt; topics, String consumerGroup);
+
+    /**
+     * Polls for new messages up to maxMessages.
+     * Blocks up to timeoutMs waiting for messages.
+     * Advances the consumer's position but does NOT commit the offset.
+     */
+    List&lt;ConsumerRecord&gt; poll(int maxMessages, long timeoutMs);
+
+    /**
+     * Commits the current offset for all assigned partitions.
+     * Messages before this offset will not be re-delivered on restart.
+     */
+    void commitOffset();
+}
+
+// Admin API
+interface AdminClient {
+    void createTopic(String name, int partitions, int replicationFactor);
+    void deleteTopic(String name);
+    TopicMetadata describeTopic(String name);
+    void resetConsumerGroupOffset(String group, String topic, long newOffset);
+}</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Partitioning and Replication</h2>
+        <h3>Why Partitions?</h3>
+        <p>A single broker can sustain ~500MB/s of sequential writes. At 1GB/s required throughput, we need at least 2 brokers writing in parallel. Partitions are the unit of parallelism: 1000 partitions across 100 brokers = 10 partitions/broker.</p>
+        <p><strong>Partition key:</strong> Messages with the same key always go to the same partition → ordering guarantee within a key. E.g., all events for user_id=42 go to partition hash(42) % 1000, preserving event order for that user.</p>
+
+        <h3>ISR (In-Sync Replicas)</h3>
+        <p>ISR is the set of replicas that are fully caught up with the leader's log (within <code>replica.lag.time.max.ms</code>, default 10s). With <code>acks=-1</code>, the leader waits for ALL ISR replicas to acknowledge before committing. If a follower falls behind (network blip, GC pause), it's removed from ISR and the leader doesn't wait for it.</p>
+        <p><strong>Leader election:</strong> When the leader fails, ZooKeeper notifies the broker cluster. The first broker in ISR is elected as new leader. If ISR is empty (all replicas behind), either wait (safer) or elect an out-of-sync replica (unclean leader election — may lose messages).</p>
+        <div class="callout callout--warning">
+          <strong>unclean.leader.election.enable:</strong> Setting this to false (safer) means your partition becomes unavailable if the leader fails and ISR is empty. Setting to true (available) risks message loss. Most production systems: false.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Consumer lag:</strong> If a consumer can't keep up with producer rate, offset falls behind. Monitor consumer group lag (latest offset − committed offset). Alert if lag exceeds threshold. Fix by adding consumers (up to partition count).</li>
+          <li><strong>Exactly-once delivery:</strong> Kafka achieves this with idempotent producers (each message has a producer_id + sequence_number, broker deduplicates retries) + transactional API (atomic write across multiple partitions).</li>
+          <li><strong>Message ordering:</strong> Guaranteed within a partition. NOT guaranteed across partitions. If global ordering is needed, use 1 partition (sacrifices parallelism) or embed sequence numbers in messages and sort on the consumer side.</li>
+          <li><strong>Hot partition:</strong> If one partition key (e.g., one very active user) gets 80% of traffic, one broker gets 80% of load. Solution: add a random suffix to the key to spread across sub-partitions; aggregate on the consumer side.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>The message queue is fundamentally a distributed append-only log. Sequential disk writes are ~1000x faster than random writes — this is why Kafka on commodity hardware outperforms databases for this use case. The consumer model (pull-based with explicit offset management) gives consumers full control over replay and backpressure.</p>
+        <p><strong>Zero-copy optimization:</strong> Kafka uses Linux <code>sendfile()</code> to transfer data directly from the page cache to the network socket without copying to user space. This eliminates two memory copies and enables the high throughput (100K msg/s per broker on commodity hardware).</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Consumer model</td>
+                <td>Push (broker pushes to consumers)</td>
+                <td>Pull (consumer polls broker)</td>
+                <td>Pull</td>
+                <td>Push can overwhelm slow consumers. Pull lets consumers set their own pace (backpressure). Pull also enables batching — consumer requests as many messages as it can handle per poll.</td>
+              </tr>
+              <tr>
+                <td>Replication acks</td>
+                <td>acks=1 (leader only)</td>
+                <td>acks=-1 (all ISR)</td>
+                <td>acks=-1 for durability</td>
+                <td>acks=1: leader dies before replicating → message lost. acks=-1: no data loss if any ISR member survives. Latency cost: ISR replication adds ~5ms. Acceptable for most use cases.</td>
+              </tr>
+              <tr>
+                <td>Delivery guarantee</td>
+                <td>At-least-once</td>
+                <td>Exactly-once</td>
+                <td>At-least-once (default)</td>
+                <td>Exactly-once requires idempotent producers + transactions — complex and adds overhead. At-least-once is simpler; make consumers idempotent (dedup by message key) instead.</td>
+              </tr>
+              <tr>
+                <td>Offset storage</td>
+                <td>ZooKeeper</td>
+                <td>Internal Kafka topic (__consumer_offsets)</td>
+                <td>Internal topic</td>
+                <td>ZooKeeper is a bottleneck for high-frequency offset commits. Internal topic handles millions of commits/second and keeps all metadata in Kafka itself (single system to operate).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * MessagePartitioner
+ * Determines which partition a message should be written to.
+ * Consistent hashing ensures same key always maps to same partition.
+ */
+public class MessagePartitioner {
+
+    /**
+     * Assigns a partition for a message.
+     * If key is null: round-robin for load balancing.
+     * If key present: consistent hash for ordering guarantees.
+     *
+     * @param key            the message key (may be null)
+     * @param partitionCount total number of partitions in the topic
+     * @param roundRobinCounter shared counter for null-key round-robin
+     * @return partition index in range [0, partitionCount)
+     */
+    public int selectPartition(byte[] key, int partitionCount, AtomicLong roundRobinCounter) {
+        if (key == null) {
+            // Round-robin: distribute evenly across partitions
+            return (int) (roundRobinCounter.getAndIncrement() % partitionCount);
+        }
+        // Murmur2 hash, same algorithm as Kafka's default partitioner
+        int murmurHash = murmur2Hash(key);
+        return Math.abs(murmurHash) % partitionCount;
+    }
+
+    private int murmur2Hash(byte[] data) {
+        final int seed = 0x9747b28c;
+        final int multiplier = 0x5bd1e995;
+        final int rotationAmount = 24;
+        int hashValue = seed ^ data.length;
+
+        for (int index = 0; index + 4 &lt;= data.length; index += 4) {
+            int chunk = (data[index] &amp; 0xFF)
+                | ((data[index + 1] &amp; 0xFF) &lt;&lt; 8)
+                | ((data[index + 2] &amp; 0xFF) &lt;&lt; 16)
+                | ((data[index + 3] &amp; 0xFF) &lt;&lt; 24);
+            chunk *= multiplier;
+            chunk ^= chunk >>> rotationAmount;
+            chunk *= multiplier;
+            hashValue *= multiplier;
+            hashValue ^= chunk;
+        }
+
+        // Handle remaining bytes
+        int remaining = data.length &amp; 3;
+        if (remaining == 3) hashValue ^= (data[data.length - 3] &amp; 0xFF) &lt;&lt; 16;
+        if (remaining >= 2) hashValue ^= (data[data.length - 2] &amp; 0xFF) &lt;&lt; 8;
+        if (remaining >= 1) {
+            hashValue ^= (data[data.length - 1] &amp; 0xFF);
+            hashValue *= multiplier;
+        }
+
+        hashValue ^= hashValue >>> 13;
+        hashValue *= multiplier;
+        hashValue ^= hashValue >>> 15;
+        return hashValue;
+    }
+}
+
+/**
+ * WalMessageStore
+ * Write-Ahead Log based message store for a single partition.
+ * Append-only: all writes are sequential, enabling high throughput.
+ */
+public class WalMessageStore {
+
+    private static final int SEGMENT_SIZE_BYTES = 1_073_741_824; // 1GB per segment
+    private static final String LOG_FILE_EXTENSION = ".log";
+    private static final String INDEX_FILE_EXTENSION = ".index";
+
+    private final Path partitionDirectory;
+    private RandomAccessFile currentLogFile;
+    private RandomAccessFile currentIndexFile;
+    private long currentBaseOffset;
+    private long currentOffset;
+    private long currentSegmentBytes;
+
+    public WalMessageStore(Path partitionDirectory) throws IOException {
+        this.partitionDirectory = partitionDirectory;
+        Files.createDirectories(partitionDirectory);
+        initializeLatestSegment();
+    }
+
+    /**
+     * Appends a message to the partition log.
+     * Returns the offset assigned to this message.
+     * Thread-safety: caller must synchronize; only partition leader writes.
+     *
+     * @param messageKey   the message key (may be null)
+     * @param messageValue the message payload bytes
+     * @return the offset at which this message was written
+     */
+    public long append(byte[] messageKey, byte[] messageValue) throws IOException {
+        long assignedOffset = currentOffset;
+        long filePosition = currentLogFile.length();
+
+        writeMessageToLog(assignedOffset, messageKey, messageValue);
+        updateSparseIndex(assignedOffset, filePosition);
+
+        currentOffset++;
+        currentSegmentBytes += computeMessageSize(messageKey, messageValue);
+
+        if (currentSegmentBytes >= SEGMENT_SIZE_BYTES) {
+            rollNewSegment();
+        }
+
+        return assignedOffset;
+    }
+
+    /**
+     * Reads up to maxMessages starting at startOffset.
+     * Uses sparse index to seek to the correct file position efficiently.
+     *
+     * @param startOffset the offset to start reading from (inclusive)
+     * @param maxMessages maximum number of messages to return
+     * @return list of messages in order
+     */
+    public List&lt;MessageRecord&gt; read(long startOffset, int maxMessages) throws IOException {
+        long filePosition = findFilePositionForOffset(startOffset);
+        List&lt;MessageRecord&gt; messages = new ArrayList&lt;&gt;();
+
+        RandomAccessFile logFile = openSegmentForOffset(startOffset);
+        logFile.seek(filePosition);
+
+        while (messages.size() &lt; maxMessages && logFile.getFilePointer() &lt; logFile.length()) {
+            MessageRecord record = readNextMessage(logFile);
+            if (record.offset() >= startOffset) {
+                messages.add(record);
+            }
+        }
+
+        return messages;
+    }
+
+    private void writeMessageToLog(long offset, byte[] key, byte[] value) throws IOException {
+        long timestamp = System.currentTimeMillis();
+        int keyLength = key != null ? key.length : -1;
+
+        currentLogFile.writeLong(offset);
+        currentLogFile.writeLong(timestamp);
+        currentLogFile.writeInt(keyLength);
+        if (key != null) currentLogFile.write(key);
+        currentLogFile.writeInt(value.length);
+        currentLogFile.write(value);
+        // CRC32 checksum for corruption detection
+        CRC32 checksum = new CRC32();
+        if (key != null) checksum.update(key);
+        checksum.update(value);
+        currentLogFile.writeLong(checksum.getValue());
+    }
+
+    private void updateSparseIndex(long offset, long filePosition) throws IOException {
+        // Write every 4096th offset to the sparse index for O(log n) seeks
+        if (offset % 4096 == 0) {
+            currentIndexFile.writeLong(offset);
+            currentIndexFile.writeLong(filePosition);
+        }
+    }
+
+    private long findFilePositionForOffset(long targetOffset) throws IOException {
+        // Binary search the sparse index to find nearest lower-bound position
+        // Then scan forward in the log file from that position
+        return 0L; // Simplified — real implementation does binary search on index file
+    }
+
+    private void rollNewSegment() throws IOException {
+        currentLogFile.close();
+        currentIndexFile.close();
+        currentBaseOffset = currentOffset;
+        currentSegmentBytes = 0;
+        initializeLatestSegment();
+    }
+
+    private void initializeLatestSegment() throws IOException {
+        String segmentName = String.format("%020d", currentBaseOffset);
+        currentLogFile = new RandomAccessFile(
+            partitionDirectory.resolve(segmentName + LOG_FILE_EXTENSION).toFile(), "rw");
+        currentIndexFile = new RandomAccessFile(
+            partitionDirectory.resolve(segmentName + INDEX_FILE_EXTENSION).toFile(), "rw");
+    }
+
+    private int computeMessageSize(byte[] key, byte[] value) {
+        // offset(8) + timestamp(8) + keyLen(4) + key + valueLen(4) + value + crc(8)
+        int keySize = key != null ? key.length : 0;
+        return 8 + 8 + 4 + keySize + 4 + value.length + 8;
+    }
+
+    private MessageRecord readNextMessage(RandomAccessFile logFile) throws IOException {
+        long offset = logFile.readLong();
+        long timestamp = logFile.readLong();
+        int keyLength = logFile.readInt();
+        byte[] key = keyLength > 0 ? new byte[keyLength] : null;
+        if (key != null) logFile.readFully(key);
+        int valueLength = logFile.readInt();
+        byte[] value = new byte[valueLength];
+        logFile.readFully(value);
+        logFile.readLong(); // skip CRC
+        return new MessageRecord(offset, timestamp, key, value);
+    }
+
+    private RandomAccessFile openSegmentForOffset(long targetOffset) throws IOException {
+        return currentLogFile; // Simplified — real impl finds correct segment file
+    }
+
+    public record MessageRecord(long offset, long timestamp, byte[] key, byte[] value) {}
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-message-queue-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why does Kafka use a pull-based consumer model instead of push?" data-options='["Push requires more network bandwidth","Pull lets consumers control their own consumption rate, enabling backpressure and batching without overwhelming slow consumers","Pull is faster than push for all message sizes","Kafka brokers cannot track consumer state"]' data-correct="1" data-explanation="Push-based systems can overwhelm slow consumers. With pull, each consumer requests as many messages as it can handle — natural backpressure. Consumers can also batch efficiently by pulling larger chunks." style="display:none"></div>
+          <div data-question="You have a topic with 10 partitions and a consumer group with 15 consumers. How many consumers are active?" data-options='["All 15 — each consumer handles multiple partitions","10 — one partition per consumer at most; 5 consumers are idle","15 — partitions are split among all consumers","5 — Kafka assigns 2 partitions per consumer"]' data-correct="1" data-explanation="Kafka assigns at most one consumer per partition within a group. With 10 partitions and 15 consumers, 10 consumers get one partition each; 5 are idle and serve as hot standbys." style="display:none"></div>
+          <div data-question="A producer uses acks=1. The partition leader crashes after writing to its local log but before replicating to followers. What happens?" data-options='["The write is safely replicated because the leader already committed","The producer gets a success response, but the message is lost because followers never received it","The follower automatically promotes itself and retrieves the message","ZooKeeper replays the message from its own storage"]' data-correct="1" data-explanation="acks=1 means the leader acknowledges after writing to its own log, before replication. If the leader crashes before replicating, the follower that becomes the new leader doesn't have the message — it's lost. Use acks=-1 for durability." style="display:none"></div>
+          <div data-question="What is 'zero-copy' in Kafka's consumer read path and why does it matter?" data-options='["Messages are stored with zero bytes of overhead","Linux sendfile() transfers data from page cache to network socket without copying to user space, eliminating two memory copies and doubling throughput","Consumers read from memory instead of disk","Zero-copy means Kafka never writes to disk"]' data-correct="1" data-explanation="Normal disk-to-network transfer: disk → kernel buffer → user space → socket buffer → network. sendfile() short-circuits to: disk page cache → socket buffer. This eliminates 2 copies and a user/kernel context switch, enabling ~100K messages/sec per broker." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="news-feed.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="key-value-store.html" class="btn btn--outline">← Prev: Key-Value Store</a>
+        <a href="news-feed.html" class="btn btn--outline">Next: News Feed →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Pastebin: 5M pastes/day, 50M reads/day, short URL generation, content stored in S3, metadata in MySQL, hot pastes cached in Redis with optional expiry and password.">
+  <title>Design Pastebin — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/pastebin/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-pastebin" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=pastebin" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design Pastebin</h1>
+        <p class="module-header__desc">Design a text sharing service with short URL generation, optional expiry and password protection, 10:1 read/write ratio, content stored in S3 with hot paste caching in Redis, 99.9% availability.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Pastebin, GitHub Gist, CodeShare, Hastebin</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Create a paste (text or code) and receive a unique short URL (8-character alphanumeric)</li>
+          <li>Retrieve paste by short URL</li>
+          <li>Optional: expiry time (1 hour, 1 day, 1 week, never)</li>
+          <li>Optional: password protection (only those with password can read)</li>
+          <li>View count per paste</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Scale:</strong> 5M pastes/day (writes), 50M reads/day (10:1 ratio)</li>
+          <li><strong>Read QPS:</strong> 579 QPS (50M ÷ 86,400)</li>
+          <li><strong>Write QPS:</strong> 58 QPS (5M ÷ 86,400)</li>
+          <li><strong>Paste size:</strong> up to 10MB per paste</li>
+          <li><strong>Storage:</strong> 5M × avg 10KB = 50GB/day new content</li>
+          <li><strong>Availability:</strong> 99.9%</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>Key insight:</strong> This is a read-heavy system (10:1). The design should optimize for fast reads. The interesting decision is where to store the paste content — DB or object storage? Answer: large variable-length blobs belong in S3.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Read QPS</div>
+            <div class="estimation-card__value">579</div>
+            <div class="estimation-card__note">50M reads ÷ 86,400s</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Write QPS</div>
+            <div class="estimation-card__value">58</div>
+            <div class="estimation-card__note">5M writes ÷ 86,400s</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Storage/day</div>
+            <div class="estimation-card__value">50 GB</div>
+            <div class="estimation-card__note">5M × 10KB avg</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">5-year S3 storage</div>
+            <div class="estimation-card__value">~90 TB</div>
+            <div class="estimation-card__note">50GB × 365 × 5</div>
+          </div>
+        </div>
+        <p>579 QPS for reads is manageable for a single MySQL replica. With caching (Redis), 90% of reads can be served from cache. The unique ID space: 8 chars × base-62 = 62^8 ≈ 218 trillion unique IDs — no collision concern for millions of years.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- MySQL: metadata only (NOT the content itself)
+CREATE TABLE pastes (
+    paste_id      CHAR(8) PRIMARY KEY,          -- base-62 short ID
+    title         VARCHAR(200),
+    content_url   VARCHAR(512) NOT NULL,         -- S3 key: pastes/{paste_id}
+    syntax        VARCHAR(50),                   -- 'java', 'python', 'plain', etc.
+    password_hash VARCHAR(60),                   -- bcrypt, NULL = no password
+    expires_at    TIMESTAMP,                     -- NULL = never expires
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    view_count    BIGINT DEFAULT 0,
+    INDEX idx_expires (expires_at)               -- for cleanup job
+);
+
+-- S3: actual content
+-- Key pattern: pastes/{paste_id}
+-- Content-Type: text/plain
+-- Max size: 10MB enforced at API layer
+
+-- Redis: cache hot pastes
+-- Key: paste:{paste_id}
+-- Value: { title, content, syntax, expires_at }  (JSON, full content)
+-- TTL: min(paste expires_at, 24h default cache TTL)</code></pre>
+        <div class="callout callout--info">
+          <strong>Why content in S3, not MySQL?</strong> MySQL TEXT/BLOB columns up to 10MB would work, but: (1) bloats the DB buffer pool with huge blobs, evicting useful index data; (2) backup/restore becomes unwieldy; (3) S3 is designed for arbitrary-size objects and costs ~10x less per GB than RDS storage.
+        </div>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">Client</div>
+            <div class="hld-arrow">POST /pastes</div>
+            <div class="hld-box">API Server</div>
+            <div class="hld-arrow">upload content</div>
+            <div class="hld-box hld-box--storage">S3</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">API Server</div>
+            <div class="hld-arrow">INSERT metadata</div>
+            <div class="hld-box hld-box--storage">MySQL</div>
+            <div class="hld-arrow">SET cache</div>
+            <div class="hld-box hld-box--storage">Redis</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box hld-box--client">Client</div>
+            <div class="hld-arrow">GET /p/{id}</div>
+            <div class="hld-box">API Server</div>
+            <div class="hld-arrow">cache hit?</div>
+            <div class="hld-box hld-box--storage">Redis → S3 on miss</div>
+          </div>
+        </div>
+        <p><strong>Write path:</strong> Generate 8-char base-62 ID → upload content to S3 at key <code>pastes/{id}</code> → INSERT metadata row in MySQL → SET Redis cache with TTL → return short URL to client.</p>
+        <p><strong>Read path:</strong> Check Redis for <code>paste:{id}</code> → cache hit: return content + increment view_count async → cache miss: read metadata from MySQL → fetch content from S3 → populate cache → return to client.</p>
+        <p><strong>Expiry cleanup:</strong> A background cron job runs hourly and runs <code>DELETE FROM pastes WHERE expires_at &lt; NOW()</code>, then deletes corresponding S3 objects and Redis keys.</p>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Create a new paste
+POST /api/v1/pastes
+Body: { "title": "My code snippet", "content": "public class...",
+        "syntax": "java", "expiresIn": "86400",
+        "password": "optional-password" }
+Response: { "pasteId": "aB3xY7kQ", "url": "https://pb.com/p/aB3xY7kQ",
+            "expiresAt": "2025-01-02T10:00:00Z" }
+
+// Get a paste
+GET /api/v1/pastes/{pasteId}
+Headers: X-Paste-Password: &lt;password&gt;  (if protected)
+Response: { "pasteId": "aB3xY7kQ", "title": "...", "content": "...",
+            "syntax": "java", "viewCount": 42, "createdAt": "..." }
+
+// Delete a paste (owner only, via token)
+DELETE /api/v1/pastes/{pasteId}
+Headers: Authorization: Bearer &lt;owner_token&gt;
+
+// Get paste metadata (no content — cheap)
+GET /api/v1/pastes/{pasteId}/meta
+Response: { "title": "...", "syntax": "java", "viewCount": 42,
+            "isPasswordProtected": true, "expiresAt": "..." }</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: ID Generation</h2>
+        <p>We need globally unique 8-character IDs that are URL-safe. Options:</p>
+        <p><strong>Random base-62:</strong> Generate 8 random chars from [a-zA-Z0-9]. 62^8 = 218 trillion combinations. At 5M/day it takes 119 years to exhaust. Collision probability at 5M/day: ~(5M)^2 / (2 × 218T) ≈ 0.006% per day — acceptable, but check for collision on INSERT and retry.</p>
+        <p><strong>Counter-based (preferred):</strong> Use a distributed counter (Redis INCR or a dedicated ID service). Convert the integer to base-62 string. Guarantees uniqueness, no collision check needed. Trade-off: predictable/enumerable IDs (attacker can iterate through pastes).</p>
+        <div class="callout callout--warning">
+          <strong>View count increment:</strong> Do NOT do a synchronous UPDATE on every read. At 579 QPS, this creates write contention on the pastes table. Instead: batch increments in Redis (INCR paste_views:{id}), flush to MySQL every 5 minutes via a background job. Accepts minor inaccuracy for huge performance gain.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Cache hit ratio:</strong> Pastebin traffic follows a power-law distribution. Top 1% of pastes receive 99% of views. Redis cache with 1GB RAM can hold ~100K pastes. That covers the "hot" pastes; cold pastes fall back to S3 which is still fast (&lt;100ms).</li>
+          <li><strong>Password-protected pastes:</strong> Store bcrypt(password) in MySQL. On GET, require X-Paste-Password header, verify with bcrypt.check(). Do NOT cache password-protected pastes in Redis (shared cache would expose content to other users).</li>
+          <li><strong>Paste too large for Redis:</strong> If paste content &gt; 1MB, skip Redis caching and serve directly from S3. 1MB threshold prevents large pastes from evicting many small hot pastes.</li>
+          <li><strong>S3 costs:</strong> At 50GB/day, S3 Standard costs ~$1.15/day. After 30 days, migrate to S3 Infrequent Access; after 90 days, Glacier. Use S3 Lifecycle rules.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>Pastebin is a great example of <strong>separating concerns by data type</strong>: structured metadata (small, indexed, relational) lives in MySQL; unstructured blobs (large, no queries needed) live in S3. This pattern appears in almost every large-scale system — never put blobs in a relational DB.</p>
+        <p>The read path (Redis → S3 → client) can be further optimized with a CDN in front of S3 for public pastes, reducing S3 GET costs and improving global read latency to &lt;50ms.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Content storage</td>
+                <td>MySQL TEXT column</td>
+                <td>S3 object storage</td>
+                <td>S3</td>
+                <td>10MB blobs in MySQL bloat the buffer pool and hurt index performance. S3 is built for blob storage, cheaper, and infinitely scalable.</td>
+              </tr>
+              <tr>
+                <td>ID generation</td>
+                <td>Random base-62 (with collision check)</td>
+                <td>Counter → base-62 (no collision)</td>
+                <td>Counter</td>
+                <td>Counter guarantees uniqueness without DB round-trip for collision check. Downside: sequential IDs are enumerable. Mitigate by adding a random offset to the counter.</td>
+              </tr>
+              <tr>
+                <td>Expiry enforcement</td>
+                <td>Redis TTL on cache keys</td>
+                <td>Background cleanup cron job</td>
+                <td>Both</td>
+                <td>Redis TTL removes from cache automatically. Cron job deletes from MySQL and S3. Need both — Redis TTL alone doesn't clean up S3 objects.</td>
+              </tr>
+              <tr>
+                <td>View count updates</td>
+                <td>Synchronous DB UPDATE on each read</td>
+                <td>Async batching via Redis → periodic flush</td>
+                <td>Async</td>
+                <td>579 QPS of write contention on the same row causes lock waits. Batching accepts small inaccuracy (±5 min lag) for dramatically better read performance.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * PasteService
+ * Core business logic for creating and retrieving pastes.
+ * Orchestrates S3, MySQL, and Redis cache layers.
+ */
+public class PasteService {
+
+    private static final int PASTE_ID_LENGTH = 8;
+    private static final String BASE62_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    private static final int MAX_CACHEABLE_CONTENT_BYTES = 1_048_576; // 1MB
+    private static final int DEFAULT_CACHE_TTL_SECONDS = 86_400;       // 24 hours
+
+    private final S3Client s3Client;
+    private final PasteRepository pasteRepository;
+    private final RedisClient redisClient;
+    private final IdGenerator idGenerator;
+
+    public PasteService(S3Client s3Client, PasteRepository pasteRepository,
+                        RedisClient redisClient, IdGenerator idGenerator) {
+        this.s3Client = s3Client;
+        this.pasteRepository = pasteRepository;
+        this.redisClient = redisClient;
+        this.idGenerator = idGenerator;
+    }
+
+    /**
+     * Creates a new paste: generates ID, uploads to S3, saves metadata to MySQL,
+     * caches in Redis for fast reads.
+     *
+     * @param createRequest the paste creation request from the API layer
+     * @return the created paste metadata including the short URL
+     */
+    public PasteMetadata createPaste(CreatePasteRequest createRequest) {
+        String pasteId = generateUniqueId();
+        String storageKey = "pastes/" + pasteId;
+
+        uploadContentToS3(storageKey, createRequest.content(), createRequest.syntax());
+
+        PasteRecord pasteRecord = new PasteRecord(
+            pasteId,
+            createRequest.title(),
+            storageKey,
+            createRequest.syntax(),
+            hashPasswordIfPresent(createRequest.password()),
+            calculateExpiryTimestamp(createRequest.expiresInSeconds())
+        );
+        pasteRepository.insert(pasteRecord);
+
+        if (createRequest.content().length() &lt;= MAX_CACHEABLE_CONTENT_BYTES
+                && createRequest.password() == null) {
+            cachePaste(pasteId, pasteRecord, createRequest.content());
+        }
+
+        return new PasteMetadata(pasteId, pasteRecord.expiresAt());
+    }
+
+    /**
+     * Retrieves paste content. Cache-first; falls back to S3 on miss.
+     * Does NOT cache password-protected pastes (security: shared cache).
+     *
+     * @param pasteId  the 8-character paste identifier
+     * @param password the submitted password, or null if none
+     * @return paste content and metadata, or empty if not found/expired
+     */
+    public Optional&lt;PasteContent&gt; getPaste(String pasteId, String password) {
+        Optional&lt;CachedPaste&gt; cachedPaste = redisClient.get("paste:" + pasteId, CachedPaste.class);
+
+        if (cachedPaste.isPresent()) {
+            incrementViewCountAsync(pasteId);
+            return Optional.of(new PasteContent(cachedPaste.get().content(), cachedPaste.get().metadata()));
+        }
+
+        Optional&lt;PasteRecord&gt; pasteRecord = pasteRepository.findById(pasteId);
+        if (pasteRecord.isEmpty()) {
+            return Optional.empty();
+        }
+
+        PasteRecord record = pasteRecord.get();
+
+        if (isPasteExpired(record)) {
+            pasteRepository.delete(pasteId);
+            return Optional.empty();
+        }
+
+        if (!verifyPassword(password, record.passwordHash())) {
+            throw new PasteAccessDeniedException("Incorrect password for paste " + pasteId);
+        }
+
+        String content = s3Client.getObjectAsString(record.storageKey());
+
+        if (record.passwordHash() == null && content.length() &lt;= MAX_CACHEABLE_CONTENT_BYTES) {
+            cachePaste(pasteId, record, content);
+        }
+
+        incrementViewCountAsync(pasteId);
+        return Optional.of(new PasteContent(content, record));
+    }
+
+    private String generateUniqueId() {
+        long counter = idGenerator.nextId();
+        return encodeBase62(counter, PASTE_ID_LENGTH);
+    }
+
+    private String encodeBase62(long number, int targetLength) {
+        StringBuilder encodedId = new StringBuilder();
+        while (number > 0 || encodedId.length() &lt; targetLength) {
+            encodedId.append(BASE62_CHARS.charAt((int) (number % 62)));
+            number /= 62;
+        }
+        return encodedId.reverse().toString();
+    }
+
+    private void uploadContentToS3(String storageKey, String content, String syntax) {
+        String contentType = "java".equals(syntax) || "python".equals(syntax)
+            ? "text/x-" + syntax
+            : "text/plain";
+        s3Client.putObject(storageKey, content.getBytes(StandardCharsets.UTF_8), contentType);
+    }
+
+    private void cachePaste(String pasteId, PasteRecord record, String content) {
+        int cacheTtlSeconds = record.expiresAt() != null
+            ? (int) Math.min(DEFAULT_CACHE_TTL_SECONDS,
+                Duration.between(Instant.now(), record.expiresAt().toInstant()).getSeconds())
+            : DEFAULT_CACHE_TTL_SECONDS;
+
+        if (cacheTtlSeconds > 0) {
+            redisClient.setWithTtl("paste:" + pasteId,
+                new CachedPaste(content, record), cacheTtlSeconds);
+        }
+    }
+
+    private void incrementViewCountAsync(String pasteId) {
+        // INCR paste_views:{pasteId} — flushed to MySQL every 5 minutes by background job
+        redisClient.increment("paste_views:" + pasteId);
+    }
+
+    private boolean isPasteExpired(PasteRecord record) {
+        return record.expiresAt() != null && record.expiresAt().before(new Date());
+    }
+
+    private boolean verifyPassword(String submittedPassword, String storedHash) {
+        if (storedHash == null) {
+            return true; // no password required
+        }
+        if (submittedPassword == null) {
+            return false; // password required but not provided
+        }
+        return BCrypt.checkpw(submittedPassword, storedHash);
+    }
+
+    private String hashPasswordIfPresent(String password) {
+        return password != null ? BCrypt.hashpw(password, BCrypt.gensalt()) : null;
+    }
+
+    private Timestamp calculateExpiryTimestamp(Long expiresInSeconds) {
+        if (expiresInSeconds == null) {
+            return null;
+        }
+        return Timestamp.from(Instant.now().plusSeconds(expiresInSeconds));
+    }
+
+    public record CreatePasteRequest(String title, String content, String syntax,
+                                     String password, Long expiresInSeconds) {}
+    public record PasteMetadata(String pasteId, Timestamp expiresAt) {}
+    public record PasteContent(String content, PasteRecord metadata) {}
+    public record CachedPaste(String content, PasteRecord metadata) {}
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-pastebin-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why is paste content stored in S3 rather than MySQL TEXT columns?" data-options='["S3 supports syntax highlighting; MySQL does not","Large blobs in MySQL bloat the buffer pool and hurt index performance; S3 is designed for blob storage and costs ~10x less per GB","MySQL TEXT columns have a 64KB size limit","S3 is faster than MySQL for all data types"]' data-correct="1" data-explanation="MySQL stores a limited amount of frequently-accessed data in its buffer pool. Large blobs evict index pages, causing slow queries elsewhere. S3 is optimized for arbitrary-size objects, is cheaper, and scales infinitely." style="display:none"></div>
+          <div data-question="Should password-protected pastes be cached in Redis? Why or why not?" data-options='["Yes — caching always improves performance","No — a shared Redis cache would expose protected content to users who query the same cache key without the password","Yes — but only with AES-256 encryption","No — Redis cannot store objects with passwords"]' data-correct="1" data-explanation="Redis is a shared cache. If paste content (without password check) is stored there, any service with Redis access can read it. Password-protected pastes must always go through the password verification path, bypassing the cache." style="display:none"></div>
+          <div data-question="View count increments at 579 QPS. Why is synchronous DB UPDATE per read a bad idea?" data-options='["MySQL UPDATE is not a supported operation","579 concurrent UPDATEs on the same row cause lock contention, serializing reads and killing throughput","Redis cannot track integers","The view_count column has a maximum value of 1000"]' data-correct="1" data-explanation="Row-level locking means concurrent UPDATEs on the same row queue up. At 579/sec, your reads are now waiting for update locks. The fix: batch increments in Redis and flush periodically — accepts ~5 min lag for dramatically better throughput." style="display:none"></div>
+          <div data-question="How many unique 8-character base-62 IDs exist, and when would Pastebin run out?" data-options='["62^8 ≈ 218 trillion IDs; at 5M/day = ~119 years before exhaustion","8^62 IDs — essentially infinite","Only 62×8 = 496 unique IDs","Base-62 only supports 8 characters total"]' data-correct="0" data-explanation="62^8 = 218,340,105,584,896 (218 trillion). At 5M pastes/day: 218T ÷ 5M = 43,668,021 days ≈ 119 years. Well beyond any practical concern, so collision handling is a nice-to-have, not a requirement." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="key-value-store.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="web-crawler.html" class="btn btn--outline">← Prev: Web Crawler</a>
+        <a href="key-value-store.html" class="btn btn--outline">Next: Key-Value Store →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

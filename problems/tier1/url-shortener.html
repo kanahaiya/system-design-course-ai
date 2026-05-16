@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a URL Shortener like bit.ly — full RESHADED walkthrough covering Snowflake IDs, base62 encoding, Redis caching, and Cassandra storage for MAANG interviews.">
+  <title>Design a URL Shortener — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/url-shortener/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-url-shortener" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=url-shortener" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Classic</span>
+        </div>
+        <h1 class="module-header__title">Design a URL Shortener (like bit.ly)</h1>
+        <p class="module-header__desc">A deceptively simple problem. The real challenge is generating globally unique short codes at 1,200 writes/second without collisions, then serving 115,000 redirects/second with sub-10ms latency.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Amazon, Google, Meta</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Read-heavy (100:1)</div>
+        </div>
+      </header>
+
+      <!-- R — Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>Always clarify before designing. State functional requirements (what the system does), then non-functional (how well it does it).</p>
+
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Given a long URL, generate a short 7-character code (e.g., <code>bit.ly/abc1234</code>)</li>
+            <li>Redirect short URL → original URL with minimal latency</li>
+            <li>Optional: custom aliases (<code>bit.ly/my-brand</code>)</li>
+            <li>Optional: expiry dates on short URLs</li>
+            <li>Optional: click analytics (count, geography, timestamp)</li>
+          </ul>
+
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 100M new URLs shortened per day; 10B redirects per day</li>
+            <li><strong>Availability:</strong> 99.9% uptime (redirect service is revenue-critical)</li>
+            <li><strong>Latency:</strong> Redirect must complete in &lt; 10ms p99</li>
+            <li><strong>Durability:</strong> Short URLs must never be lost or reused after deletion</li>
+            <li><strong>Uniqueness:</strong> No two long URLs map to the same short code; no two short codes map to the same slot</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Interviewer signal:</strong> Asking "should 301 or 302 redirect be used?" shows you understand caching vs analytics trade-offs. Bring this up here — not at the end.
+          </div>
+        </div>
+      </section>
+
+      <!-- E — Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Traffic</h3>
+          <ul>
+            <li><strong>Write QPS:</strong> 100M / 86,400 ≈ <strong>1,200 writes/sec</strong></li>
+            <li><strong>Read QPS:</strong> 10B / 86,400 ≈ <strong>115,000 reads/sec</strong></li>
+            <li><strong>Read:Write ratio ≈ 100:1</strong> → heavily read-optimised design</li>
+          </ul>
+
+          <h3>Storage</h3>
+          <ul>
+            <li>Each URL record ≈ 500 bytes (short_code + long URL + metadata)</li>
+            <li>100M writes/day × 365 days × 5 years = 182.5B records</li>
+            <li>182.5B × 500B ≈ <strong>~91 TB over 5 years</strong></li>
+            <li>Fits in a sharded Cassandra cluster (3–5 nodes initially)</li>
+          </ul>
+
+          <h3>Cache</h3>
+          <ul>
+            <li>80/20 rule: 20% of URLs generate 80% of traffic</li>
+            <li>Cache the hot 20%: 100M active URLs × 20% × 500B ≈ <strong>10GB RAM</strong> — easily fits in Redis</li>
+          </ul>
+
+          <div class="callout callout--info">
+            <strong>Key insight:</strong> The read:write ratio of 100:1 immediately tells you to optimise the read path aggressively. Redis cache is non-negotiable, not optional.
+          </div>
+        </div>
+      </section>
+
+      <!-- S — Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// urls table (Cassandra — sharded by short_code)
+CREATE TABLE urls (
+    short_code   VARCHAR(7)  PRIMARY KEY,   -- e.g. "abc1234"
+    original_url TEXT        NOT NULL,
+    user_id      BIGINT,                    -- nullable for anonymous
+    created_at   TIMESTAMP   NOT NULL,
+    expires_at   TIMESTAMP,                 -- null = never expires
+    is_active    BOOLEAN     DEFAULT TRUE
+);
+
+// analytics table (Cassandra — time-series optimised)
+CREATE TABLE url_analytics (
+    short_code   VARCHAR(7),
+    date         DATE,
+    click_count  BIGINT,
+    PRIMARY KEY ((short_code), date)        -- partition by code, cluster by date
+);
+
+// Redis key pattern:
+// GET url:{short_code}  →  original_url (string, TTL = 24 hours)</code></pre>
+
+          <p>Why Cassandra? The primary access pattern is lookup by <code>short_code</code> — a perfect Cassandra partition key. Cassandra handles 100k+ reads/sec per node and horizontal sharding is built in.</p>
+        </div>
+      </section>
+
+      <!-- H — High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Write Path (Shorten URL)</h3>
+          <ol>
+            <li>Client → API Gateway → <strong>URL Service</strong></li>
+            <li>URL Service calls <strong>ID Generator Service</strong> (Snowflake) → gets unique 64-bit ID</li>
+            <li>Base62-encode the ID → 7-character short code</li>
+            <li>Write to <strong>Cassandra</strong> (durable storage)</li>
+            <li>Write to <strong>Redis</strong> (cache warm-up with 24hr TTL)</li>
+            <li>Return short URL to client</li>
+          </ol>
+
+          <h3>Read Path (Redirect)</h3>
+          <ol>
+            <li>Client requests <code>short.ly/abc1234</code></li>
+            <li><strong>CDN edge node</strong> checks its cache → HIT: 302 redirect immediately (fastest path)</li>
+            <li>CDN MISS → <strong>Redirect Service</strong> checks <strong>Redis</strong></li>
+            <li>Redis HIT (80% of traffic): return <code>original_url</code></li>
+            <li>Redis MISS: query <strong>Cassandra</strong> → populate Redis → return <code>original_url</code></li>
+            <li>HTTP 302 redirect to <code>original_url</code></li>
+          </ol>
+
+          <div class="callout callout--warning">
+            <strong>301 vs 302:</strong> Use <strong>302 Found</strong>. A 301 (permanent) is cached by the browser — the redirect never hits your servers again, so analytics break. A 302 (temporary) always comes back to your server, enabling click counting.
+          </div>
+        </div>
+      </section>
+
+      <!-- A — APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// POST /api/v1/urls
+// Request body:
+{
+  "originalUrl": "https://example.com/very/long/path?query=string",
+  "customAlias": "my-brand",    // optional
+  "expiresAt": "2025-12-31"     // optional ISO 8601
+}
+// Response 201 Created:
+{
+  "shortUrl": "https://short.ly/abc1234",
+  "shortCode": "abc1234",
+  "originalUrl": "https://example.com/...",
+  "expiresAt": null
+}
+
+// GET /{shortCode}
+// Response: 302 Found, Location: https://original-url.com/...
+// Response: 404 Not Found (expired or never existed)
+// Response: 410 Gone (deleted by user)
+
+// GET /api/v1/urls/{shortCode}/analytics
+// Response 200:
+{
+  "shortCode": "abc1234",
+  "totalClicks": 15432,
+  "clicksByDate": [
+    { "date": "2024-01-15", "clicks": 234 },
+    ...
+  ]
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- D — Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Unique ID Generation
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>This is <strong>the</strong> hard problem in URL shortening. Three approaches:</p>
+
+          <h3>Option A: Random + Check</h3>
+          <p>Generate 7 random base62 characters, check DB if taken. Problem: at high scale, collisions become frequent (birthday paradox). Requires DB round-trip per write. Reject.</p>
+
+          <h3>Option B: Counter + Base62</h3>
+          <p>Use a single auto-increment counter in DB. Base62-encode it. Problem: single counter is a bottleneck and SPOF. Range partitioning helps but adds complexity.</p>
+
+          <h3>Option C: Snowflake ID → Base62 (Chosen)</h3>
+          <p>Twitter's Snowflake algorithm produces a 64-bit ID = 41-bit timestamp (milliseconds) + 10-bit machine ID + 12-bit sequence. No coordination between nodes. No DB round-trip. Guarantee: 4,096 unique IDs per millisecond per machine.</p>
+
+          <p>Base62 encode the 64-bit ID using characters <code>[0-9A-Za-z]</code>. A 64-bit number encodes to at most 11 base62 characters. We take the last 7 (still unique within our ID space for practical URL volumes).</p>
+        </div>
+      </section>
+
+      <!-- E — Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Failure Modes</h3>
+          <ul>
+            <li><strong>ID Generator SPOF:</strong> Run multiple Snowflake nodes, each with a unique machine ID (10-bit = up to 1,024 machines)</li>
+            <li><strong>Redis failure:</strong> Fail open — fall through to Cassandra. Rate of miss increases but service stays up</li>
+            <li><strong>Cassandra node down:</strong> Replication factor 3 with quorum reads/writes ensures availability with 1 node down</li>
+          </ul>
+
+          <h3>Cache Eviction</h3>
+          <p>Use LRU eviction in Redis. Hot URLs (top 20%) stay warm naturally. Set TTL = 24 hours for cold URLs. URLs with <code>expires_at</code> set a matching Redis TTL.</p>
+
+          <h3>Expiry Cleanup</h3>
+          <p>Redis handles its own TTL cleanup. For Cassandra, run a background Spark job daily to tombstone expired rows (do not delete immediately — Cassandra deletes are expensive).</p>
+        </div>
+      </section>
+
+      <!-- D — Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Summary Statement for Interviewer</h3>
+          <p>"We use a Snowflake ID generator to produce collision-free short codes without coordination. The read path is CDN → Redis → Cassandra, with an expected 80% Redis hit rate keeping p99 redirect latency under 10ms. We use 302 redirects to preserve analytics. The system scales horizontally — add more Redirect Service instances behind the load balancer, add Cassandra nodes for storage, and the ID generator scales by adding machines with unique machine IDs."</p>
+
+          <h3>What to Mention if Time Allows</h3>
+          <ul>
+            <li>Analytics pipeline: click events → Kafka → Flink aggregation → analytics DB</li>
+            <li>Abuse prevention: rate limit URL creation per API key</li>
+            <li>Multi-region: deploy in US/EU/APAC, use GeoDNS to route users to nearest region</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr>
+                <th>Decision</th>
+                <th>Option A</th>
+                <th>Option B</th>
+                <th>Winner</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>ID Generation</td>
+                <td>Random + collision check</td>
+                <td>Snowflake → Base62</td>
+                <td><strong>Snowflake</strong> — no coordination, no collision</td>
+              </tr>
+              <tr>
+                <td>Primary Storage</td>
+                <td>PostgreSQL (relational)</td>
+                <td>Cassandra (NoSQL)</td>
+                <td><strong>Cassandra</strong> — key-value lookups at 100k+ QPS</td>
+              </tr>
+              <tr>
+                <td>Redirect Type</td>
+                <td>301 Permanent (browser caches)</td>
+                <td>302 Temporary (server sees each)</td>
+                <td><strong>302</strong> — analytics require every hit to touch server</td>
+              </tr>
+              <tr>
+                <td>Cache Layer</td>
+                <td>No cache (DB only)</td>
+                <td>Redis in front of DB</td>
+                <td><strong>Redis</strong> — 10ms requirement impossible without cache</td>
+              </tr>
+              <tr>
+                <td>Redirect Serving</td>
+                <td>App server only</td>
+                <td>CDN + App server fallback</td>
+                <td><strong>CDN</strong> — geographically distributed, sub-5ms for hot URLs</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * Snowflake ID Generator — produces unique 64-bit IDs across distributed nodes.
+ * Structure: 41-bit timestamp | 10-bit machineId | 12-bit sequence
+ */
+public class SnowflakeIdGenerator {
+    private static final long EPOCH = 1700000000000L;      // Custom epoch (Nov 2023)
+    private static final long MACHINE_ID_BITS = 10L;
+    private static final long SEQUENCE_BITS = 12L;
+    private static final long MAX_MACHINE_ID = ~(-1L << MACHINE_ID_BITS); // 1023
+    private static final long MAX_SEQUENCE = ~(-1L << SEQUENCE_BITS);     // 4095
+    private static final long MACHINE_ID_SHIFT = SEQUENCE_BITS;           // 12
+    private static final long TIMESTAMP_SHIFT = MACHINE_ID_BITS + SEQUENCE_BITS; // 22
+
+    private final long machineId;
+    private long lastTimestampMs = -1L;
+    private long sequence = 0L;
+
+    public SnowflakeIdGenerator(long machineId) {
+        if (machineId < 0 || machineId > MAX_MACHINE_ID) {
+            throw new IllegalArgumentException("machineId must be 0–" + MAX_MACHINE_ID);
+        }
+        this.machineId = machineId;
+    }
+
+    public synchronized long nextId() {
+        long currentTimestampMs = System.currentTimeMillis() - EPOCH;
+
+        if (currentTimestampMs == lastTimestampMs) {
+            sequence = (sequence + 1) & MAX_SEQUENCE;
+            if (sequence == 0) {
+                // Sequence exhausted — spin until next millisecond
+                currentTimestampMs = waitForNextMillisecond(lastTimestampMs);
+            }
+        } else {
+            sequence = 0L;
+        }
+
+        if (currentTimestampMs < lastTimestampMs) {
+            throw new IllegalStateException("Clock moved backwards — refusing to generate ID");
+        }
+
+        lastTimestampMs = currentTimestampMs;
+
+        return (currentTimestampMs << TIMESTAMP_SHIFT)
+             | (machineId << MACHINE_ID_SHIFT)
+             | sequence;
+    }
+
+    private long waitForNextMillisecond(long lastTimestampMs) {
+        long timestamp = System.currentTimeMillis() - EPOCH;
+        while (timestamp <= lastTimestampMs) {
+            timestamp = System.currentTimeMillis() - EPOCH;
+        }
+        return timestamp;
+    }
+}
+
+/**
+ * Base62 encoder — converts a long ID to a 7-character short code.
+ * Alphabet: 0-9, A-Z, a-z (62 characters)
+ */
+public class Base62Encoder {
+    private static final String ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    private static final int BASE = 62;
+    private static final int SHORT_CODE_LENGTH = 7;
+
+    public static String encode(long id) {
+        if (id < 0) throw new IllegalArgumentException("ID must be non-negative");
+
+        char[] shortCode = new char[SHORT_CODE_LENGTH];
+        for (int index = SHORT_CODE_LENGTH - 1; index >= 0; index--) {
+            shortCode[index] = ALPHABET.charAt((int)(id % BASE));
+            id /= BASE;
+        }
+        return new String(shortCode);
+    }
+
+    public static long decode(String shortCode) {
+        long id = 0;
+        for (char character : shortCode.toCharArray()) {
+            int digitValue = ALPHABET.indexOf(character);
+            if (digitValue == -1) {
+                throw new IllegalArgumentException("Invalid character in short code: " + character);
+            }
+            id = id * BASE + digitValue;
+        }
+        return id;
+    }
+}
+
+/**
+ * URL Shortener Service — orchestrates ID generation, caching, and persistence.
+ */
+public class UrlShortenerService {
+    private static final int CACHE_TTL_SECONDS = 86_400; // 24 hours
+    private static final String CACHE_KEY_PREFIX = "url:";
+    private static final String BASE_URL = "https://short.ly/";
+
+    private final SnowflakeIdGenerator idGenerator;
+    private final RedisClient redisClient;
+    private final UrlRepository urlRepository;
+
+    public UrlShortenerService(SnowflakeIdGenerator idGenerator,
+                               RedisClient redisClient,
+                               UrlRepository urlRepository) {
+        this.idGenerator = idGenerator;
+        this.redisClient = redisClient;
+        this.urlRepository = urlRepository;
+    }
+
+    /**
+     * Creates a short URL for the given original URL.
+     * @param originalUrl The URL to shorten (must be valid HTTP/HTTPS)
+     * @param userId      The authenticated user, or null for anonymous
+     * @param expiresAt   Optional expiry instant, or null for permanent
+     * @return The complete short URL string
+     */
+    public String shortenUrl(String originalUrl, Long userId, Instant expiresAt) {
+        validateUrl(originalUrl);
+
+        long snowflakeId = idGenerator.nextId();
+        String shortCode = Base62Encoder.encode(snowflakeId);
+
+        UrlRecord record = new UrlRecord(shortCode, originalUrl, userId,
+                                         Instant.now(), expiresAt, true);
+        urlRepository.save(record);
+
+        // Warm the cache immediately — avoids cold-start miss on first redirect
+        String cacheKey = CACHE_KEY_PREFIX + shortCode;
+        int ttlSeconds = expiresAt != null
+            ? (int) Duration.between(Instant.now(), expiresAt).getSeconds()
+            : CACHE_TTL_SECONDS;
+        redisClient.setex(cacheKey, ttlSeconds, originalUrl);
+
+        return BASE_URL + shortCode;
+    }
+
+    /**
+     * Resolves a short code to the original URL.
+     * Read path: Redis cache → Cassandra fallback.
+     * @param shortCode The 7-character short code
+     * @return The original URL, or empty if not found/expired
+     */
+    public Optional<String> resolveShortCode(String shortCode) {
+        String cacheKey = CACHE_KEY_PREFIX + shortCode;
+
+        // Fast path: Redis cache
+        String cachedUrl = redisClient.get(cacheKey);
+        if (cachedUrl != null) {
+            recordClickAsync(shortCode);
+            return Optional.of(cachedUrl);
+        }
+
+        // Slow path: Cassandra lookup
+        Optional<UrlRecord> record = urlRepository.findByShortCode(shortCode);
+        if (record.isEmpty()) {
+            return Optional.empty();
+        }
+
+        UrlRecord urlRecord = record.get();
+        if (!urlRecord.isActive() || isExpired(urlRecord)) {
+            return Optional.empty();
+        }
+
+        // Repopulate cache on miss
+        int remainingTtl = urlRecord.getExpiresAt() != null
+            ? (int) Duration.between(Instant.now(), urlRecord.getExpiresAt()).getSeconds()
+            : CACHE_TTL_SECONDS;
+        if (remainingTtl > 0) {
+            redisClient.setex(cacheKey, remainingTtl, urlRecord.getOriginalUrl());
+        }
+
+        recordClickAsync(shortCode);
+        return Optional.of(urlRecord.getOriginalUrl());
+    }
+
+    private void validateUrl(String url) {
+        if (url == null || url.isBlank()) {
+            throw new IllegalArgumentException("URL must not be blank");
+        }
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            throw new IllegalArgumentException("URL must start with http:// or https://");
+        }
+        if (url.length() > 2048) {
+            throw new IllegalArgumentException("URL exceeds maximum length of 2048 characters");
+        }
+    }
+
+    private boolean isExpired(UrlRecord record) {
+        return record.getExpiresAt() != null && Instant.now().isAfter(record.getExpiresAt());
+    }
+
+    private void recordClickAsync(String shortCode) {
+        // Fire-and-forget analytics — does not block redirect
+        CompletableFuture.runAsync(() ->
+            urlRepository.incrementClickCount(shortCode, LocalDate.now())
+        );
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-url-shortener-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why use a 302 redirect instead of 301 when implementing a URL shortener with analytics?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">301 is slower than 302</button></li>
+              <li><button class="quiz__option" data-correct="true">301 is cached by browsers, so subsequent clicks never reach the server — analytics break</button></li>
+              <li><button class="quiz__option" data-correct="false">302 is the correct HTTP status for permanent redirects</button></li>
+              <li><button class="quiz__option" data-correct="false">Browsers do not follow 301 redirects automatically</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">In a Snowflake ID, what prevents two machines from generating the same ID at the same millisecond?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">A distributed lock in ZooKeeper</button></li>
+              <li><button class="quiz__option" data-correct="false">A central counter service</button></li>
+              <li><button class="quiz__option" data-correct="true">Each machine has a unique 10-bit machine ID embedded in the ID</button></li>
+              <li><button class="quiz__option" data-correct="false">Machines operate in different time zones</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">What is the primary reason to choose Cassandra over PostgreSQL for the URL mapping store?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Cassandra supports SQL queries, PostgreSQL does not</button></li>
+              <li><button class="quiz__option" data-correct="false">Cassandra has stronger ACID guarantees</button></li>
+              <li><button class="quiz__option" data-correct="true">Cassandra scales horizontally and provides high read throughput for key-value lookups</button></li>
+              <li><button class="quiz__option" data-correct="false">Cassandra stores data in memory, making it faster</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">If the Redis cache fails, what should happen to the URL redirect service?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Return 503 Service Unavailable to all users</button></li>
+              <li><button class="quiz__option" data-correct="true">Fail open — fall through to Cassandra, accepting higher latency</button></li>
+              <li><button class="quiz__option" data-correct="false">Restart the Redis instance before serving any requests</button></li>
+              <li><button class="quiz__option" data-correct="false">Return 302 to the homepage as a safe fallback</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev / Next -->
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <span></span>
+        <a href="twitter-feed.html" class="btn btn--primary">Next: Twitter Feed →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

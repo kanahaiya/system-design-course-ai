@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="The most comprehensive interactive system design course for MAANG interviews. Master 40+ real problems with full Java implementations, animated diagrams, quizzes, and a mock interview simulator.">
+  <title>MAANG System Design — Interactive Interview Prep Course</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/main.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <!-- Navigation -->
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="#modules" class="site-nav__link">Modules</a></li>
+        <li><a href="#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="modules/00-framework/index.html" class="site-nav__cta">Start Learning →</a>
+    </div>
+  </nav>
+
+  <main id="main" class="page-wrapper">
+
+    <!-- Hero -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero__bg-grid" aria-hidden="true"></div>
+      <div class="hero__bg-glow" aria-hidden="true"></div>
+      <div class="hero__inner">
+        <div class="hero__badge animate-fade-in-up">
+          ⚡ 98%+ MAANG Interview Coverage
+        </div>
+        <h1 class="hero__title animate-fade-in-up animate-delay-1" id="hero-title">
+          Crack the<br>
+          <span class="hero__title-accent">System Design</span><br>
+          Interview
+        </h1>
+        <p class="hero__subtitle animate-fade-in-up animate-delay-2">
+          A complete, hands-on course covering every pattern, problem, and principle
+          asked at Meta, Apple, Amazon, Netflix, and Google — with full Java implementations,
+          animated diagrams, and a real mock interview simulator.
+        </p>
+        <div class="hero__actions animate-fade-in-up animate-delay-3">
+          <a href="modules/00-framework/index.html" class="btn btn--primary">
+            Start with the Framework →
+          </a>
+          <a href="mock-interview/index.html" class="btn btn--outline">
+            Try Mock Interview
+          </a>
+        </div>
+        <div class="hero__stats animate-fade-in-up animate-delay-4">
+          <div class="hero__stat">
+            <span class="hero__stat-value" id="js-total-modules">11</span>
+            <div class="hero__stat-label">Core Modules</div>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__stat-value">40</span>
+            <div class="hero__stat-label">Real Problems</div>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__stat-value" id="js-completed-count">0</span>
+            <div class="hero__stat-label">Completed</div>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__stat-value">Java</span>
+            <div class="hero__stat-label">Implementations</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="section" aria-labelledby="how-it-works-title">
+      <div class="container--wide">
+        <div class="section__header">
+          <div class="section__label">How It Works</div>
+          <h2 class="section__title" id="how-it-works-title">Learn, Practice, Simulate</h2>
+          <p class="section__desc">
+            Three phases designed to build intuition, not just knowledge.
+          </p>
+        </div>
+        <div class="module-grid">
+          <div class="card animate-fade-in-up">
+            <div style="font-size:2rem;margin-bottom:var(--space-3)">📖</div>
+            <h3 style="margin-bottom:var(--space-2);font-size:var(--text-lg)">Learn the Patterns</h3>
+            <p style="color:var(--color-text-secondary);font-size:var(--text-sm);line-height:var(--leading-relaxed)">
+              11 structured modules covering every building block — from CAP theorem to event sourcing.
+              Each module has animated diagrams and full Java implementations.
+            </p>
+          </div>
+          <div class="card animate-fade-in-up animate-delay-1">
+            <div style="font-size:2rem;margin-bottom:var(--space-3)">🎯</div>
+            <h3 style="margin-bottom:var(--space-2);font-size:var(--text-lg)">Solve Real Problems</h3>
+            <p style="color:var(--color-text-secondary);font-size:var(--text-sm);line-height:var(--leading-relaxed)">
+              40 real MAANG problems with step-by-step RESHADED walkthroughs, trade-off tables,
+              and knowledge-check quizzes after every problem.
+            </p>
+          </div>
+          <div class="card animate-fade-in-up animate-delay-2">
+            <div style="font-size:2rem;margin-bottom:var(--space-3)">⏱️</div>
+            <h3 style="margin-bottom:var(--space-2);font-size:var(--text-lg)">Simulate the Interview</h3>
+            <p style="color:var(--color-text-secondary);font-size:var(--text-sm);line-height:var(--leading-relaxed)">
+              A 45-minute mock interview simulator with a countdown timer, collapsible hints,
+              and a step-by-step guide revealed only when you ask for it.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RESHADED Banner -->
+    <section class="section" style="padding:var(--space-8) 0" aria-labelledby="framework-title">
+      <div class="container--wide">
+        <div style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-2xl);padding:var(--space-8);display:flex;align-items:center;gap:var(--space-8);flex-wrap:wrap">
+          <div style="flex:1;min-width:280px">
+            <div class="section__label" style="text-align:left">The Framework</div>
+            <h2 class="section__title" style="text-align:left;font-size:var(--text-2xl)" id="framework-title">RESHADED — A Universal Answer Framework</h2>
+            <p style="color:var(--color-text-secondary);font-size:var(--text-sm);line-height:var(--leading-relaxed);margin-bottom:var(--space-5)">
+              Every system design question at MAANG can be answered with 8 structured steps.
+              Master this framework first — it's the skeleton every answer hangs on.
+            </p>
+            <a href="modules/00-framework/index.html" class="btn btn--primary btn--sm">Learn RESHADED →</a>
+          </div>
+          <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;justify-content:center">
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">R — Requirements</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">E — Estimation</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">S — Schema</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">H — High-level Design</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">A — APIs</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">D — Deep Dive</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">E — Evaluate</span>
+            <span class="tag tag--primary" style="padding:var(--space-2) var(--space-3);font-size:var(--text-sm)">D — Deliver</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modules -->
+    <section class="section" id="modules" aria-labelledby="modules-title">
+      <div class="container--wide">
+        <div class="section__header">
+          <div class="section__label">Core Curriculum</div>
+          <h2 class="section__title" id="modules-title">11 Modules, Every Pattern</h2>
+          <p class="section__desc">
+            From first principles to advanced distributed systems patterns.
+            Each module builds on the previous.
+          </p>
+        </div>
+        <div class="module-grid">
+          <a href="modules/00-framework/index.html" class="module-card" data-lesson-id="module-00">
+            <div class="module-card__number">Module 00</div>
+            <div class="module-card__icon">🗺️</div>
+            <div class="module-card__title">Interview Framework</div>
+            <div class="module-card__desc">The RESHADED framework — a universal 8-step structure for answering any system design question in 45 minutes.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags">
+                <span class="tag">Start Here</span>
+                <span class="tag tag--primary">Essential</span>
+              </div>
+              <div class="problem-card__complete-icon" style="width:20px;height:20px;border-radius:50%;border:2px solid var(--color-border);display:flex;align-items:center;justify-content:center;font-size:10px"></div>
+            </div>
+          </a>
+          <a href="modules/01-fundamentals/index.html" class="module-card" data-lesson-id="module-01">
+            <div class="module-card__number">Module 01</div>
+            <div class="module-card__icon">⚛️</div>
+            <div class="module-card__title">Fundamentals</div>
+            <div class="module-card__desc">CAP theorem, BASE vs ACID, consistency models, back-of-envelope estimation, latency numbers every engineer must know.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">CAP</span><span class="tag">ACID</span><span class="tag">Estimation</span></div>
+            </div>
+          </a>
+          <a href="modules/02-storage/index.html" class="module-card" data-lesson-id="module-02">
+            <div class="module-card__number">Module 02</div>
+            <div class="module-card__icon">🗄️</div>
+            <div class="module-card__title">Storage & Databases</div>
+            <div class="module-card__desc">SQL vs NoSQL, sharding strategies, replication (leader/follower, multi-leader), indexing (B-tree, LSM-tree).</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Sharding</span><span class="tag">Replication</span></div>
+            </div>
+          </a>
+          <a href="modules/03-caching/index.html" class="module-card" data-lesson-id="module-03">
+            <div class="module-card__number">Module 03</div>
+            <div class="module-card__icon">⚡</div>
+            <div class="module-card__title">Caching</div>
+            <div class="module-card__desc">Cache-aside, write-through, write-back, eviction policies (LRU/LFU), Redis data structures, CDN caching strategies.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Redis</span><span class="tag">CDN</span><span class="tag">LRU</span></div>
+            </div>
+          </a>
+          <a href="modules/04-messaging/index.html" class="module-card" data-lesson-id="module-04">
+            <div class="module-card__number">Module 04</div>
+            <div class="module-card__icon">📨</div>
+            <div class="module-card__title">Messaging & Queues</div>
+            <div class="module-card__desc">Kafka architecture, at-least-once vs exactly-once delivery, pub-sub vs queue, dead-letter queues, consumer groups.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Kafka</span><span class="tag">Pub-Sub</span></div>
+            </div>
+          </a>
+          <a href="modules/05-api-design/index.html" class="module-card" data-lesson-id="module-05">
+            <div class="module-card__number">Module 05</div>
+            <div class="module-card__icon">🔌</div>
+            <div class="module-card__title">API Design</div>
+            <div class="module-card__desc">REST, gRPC, GraphQL trade-offs, rate limiting (token bucket, sliding window log), API versioning, idempotency keys.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">REST</span><span class="tag">gRPC</span><span class="tag">Rate Limiting</span></div>
+            </div>
+          </a>
+          <a href="modules/06-distributed/index.html" class="module-card" data-lesson-id="module-06">
+            <div class="module-card__number">Module 06</div>
+            <div class="module-card__icon">🌐</div>
+            <div class="module-card__title">Distributed Systems</div>
+            <div class="module-card__desc">Raft consensus, leader election, distributed locks (Redlock), two-phase commit, the Saga pattern for distributed transactions.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Raft</span><span class="tag">Saga</span><span class="tag">2PC</span></div>
+            </div>
+          </a>
+          <a href="modules/07-scalability/index.html" class="module-card" data-lesson-id="module-07">
+            <div class="module-card__number">Module 07</div>
+            <div class="module-card__icon">📈</div>
+            <div class="module-card__title">Scalability</div>
+            <div class="module-card__desc">Consistent hashing, virtual nodes, fanout strategies (push/pull/hybrid), load balancing algorithms, horizontal vs vertical scaling.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Consistent Hashing</span><span class="tag">Fanout</span></div>
+            </div>
+          </a>
+          <a href="modules/08-observability/index.html" class="module-card" data-lesson-id="module-08">
+            <div class="module-card__number">Module 08</div>
+            <div class="module-card__icon">🔭</div>
+            <div class="module-card__title">Observability</div>
+            <div class="module-card__desc">RED and USE methodologies, distributed tracing (OpenTelemetry), alerting strategies, SLO/SLA/SLI definitions.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">Metrics</span><span class="tag">Tracing</span><span class="tag">SLO</span></div>
+            </div>
+          </a>
+          <a href="modules/09-security/index.html" class="module-card" data-lesson-id="module-09">
+            <div class="module-card__number">Module 09</div>
+            <div class="module-card__icon">🔐</div>
+            <div class="module-card__title">Security</div>
+            <div class="module-card__desc">OAuth 2.0, JWT, mTLS, encryption at rest and in transit, GDPR data flow design, zero-trust architecture principles.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">OAuth2</span><span class="tag">JWT</span><span class="tag">mTLS</span></div>
+            </div>
+          </a>
+          <a href="modules/10-patterns/index.html" class="module-card" data-lesson-id="module-10">
+            <div class="module-card__number">Module 10</div>
+            <div class="module-card__icon">🧩</div>
+            <div class="module-card__title">Design Patterns</div>
+            <div class="module-card__desc">CQRS, Event Sourcing, Circuit Breaker, Bulkhead, Sidecar, Strangler Fig — patterns that separate senior from junior designs.</div>
+            <div class="module-card__meta">
+              <div class="module-card__tags"><span class="tag">CQRS</span><span class="tag">Event Sourcing</span></div>
+            </div>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Problems -->
+    <section class="section" id="problems" aria-labelledby="problems-title">
+      <div class="container--wide">
+        <div class="section__header">
+          <div class="section__label">40 Real Problems</div>
+          <h2 class="section__title" id="problems-title">The Exact Problems Asked at MAANG</h2>
+          <p class="section__desc">
+            Tiered by frequency. Start with Tier 1. Each problem has a full RESHADED walkthrough + Java implementation.
+          </p>
+        </div>
+
+        <!-- Tier Legend -->
+        <div style="display:flex;gap:var(--space-6);margin-bottom:var(--space-8);flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:var(--space-2)">
+            <div style="width:10px;height:10px;border-radius:50%;background:var(--color-tier1);box-shadow:0 0 6px var(--color-tier1)"></div>
+            <span style="font-size:var(--text-sm);color:var(--color-text-secondary)"><strong style="color:var(--color-tier1)">Tier 1</strong> — Asked at every MAANG company</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:var(--space-2)">
+            <div style="width:10px;height:10px;border-radius:50%;background:var(--color-tier2);box-shadow:0 0 6px var(--color-tier2)"></div>
+            <span style="font-size:var(--text-sm);color:var(--color-text-secondary)"><strong style="color:var(--color-tier2)">Tier 2</strong> — Common, especially at senior levels</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:var(--space-2)">
+            <div style="width:10px;height:10px;border-radius:50%;background:var(--color-tier3);box-shadow:0 0 6px var(--color-tier3)"></div>
+            <span style="font-size:var(--text-sm);color:var(--color-text-secondary)"><strong style="color:var(--color-tier3)">Tier 3</strong> — Staff+ and principal-level deep dives</span>
+          </div>
+        </div>
+
+        <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
+          <span style="color:var(--color-tier1)">●</span> Tier 1 — Must Know
+        </h3>
+        <div class="problem-grid" style="margin-bottom:var(--space-10)">
+          <a href="problems/tier1/url-shortener.html" class="problem-card" data-lesson-id="p-url-shortener">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon • Google • Meta</div>
+            <div class="problem-card__title">Design a URL Shortener (like bit.ly)</div>
+            <div class="problem-card__meta">
+              <span class="tag">Hashing</span><span class="tag">Caching</span><span class="tag">NoSQL</span>
+            </div>
+            <div class="problem-card__complete">
+              <div class="problem-card__complete-icon"></div>
+              <span>Mark complete</span>
+            </div>
+          </a>
+          <a href="problems/tier1/twitter-feed.html" class="problem-card" data-lesson-id="p-twitter-feed">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Meta • Twitter • LinkedIn</div>
+            <div class="problem-card__title">Design Twitter / News Feed</div>
+            <div class="problem-card__meta">
+              <span class="tag">Fanout</span><span class="tag">Caching</span><span class="tag">Kafka</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/youtube.html" class="problem-card" data-lesson-id="p-youtube">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google • Netflix • Meta</div>
+            <div class="problem-card__title">Design YouTube / Video Streaming</div>
+            <div class="problem-card__meta">
+              <span class="tag">CDN</span><span class="tag">Object Storage</span><span class="tag">Transcoding</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/whatsapp.html" class="problem-card" data-lesson-id="p-whatsapp">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Meta • Apple • Google</div>
+            <div class="problem-card__title">Design WhatsApp / Messaging System</div>
+            <div class="problem-card__meta">
+              <span class="tag">WebSocket</span><span class="tag">Presence</span><span class="tag">E2E Encryption</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/rate-limiter.html" class="problem-card" data-lesson-id="p-rate-limiter">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google • Amazon • Stripe</div>
+            <div class="problem-card__title">Design a Rate Limiter</div>
+            <div class="problem-card__meta">
+              <span class="tag">Token Bucket</span><span class="tag">Redis</span><span class="tag">Distributed</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/distributed-cache.html" class="problem-card" data-lesson-id="p-distributed-cache">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon • Meta • Google</div>
+            <div class="problem-card__title">Design a Distributed Cache (like Memcached)</div>
+            <div class="problem-card__meta">
+              <span class="tag">Consistent Hashing</span><span class="tag">LRU</span><span class="tag">Replication</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/search-autocomplete.html" class="problem-card" data-lesson-id="p-search-autocomplete">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google • Amazon • Meta</div>
+            <div class="problem-card__title">Design Search Autocomplete</div>
+            <div class="problem-card__meta">
+              <span class="tag">Trie</span><span class="tag">Caching</span><span class="tag">Analytics</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/notification-system.html" class="problem-card" data-lesson-id="p-notification">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Meta • Amazon • Netflix</div>
+            <div class="problem-card__title">Design a Notification System</div>
+            <div class="problem-card__meta">
+              <span class="tag">Push</span><span class="tag">Kafka</span><span class="tag">Fanout</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/uber.html" class="problem-card" data-lesson-id="p-uber">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google Maps • Lyft • Amazon</div>
+            <div class="problem-card__title">Design Uber / Ride Sharing</div>
+            <div class="problem-card__meta">
+              <span class="tag">Geo-Index</span><span class="tag">WebSocket</span><span class="tag">Matching</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/web-crawler.html" class="problem-card" data-lesson-id="p-web-crawler">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google • Bing • Amazon</div>
+            <div class="problem-card__title">Design a Web Crawler</div>
+            <div class="problem-card__meta">
+              <span class="tag">BFS</span><span class="tag">Deduplication</span><span class="tag">Distributed</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/pastebin.html" class="problem-card" data-lesson-id="p-pastebin">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon • Google</div>
+            <div class="problem-card__title">Design Pastebin</div>
+            <div class="problem-card__meta">
+              <span class="tag">Object Storage</span><span class="tag">CDN</span><span class="tag">Hashing</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/key-value-store.html" class="problem-card" data-lesson-id="p-key-value">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon • Google • Meta</div>
+            <div class="problem-card__title">Design a Key-Value Store (like DynamoDB)</div>
+            <div class="problem-card__meta">
+              <span class="tag">Consistent Hashing</span><span class="tag">Replication</span><span class="tag">Quorum</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/message-queue.html" class="problem-card" data-lesson-id="p-message-queue">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Amazon SQS • Google Pub/Sub</div>
+            <div class="problem-card__title">Design a Distributed Message Queue</div>
+            <div class="problem-card__meta">
+              <span class="tag">Durability</span><span class="tag">At-least-once</span><span class="tag">Partitioning</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/news-feed.html" class="problem-card" data-lesson-id="p-news-feed">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Meta • LinkedIn • Twitter</div>
+            <div class="problem-card__title">Design a Social Media News Feed</div>
+            <div class="problem-card__meta">
+              <span class="tag">Fanout on Write</span><span class="tag">Fanout on Read</span><span class="tag">Celebrity</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+          <a href="problems/tier1/dropbox.html" class="problem-card" data-lesson-id="p-dropbox">
+            <div class="problem-card__tier problem-card__tier--1"></div>
+            <div class="problem-card__company">Google Drive • Amazon S3</div>
+            <div class="problem-card__title">Design Dropbox / File Storage</div>
+            <div class="problem-card__meta">
+              <span class="tag">Chunking</span><span class="tag">Delta Sync</span><span class="tag">Object Storage</span>
+            </div>
+            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
+          </a>
+        </div>
+
+        <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
+          <span style="color:var(--color-tier2)">●</span> Tier 2 — Common at Senior Levels
+        </h3>
+        <div class="problem-grid" style="margin-bottom:var(--space-10)">
+          <a href="problems/tier2/slack.html" class="problem-card" data-lesson-id="p-slack"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Slack • Discord</div><div class="problem-card__title">Design Slack / Real-time Chat</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Channels</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/instagram.html" class="problem-card" data-lesson-id="p-instagram"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Meta • TikTok</div><div class="problem-card__title">Design Instagram</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Feed</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/netflix.html" class="problem-card" data-lesson-id="p-netflix"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Netflix • Disney+</div><div class="problem-card__title">Design Netflix</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Adaptive Streaming</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/google-maps.html" class="problem-card" data-lesson-id="p-google-maps"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Apple</div><div class="problem-card__title">Design Google Maps</div><div class="problem-card__meta"><span class="tag">Geo-Encoding</span><span class="tag">Graph</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/payment-system.html" class="problem-card" data-lesson-id="p-payment"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Stripe • Amazon • PayPal</div><div class="problem-card__title">Design a Payment System</div><div class="problem-card__meta"><span class="tag">Idempotency</span><span class="tag">ACID</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/code-judge.html" class="problem-card" data-lesson-id="p-code-judge"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Amazon</div><div class="problem-card__title">Design Online Code Judge (LeetCode)</div><div class="problem-card__meta"><span class="tag">Sandboxing</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/hotel-booking.html" class="problem-card" data-lesson-id="p-hotel"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Booking.com • Airbnb</div><div class="problem-card__title">Design Hotel Booking System</div><div class="problem-card__meta"><span class="tag">Concurrency</span><span class="tag">Locking</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/stock-exchange.html" class="problem-card" data-lesson-id="p-stock"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Goldman • Robinhood</div><div class="problem-card__title">Design a Stock Exchange</div><div class="problem-card__meta"><span class="tag">Order Book</span><span class="tag">Low Latency</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/ad-click.html" class="problem-card" data-lesson-id="p-ad-click"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Meta • Amazon</div><div class="problem-card__title">Design Ad Click Aggregator</div><div class="problem-card__meta"><span class="tag">Stream Processing</span><span class="tag">Kafka</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/task-scheduler.html" class="problem-card" data-lesson-id="p-scheduler"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Google</div><div class="problem-card__title">Design a Distributed Task Scheduler</div><div class="problem-card__meta"><span class="tag">Cron</span><span class="tag">Leader Election</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/live-streaming.html" class="problem-card" data-lesson-id="p-live"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Twitch • YouTube Live</div><div class="problem-card__title">Design Live Video Streaming</div><div class="problem-card__meta"><span class="tag">RTMP</span><span class="tag">HLS</span><span class="tag">CDN</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/flash-sale.html" class="problem-card" data-lesson-id="p-flash"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba</div><div class="problem-card__title">Design E-commerce Flash Sale</div><div class="problem-card__meta"><span class="tag">Rate Limiting</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/google-docs.html" class="problem-card" data-lesson-id="p-google-docs"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Notion • Figma</div><div class="problem-card__title">Design Google Docs (Collaborative Editing)</div><div class="problem-card__meta"><span class="tag">OT / CRDT</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/metrics-dashboard.html" class="problem-card" data-lesson-id="p-metrics"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Datadog • New Relic</div><div class="problem-card__title">Design Metrics Dashboard</div><div class="problem-card__meta"><span class="tag">Time Series</span><span class="tag">Aggregation</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/leaderboard.html" class="problem-card" data-lesson-id="p-leaderboard"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Gaming • Gamification</div><div class="problem-card__title">Design a Gaming Leaderboard</div><div class="problem-card__meta"><span class="tag">Redis Sorted Set</span><span class="tag">Sharding</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+        </div>
+
+        <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
+          <span style="color:var(--color-tier3)">●</span> Tier 3 — Staff+ Deep Dives
+        </h3>
+        <div class="problem-grid">
+          <a href="problems/tier3/distributed-db.html" class="problem-card" data-lesson-id="p-dist-db"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Spanner • CockroachDB</div><div class="problem-card__title">Design a Distributed Database</div><div class="problem-card__meta"><span class="tag">Raft</span><span class="tag">TrueTime</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/content-moderation.html" class="problem-card" data-lesson-id="p-moderation"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Meta • YouTube • TikTok</div><div class="problem-card__title">Design Content Moderation System</div><div class="problem-card__meta"><span class="tag">ML Pipeline</span><span class="tag">Human Review</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/recommendation-engine.html" class="problem-card" data-lesson-id="p-recommendation"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Netflix • Amazon • Spotify</div><div class="problem-card__title">Design a Recommendation Engine</div><div class="problem-card__meta"><span class="tag">Collaborative Filtering</span><span class="tag">ML</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/cdn.html" class="problem-card" data-lesson-id="p-cdn"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Cloudflare • Akamai • AWS</div><div class="problem-card__title">Design a CDN</div><div class="problem-card__meta"><span class="tag">Edge</span><span class="tag">Anycast</span><span class="tag">Caching</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/analytics-pipeline.html" class="problem-card" data-lesson-id="p-analytics"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Analytics • Amplitude</div><div class="problem-card__title">Design Real-time Analytics Pipeline</div><div class="problem-card__meta"><span class="tag">Flink</span><span class="tag">Lambda Arch</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/distributed-tracing.html" class="problem-card" data-lesson-id="p-tracing"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Jaeger • Zipkin • Datadog</div><div class="problem-card__title">Design a Distributed Tracing System</div><div class="problem-card__meta"><span class="tag">Sampling</span><span class="tag">Spans</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/api-gateway.html" class="problem-card" data-lesson-id="p-api-gateway"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">AWS API GW • Kong • Nginx</div><div class="problem-card__title">Design an API Gateway</div><div class="problem-card__meta"><span class="tag">Auth</span><span class="tag">Rate Limiting</span><span class="tag">Routing</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/feature-flags.html" class="problem-card" data-lesson-id="p-flags"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">LaunchDarkly • Optimizely</div><div class="problem-card__title">Design a Feature Flag System</div><div class="problem-card__meta"><span class="tag">A/B Testing</span><span class="tag">Rollout</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/multi-tenant-saas.html" class="problem-card" data-lesson-id="p-saas"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Salesforce • Snowflake</div><div class="problem-card__title">Design Multi-tenant SaaS Platform</div><div class="problem-card__meta"><span class="tag">Isolation</span><span class="tag">Schema</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/log-aggregation.html" class="problem-card" data-lesson-id="p-logs"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">ELK Stack • Splunk</div><div class="problem-card__title">Design Distributed Log Aggregation</div><div class="problem-card__meta"><span class="tag">Fluentd</span><span class="tag">ES</span><span class="tag">S3</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="section" style="padding:var(--space-8) 0 var(--space-16)" aria-labelledby="cta-title">
+      <div class="container">
+        <div style="text-align:center;padding:var(--space-12);background:linear-gradient(135deg,rgba(99,102,241,0.1),rgba(168,85,247,0.1));border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius-2xl)">
+          <h2 style="font-size:var(--text-3xl);margin-bottom:var(--space-4)" id="cta-title">Ready to crack MAANG interviews?</h2>
+          <p style="color:var(--color-text-secondary);margin-bottom:var(--space-8);font-size:var(--text-lg)">
+            Start with the RESHADED framework — the single most important thing you can learn.
+          </p>
+          <div style="display:flex;gap:var(--space-4);justify-content:center;flex-wrap:wrap">
+            <a href="modules/00-framework/index.html" class="btn btn--primary">Start with RESHADED →</a>
+            <a href="mock-interview/index.html" class="btn btn--outline">Try Mock Interview</a>
+            <a href="cheatsheets/index.html" class="btn btn--outline">Download Cheatsheets</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Open for self-study</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="assets/js/shared.js" type="module"></script>
+  <script type="module">
+    // Update the hero completed count from progress store
+    const completedCountElement = document.getElementById('js-completed-count');
+    if (completedCountElement !== null) {
+      try {
+        const raw = localStorage.getItem('sdcourse_progress_v1');
+        const state = raw !== null ? JSON.parse(raw) : {};
+        completedCountElement.textContent = Object.keys(state).length;
+      } catch {
+        completedCountElement.textContent = '0';
+      }
+    }
+  </script>
+</body>
+</html>

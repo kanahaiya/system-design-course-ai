@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Stock Exchange — RESHADED walkthrough covering order book data structures, matching engine, sub-millisecond latency, and market data distribution for MAANG interviews.">
+  <title>Design a Stock Exchange — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-stock" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=stock" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Ultra-low latency</span>
+        </div>
+        <h1 class="module-header__title">Design a Stock Exchange</h1>
+        <p class="module-header__desc">A stock exchange has the strictest latency requirements of any system: order matching must complete in &lt;1ms. The core data structure — the order book — is two priority queues. The matching engine processes orders sequentially (single-threaded) to ensure strict price-time priority.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Nasdaq, NYSE, Robinhood</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> &lt;1ms matching</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Place orders: limit orders (price specified) and market orders (execute at best available price)</li>
+            <li>Cancel orders</li>
+            <li>Match buy and sell orders when bid price ≥ ask price</li>
+            <li>Real-time market data feed: price, volume, order book depth</li>
+            <li>Trade history: list of executed trades per symbol</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> Order matching &lt;1ms p99 (hardware-level engineering required)</li>
+            <li><strong>Throughput:</strong> 100K orders/sec per symbol at peak</li>
+            <li><strong>Fairness:</strong> Price-time priority — first order at a price level executes first</li>
+            <li><strong>Durability:</strong> No order loss; persist to WAL before acknowledging</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>NYSE: ~20B shares/day, 3,000 symbols → avg 7M trades/day per symbol</li>
+            <li>Peak: 100K orders/sec for hot symbols (AAPL, TSLA)</li>
+            <li>Order book depth: typically 10–50 price levels → fits entirely in L1/L2 CPU cache for hot symbols</li>
+            <li>Market data fan-out: 100K subscribers × 100K updates/sec = 10B messages/sec → multicast or specialized market data infrastructure</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Orders (in-memory + WAL for durability)
+orders:
+    order_id    BIGINT,           -- Snowflake ID (timestamp-ordered)
+    symbol      VARCHAR(10),
+    side        ENUM(buy, sell),
+    order_type  ENUM(limit, market),
+    price       DECIMAL(10,4),   -- null for market orders
+    quantity    BIGINT,
+    filled_qty  BIGINT DEFAULT 0,
+    status      ENUM(open, partial, filled, cancelled),
+    created_at  TIMESTAMP
+
+// Trades (append-only)
+trades:
+    trade_id    BIGINT PRIMARY KEY,
+    symbol      VARCHAR(10),
+    buy_order_id  BIGINT,
+    sell_order_id BIGINT,
+    price       DECIMAL(10,4),
+    quantity    BIGINT,
+    executed_at TIMESTAMP</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Order Gateway:</strong> Accepts orders via FIX protocol (financial industry standard) or REST. Validates, writes to WAL, forwards to matching engine via ring buffer (LMAX Disruptor pattern).</li>
+            <li><strong>Matching Engine:</strong> Single-threaded (no locks, no contention). Processes orders from ring buffer sequentially. Maintains in-memory order book per symbol. Emits trade events.</li>
+            <li><strong>Market Data Publisher:</strong> Receives trade events. Distributes via multicast UDP or Kafka to market data consumers (trading terminals, algos).</li>
+            <li><strong>Trade Store:</strong> Consumes trade events. Persists to append-only trade log (PostgreSQL or time-series DB).</li>
+            <li><strong>Risk Engine:</strong> Pre-trade validation. Checks margin, position limits before order reaches matching engine. Runs on order arrival, &lt;100μs latency requirement.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">POST /v1/orders          // place limit or market order
+  Body: { symbol, side, orderType, price, quantity, accountId }
+  Returns: { orderId, status }
+
+DELETE /v1/orders/{orderId}    // cancel open order
+
+GET /v1/orderbook/{symbol}     // current bids/asks
+  Returns: { bids: [{price, qty}...], asks: [{price, qty}...] }
+
+GET /v1/trades/{symbol}?limit=50    // recent trades
+WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Order Book Data Structure<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p>The order book consists of two sorted collections:</p>
+          <ul>
+            <li><strong>Bids (buy orders):</strong> Max-heap by price. Best bid = highest price.</li>
+            <li><strong>Asks (sell orders):</strong> Min-heap by price. Best ask = lowest price.</li>
+          </ul>
+          <p><strong>Matching logic:</strong> After inserting an order, check if best bid ≥ best ask. If yes: match. Trade executes at the resting order's price (the order already in the book). Repeat until no match.</p>
+          <p><strong>Price-time priority within a price level:</strong> A simple heap doesn't give time priority at the same price. Use a TreeMap&lt;Price, Queue&lt;Order&gt;&gt; where orders at the same price are queued FIFO. This gives O(log N) price navigation and O(1) within a price level.</p>
+          <p><strong>Why single-threaded?</strong> Any concurrent modification to the order book requires locks, adding latency and complexity. A single-threaded matching engine processes 500K+ orders/sec on modern hardware (ring buffer eliminates IPC overhead). Correctness is trivial; no race conditions possible.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Partial fills:</strong> If a buy order for 100 shares matches a sell order for 60 shares: trade executes for 60, buy order becomes partially filled (40 remaining). The remainder stays in the book.</li>
+            <li><strong>Disaster recovery:</strong> WAL (Write-Ahead Log) on NVMe SSD. On crash, replay WAL to rebuild in-memory order book. Target: &lt;5 minute recovery time.</li>
+            <li><strong>Hot backup:</strong> Primary matching engine streams state to a hot standby. Failover in &lt;1s (sub-millisecond switchover for co-located primary/backup).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a stock exchange with &lt;1ms order matching. Key decisions: single-threaded matching engine (no lock contention), TreeMap+FIFO queue order book for price-time priority, LMAX Disruptor ring buffer for zero-GC order delivery, WAL for durability, and UDP multicast for low-latency market data distribution.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Matching engine threading</td><td>Single-threaded</td><td>Multi-threaded with locks</td><td>No locking = no contention. Single-threaded easily achieves 500K orders/sec. Multi-threaded complexity for no benefit on this workload.</td></tr>
+                <tr><td>Order book structure</td><td>TreeMap + FIFO queue per price level</td><td>Simple PriorityQueue</td><td>PriorityQueue gives best price but no time-ordering within a level. TreeMap + Queue gives O(log N) price + O(1) FIFO within price level — required for price-time priority.</td></tr>
+                <tr><td>Market data distribution</td><td>UDP multicast</td><td>Kafka to subscribers</td><td>UDP multicast: one packet, delivered to all subscribers simultaneously, sub-microsecond additional latency. Kafka adds 5ms+ — unacceptable for HFT consumers.</td></tr>
+                <tr><td>IPC to matching engine</td><td>LMAX Disruptor ring buffer</td><td>ConcurrentLinkedQueue</td><td>Disruptor uses mechanical sympathy (cache-line friendly, no GC allocation) achieving 25M messages/sec. ConcurrentLinkedQueue uses CAS and heap allocation — orders of magnitude slower.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * OrderBook — in-memory matching engine for one trading symbol.
+ * Uses TreeMap&lt;Price, Deque&lt;Order&gt;&gt; for price-time priority matching.
+ * Single-threaded: called only from the matching engine thread.
+ */
+public class OrderBook {
+
+    private final String symbol;
+    // Buy orders: sorted descending by price (highest bid first)
+    private final TreeMap&lt;Long, Deque&lt;Order&gt;&gt; bids = new TreeMap&lt;&gt;(Comparator.reverseOrder());
+    // Sell orders: sorted ascending by price (lowest ask first)
+    private final TreeMap&lt;Long, Deque&lt;Order&gt;&gt; asks = new TreeMap&lt;&gt;();
+
+    private final List&lt;Trade&gt; executedTrades = new ArrayList&lt;&gt;();
+
+    public OrderBook(String symbol) {
+        this.symbol = symbol;
+    }
+
+    /**
+     * Adds a limit order to the book and immediately attempts matching.
+     * Returns list of trades generated by this order.
+     */
+    public List&lt;Trade&gt; addLimitOrder(Order incomingOrder) {
+        executedTrades.clear();
+
+        if (incomingOrder.getSide() == Side.BUY) {
+            matchBuyOrder(incomingOrder);
+            if (incomingOrder.getRemainingQuantity() &gt; 0) {
+                addToBook(bids, incomingOrder.getPriceTicks(), incomingOrder);
+            }
+        } else {
+            matchSellOrder(incomingOrder);
+            if (incomingOrder.getRemainingQuantity() &gt; 0) {
+                addToBook(asks, incomingOrder.getPriceTicks(), incomingOrder);
+            }
+        }
+
+        return List.copyOf(executedTrades);
+    }
+
+    /**
+     * Matches an incoming buy order against resting asks.
+     * Executes at the resting ask's price (price-improvement for the buyer).
+     */
+    private void matchBuyOrder(Order buyOrder) {
+        while (buyOrder.getRemainingQuantity() &gt; 0 &amp;&amp; !asks.isEmpty()) {
+            Map.Entry&lt;Long, Deque&lt;Order&gt;&gt; bestAskEntry = asks.firstEntry();
+            long bestAskPrice = bestAskEntry.getKey();
+
+            if (buyOrder.getPriceTicks() &lt; bestAskPrice) {
+                break; // No match: buyer's max price below best ask
+            }
+
+            Order restingSellOrder = bestAskEntry.getValue().peekFirst();
+            long tradeQuantity = Math.min(buyOrder.getRemainingQuantity(), restingSellOrder.getRemainingQuantity());
+            long tradePrice = restingSellOrder.getPriceTicks(); // resting order's price
+
+            executedTrades.add(new Trade(symbol, buyOrder.getOrderId(), restingSellOrder.getOrderId(),
+                                         tradePrice, tradeQuantity));
+
+            buyOrder.fill(tradeQuantity);
+            restingSellOrder.fill(tradeQuantity);
+
+            if (restingSellOrder.getRemainingQuantity() == 0) {
+                bestAskEntry.getValue().pollFirst();
+                if (bestAskEntry.getValue().isEmpty()) {
+                    asks.pollFirstEntry();
+                }
+            }
+        }
+    }
+
+    private void matchSellOrder(Order sellOrder) {
+        while (sellOrder.getRemainingQuantity() &gt; 0 &amp;&amp; !bids.isEmpty()) {
+            Map.Entry&lt;Long, Deque&lt;Order&gt;&gt; bestBidEntry = bids.firstEntry();
+            long bestBidPrice = bestBidEntry.getKey();
+
+            if (sellOrder.getPriceTicks() &gt; bestBidPrice) {
+                break; // No match: seller's min price above best bid
+            }
+
+            Order restingBuyOrder = bestBidEntry.getValue().peekFirst();
+            long tradeQuantity = Math.min(sellOrder.getRemainingQuantity(), restingBuyOrder.getRemainingQuantity());
+            long tradePrice = restingBuyOrder.getPriceTicks();
+
+            executedTrades.add(new Trade(symbol, restingBuyOrder.getOrderId(), sellOrder.getOrderId(),
+                                         tradePrice, tradeQuantity));
+
+            sellOrder.fill(tradeQuantity);
+            restingBuyOrder.fill(tradeQuantity);
+
+            if (restingBuyOrder.getRemainingQuantity() == 0) {
+                bestBidEntry.getValue().pollFirst();
+                if (bestBidEntry.getValue().isEmpty()) {
+                    bids.pollFirstEntry();
+                }
+            }
+        }
+    }
+
+    private void addToBook(TreeMap&lt;Long, Deque&lt;Order&gt;&gt; book, long priceTicks, Order order) {
+        book.computeIfAbsent(priceTicks, priceKey -&gt; new ArrayDeque&lt;&gt;()).addLast(order);
+    }
+
+    public int getBidLevels() { return bids.size(); }
+    public int getAskLevels() { return asks.size(); }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-stock-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="The best bid is $100.50 and the best ask is $100.00. Should these orders match?" data-options='["No — orders only match when bid equals ask exactly","Yes — best bid ($100.50) >= best ask ($100.00). A trade executes at the resting order's price. If the ask was there first, the trade executes at $100.00 (price improvement for the buyer).","No — orders only match during specific market hours","Yes — but the trade always executes at the midpoint ($100.25)"]' data-correct="1" data-explanation="Orders match when bid >= ask. The resting order (already in the book) sets the trade price — this is called 'price-time priority.' The incoming aggressive order gets price improvement: the buyer pays $100.00 instead of their limit of $100.50, saving $0.50 per share." style="display:none"></div>
+          <div data-question="Why is the matching engine single-threaded rather than parallelized?" data-options='["Single-threaded engines are limited to 1,000 orders/sec — much faster than multi-threaded","A single-threaded matching engine processes the order book with no locking overhead, achieving 500K+ orders/sec. Multi-threading requires locks on every book modification, adding latency and complexity with no benefit on a sequential, in-order workload.","Multi-threading is illegal under financial exchange regulations","Single-threaded guarantees all orders execute in alphabetical order by symbol"]' data-correct="1" data-explanation="The order book is a serial data structure — order processing must be deterministic and ordered. Multi-threading would require a global lock on the book for every order, actually slowing throughput. Single-threaded + non-blocking ring buffer (Disruptor) achieves maximum throughput with minimal latency variance." style="display:none"></div>
+          <div data-question="Why is a TreeMap<Price, Deque<Order>> better than a simple PriorityQueue<Order> for the order book?" data-options='["TreeMap is faster for insertions than PriorityQueue","PriorityQueue gives you the best price, but when multiple orders sit at the same price, it provides no time-ordering guarantee. A TreeMap + FIFO Deque gives O(log N) price navigation AND first-in-first-out ordering within each price level — this is the required price-time priority.","TreeMap uses less memory than PriorityQueue","PriorityQueue cannot store orders with the same price"]' data-correct="1" data-explanation="Price-time priority (FIFO within each price level) is the law at most exchanges. With a simple heap, two orders at $100.00 could match in any order. TreeMap keys are price levels; each value is a FIFO queue of orders at that price. This gives both best-price access and time-fairness." style="display:none"></div>
+          <div data-question="Why use UDP multicast for market data distribution to HFT (high-frequency trading) firms rather than Kafka?" data-options='["Kafka doesn't support financial data formats","UDP multicast sends one packet that is delivered simultaneously to all subscribers by the network infrastructure — no per-subscriber copy, sub-microsecond additional latency. Kafka adds 5-50ms of latency through brokers and consumer polling — unacceptable for algorithms that trade on price movements measured in microseconds.","UDP provides stronger delivery guarantees than Kafka","Market data volumes are too large for Kafka to handle"]' data-correct="1" data-explanation="For HFT, 1 millisecond of latency disadvantage costs millions annually. UDP multicast is as close to 'speed of light' as packet delivery gets — one transmission reaches all subscribers via network-layer replication. Kafka's broker-mediated delivery adds orders of magnitude more latency. HFT firms pay millions for co-location precisely to shave these microseconds." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="ad-click.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Ad Click Aggregator →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="hotel-booking.html" class="btn btn--outline">← Hotel Booking</a>
+        <a href="ad-click.html" class="btn btn--primary">Next: Ad Click Aggregator →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

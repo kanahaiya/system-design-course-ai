@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master consistent hashing with virtual nodes, load balancing algorithms, push vs pull fanout, and horizontal scaling decisions for MAANG system design interviews.">
+  <title>Scalability Patterns — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/07-scalability/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#consistent-hashing" class="module-toc__link">Consistent Hashing</a></li>
+          <li><a href="#load-balancing" class="module-toc__link">Load Balancing Algorithms</a></li>
+          <li><a href="#fanout" class="module-toc__link">Push vs Pull vs Hybrid Fanout</a></li>
+          <li><a href="#scaling-framework" class="module-toc__link">Scaling Decision Framework</a></li>
+          <li><a href="#read-replicas" class="module-toc__link">Database Read Replicas</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-07" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 07</span>
+        </nav>
+        <div class="module-header__number">Module 07</div>
+        <h1 class="module-header__title">Scalability Patterns</h1>
+        <p class="module-header__desc">How to distribute data and traffic across nodes predictably: consistent hashing, intelligent load balancing, feed fanout architecture, and the horizontal vs vertical scaling decision.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <section id="consistent-hashing" class="content-section">
+        <h2>Consistent Hashing with Virtual Nodes</h2>
+        <p>Naive modular hashing (<code>key % N</code>) requires remapping nearly every key when nodes are added or removed. Consistent hashing maps both keys and nodes to positions on a <strong>hash ring</strong> (a circular space of 2<sup>32</sup> values). A key is assigned to the first node clockwise from its hash position.</p>
+        <p>When a node is added, only the keys between the new node and its predecessor need to be remapped—approximately <code>K/N</code> keys where K is total keys and N is the new node count. Removal is symmetric.</p>
+
+        <h3>Virtual Nodes (vnodes)</h3>
+        <p>Physical nodes may be unevenly distributed on the ring, causing hotspots. Virtual nodes solve this: each physical node is placed at <strong>multiple positions</strong> on the ring using different hash inputs (e.g., <code>hash("node1#0")</code>, <code>hash("node1#1")</code>, …, <code>hash("node1#150")</code>). Benefits:</p>
+        <ul>
+          <li><strong>Even distribution:</strong> With 150 vnodes per physical node, the load is statistically balanced across all nodes.</li>
+          <li><strong>Heterogeneous capacity:</strong> Assign more vnodes to more powerful servers.</li>
+          <li><strong>Graceful adds/removes:</strong> When a node is added, it takes a fraction of load from many existing nodes rather than all load from one neighbor.</li>
+        </ul>
+
+        <figure class="diagram-container" aria-label="Consistent hash ring with virtual nodes">
+          <svg viewBox="0 0 400 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hash ring diagram">
+            <title>Consistent Hash Ring with Virtual Nodes</title>
+            <circle cx="200" cy="170" r="120" fill="none" stroke="#334155" stroke-width="2"/>
+            <circle cx="200" cy="50" r="8" fill="#3b82f6"/>
+            <text x="200" y="34" text-anchor="middle" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif">Node A vn0</text>
+            <circle cx="304" cy="110" r="8" fill="#22c55e"/>
+            <text x="320" y="108" fill="#86efac" font-size="10" font-family="Inter,sans-serif">Node B vn0</text>
+            <circle cx="304" cy="230" r="8" fill="#3b82f6"/>
+            <text x="316" y="245" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif">Node A vn1</text>
+            <circle cx="200" cy="290" r="8" fill="#f59e0b"/>
+            <text x="200" y="314" text-anchor="middle" fill="#fcd34d" font-size="10" font-family="Inter,sans-serif">Node C vn0</text>
+            <circle cx="96" cy="230" r="8" fill="#22c55e"/>
+            <text x="20" y="245" fill="#86efac" font-size="10" font-family="Inter,sans-serif">Node B vn1</text>
+            <circle cx="96" cy="110" r="8" fill="#f59e0b"/>
+            <text x="10" y="108" fill="#fcd34d" font-size="10" font-family="Inter,sans-serif">Node C vn1</text>
+            <circle cx="240" cy="58" r="5" fill="#e2e8f0"/>
+            <text x="255" y="56" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">key1 → A</text>
+            <circle cx="290" cy="160" r="5" fill="#e2e8f0"/>
+            <text x="305" y="163" fill="#94a3b8" font-size="9" font-family="Inter,sans-serif">key2 → B</text>
+            <text x="200" y="175" text-anchor="middle" fill="#475569" font-size="10" font-family="Inter,sans-serif">Hash Ring</text>
+            <text x="200" y="192" text-anchor="middle" fill="#475569" font-size="9" font-family="Inter,sans-serif">0 → 2³²</text>
+          </svg>
+          <figcaption>Three physical nodes, each with 2 virtual node positions. Keys route to the first node clockwise.</figcaption>
+        </figure>
+      </section>
+
+      <section id="load-balancing" class="content-section">
+        <h2>Load Balancing Algorithms</h2>
+
+        <table class="trade-off-table">
+          <caption>Load Balancing Algorithm Comparison</caption>
+          <thead><tr><th>Algorithm</th><th>How it works</th><th>Best for</th><th>Weakness</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Round Robin</strong></td>
+              <td>Requests distributed sequentially, cycling through all servers</td>
+              <td>Homogeneous servers, stateless requests</td>
+              <td>Ignores server load; slow servers accumulate queue</td>
+            </tr>
+            <tr>
+              <td><strong>Least Connections</strong></td>
+              <td>Routes to server with fewest active connections</td>
+              <td>Long-lived connections (WebSocket, DB)</td>
+              <td>Requires connection count state; not suitable for very short requests</td>
+            </tr>
+            <tr>
+              <td><strong>IP Hash</strong></td>
+              <td><code>server = hash(client_ip) % N</code></td>
+              <td>Session stickiness without cookies</td>
+              <td>Skewed if many clients behind one NAT; rebalances heavily on node change</td>
+            </tr>
+            <tr>
+              <td><strong>Weighted Round Robin</strong></td>
+              <td>Each server has a weight; higher weight = more requests</td>
+              <td>Heterogeneous server capacity</td>
+              <td>Weights must be manually maintained; doesn't reflect real-time load</td>
+            </tr>
+            <tr>
+              <td><strong>Power of Two Choices</strong></td>
+              <td>Pick 2 random servers, route to the less loaded one</td>
+              <td>High-throughput stateless services</td>
+              <td>Requires real-time load metrics from each server</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p><strong>Layer 4 vs Layer 7 LB:</strong> Layer 4 load balancers operate at the TCP level (fast, no content inspection). Layer 7 load balancers inspect HTTP headers and can route by path (<code>/api</code> vs <code>/static</code>), enable SSL termination, and inject headers — at the cost of slightly higher latency.</p>
+      </section>
+
+      <section id="fanout" class="content-section">
+        <h2>Push vs Pull vs Hybrid Fanout</h2>
+        <p>In social networks and activity feeds, <strong>fanout</strong> is the process of distributing a new post to followers' feeds.</p>
+
+        <h3>Push (Fanout on Write)</h3>
+        <p>When a user posts, immediately write to every follower's feed inbox. Read is O(1) — just read the inbox. Write is O(followers). For celebrities with 10M followers, a single tweet triggers 10M writes, causing write amplification.</p>
+
+        <h3>Pull (Fanout on Read)</h3>
+        <p>Do nothing on write. When a user opens their feed, query all followed accounts' recent posts and merge. Read is O(followed_count × query_cost). Write is O(1). Scales poorly for users following thousands of accounts — each feed load is expensive.</p>
+
+        <h3>Hybrid Fanout</h3>
+        <p>Most production systems (Twitter, Instagram) use a hybrid: push fanout for normal users (followers &lt; threshold, e.g., 1M), pull for celebrity accounts. On feed load, merge the pre-built inbox (from pushed posts) with freshly pulled posts from celebrity accounts the user follows. This caps both write amplification and read-time cost.</p>
+
+        <table class="trade-off-table">
+          <caption>Fanout Strategy Comparison</caption>
+          <thead><tr><th>Strategy</th><th>Write cost</th><th>Read cost</th><th>Staleness</th><th>Use case</th></tr></thead>
+          <tbody>
+            <tr><td>Push</td><td>O(followers)</td><td>O(1)</td><td>None</td><td>Normal users, low-follower-count</td></tr>
+            <tr><td>Pull</td><td>O(1)</td><td>O(following × posts)</td><td>Possible</td><td>Low-follower celebrities, rarely-read accounts</td></tr>
+            <tr><td>Hybrid</td><td>O(normal followers)</td><td>O(celebrity count)</td><td>Minimal</td><td>Production social feeds</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="scaling-framework" class="content-section">
+        <h2>Horizontal vs Vertical Scaling Decision Framework</h2>
+        <p><strong>Vertical scaling</strong> (scale up): Add more CPU, RAM, or faster disk to existing machines. Simple — no code changes. Limited by maximum machine size and creates a single point of failure. Cost scales super-linearly (doubling resources often costs 4× the price).</p>
+        <p><strong>Horizontal scaling</strong> (scale out): Add more machines and distribute load. Requires services to be stateless (or externalize state to Redis/DB). Enables near-linear cost scaling and eliminates SPOF via redundancy.</p>
+        <p><strong>Decision heuristic:</strong></p>
+        <ol>
+          <li>If the bottleneck is a single database write path → vertical scale first (faster disk, more RAM for buffer pool), then shard.</li>
+          <li>If the bottleneck is stateless compute (web servers, API handlers) → horizontal scale immediately.</li>
+          <li>If you need &gt;99.9% availability → horizontal scaling is mandatory (vertical = SPOF).</li>
+          <li>If the service holds session state in memory → add sticky sessions or externalize state before horizontal scaling.</li>
+        </ol>
+      </section>
+
+      <section id="read-replicas" class="content-section">
+        <h2>Database Read Replicas</h2>
+        <p>Most applications have a read-heavy ratio (typically 80–95% reads). Read replicas receive a continuous replication stream from the primary and serve read queries, offloading the primary for writes.</p>
+        <p><strong>Replication lag</strong> is the key tradeoff: replicas are eventually consistent with the primary. For read-your-own-writes consistency, route the user's reads immediately after a write to the primary for a short window, or use synchronous replication (at the cost of write latency).</p>
+        <p><strong>Common patterns:</strong></p>
+        <ul>
+          <li>Route all writes + consistency-sensitive reads to primary.</li>
+          <li>Route analytics queries, reporting, and search to replicas.</li>
+          <li>Use a read replica in a different availability zone as a hot standby.</li>
+          <li>Monitor <code>Seconds_Behind_Master</code> (MySQL) or <code>replication_delay</code> (Postgres) — alert if lag exceeds acceptable threshold.</li>
+        </ul>
+      </section>
+
+      <section id="implementation" class="content-section">
+        <h2>Java Implementation: Consistent Hash Ring</h2>
+        <pre><code class="language-java">/**
+ * Consistent hash ring with virtual nodes.
+ * Thread-safe for concurrent reads; uses write lock for topology changes.
+ */
+public class ConsistentHashRing {
+
+    private static final int DEFAULT_VIRTUAL_NODES_PER_PHYSICAL = 150;
+
+    private final int virtualNodesPerPhysical;
+    // Sorted map: ring position → physical node name
+    private final TreeMap&lt;Long, String&gt; ring = new TreeMap&lt;&gt;();
+    private final ReadWriteLock ringLock = new ReentrantReadWriteLock();
+
+    public ConsistentHashRing() {
+        this(DEFAULT_VIRTUAL_NODES_PER_PHYSICAL);
+    }
+
+    public ConsistentHashRing(int virtualNodesPerPhysical) {
+        this.virtualNodesPerPhysical = virtualNodesPerPhysical;
+    }
+
+    /**
+     * Adds a physical node to the ring by creating virtualNodesPerPhysical
+     * virtual node entries at positions hash("nodeName#0") … hash("nodeName#N-1").
+     */
+    public void addNode(String nodeName) {
+        ringLock.writeLock().lock();
+        try {
+            for (int virtualIndex = 0; virtualIndex &lt; virtualNodesPerPhysical; virtualIndex++) {
+                long ringPosition = computeHash(nodeName + "#" + virtualIndex);
+                ring.put(ringPosition, nodeName);
+            }
+        } finally {
+            ringLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Removes a physical node and all its virtual node positions from the ring.
+     */
+    public void removeNode(String nodeName) {
+        ringLock.writeLock().lock();
+        try {
+            for (int virtualIndex = 0; virtualIndex &lt; virtualNodesPerPhysical; virtualIndex++) {
+                long ringPosition = computeHash(nodeName + "#" + virtualIndex);
+                ring.remove(ringPosition);
+            }
+        } finally {
+            ringLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Returns the physical node responsible for the given key.
+     * Finds the first ring position &gt;= hash(key), wrapping around to
+     * the lowest position if none exists (ring is circular).
+     *
+     * @param key - the data key to look up
+     * @return the responsible node name, or null if the ring is empty
+     */
+    public String getNodeForKey(String key) {
+        if (key == null || key.isEmpty()) {
+            throw new IllegalArgumentException("Key must not be null or empty");
+        }
+        ringLock.readLock().lock();
+        try {
+            if (ring.isEmpty()) {
+                return null;
+            }
+            long keyPosition = computeHash(key);
+            // Find the first entry clockwise from keyPosition
+            Map.Entry&lt;Long, String&gt; clockwiseEntry = ring.ceilingEntry(keyPosition);
+            if (clockwiseEntry == null) {
+                // Wrap around: key is beyond the last node, so use the first node
+                clockwiseEntry = ring.firstEntry();
+            }
+            return clockwiseEntry.getValue();
+        } finally {
+            ringLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Returns an ordered list of N distinct physical nodes starting from
+     * the position responsible for the given key. Used for replication.
+     */
+    public List&lt;String&gt; getReplicaNodesForKey(String key, int replicaCount) {
+        ringLock.readLock().lock();
+        try {
+            Set&lt;String&gt; uniquePhysicalNodes = new LinkedHashSet&lt;&gt;();
+            long keyPosition = computeHash(key);
+            // Walk the ring clockwise, collecting distinct physical nodes
+            NavigableMap&lt;Long, String&gt; tailMap = ring.tailMap(keyPosition, true);
+            for (String nodeName : tailMap.values()) {
+                uniquePhysicalNodes.add(nodeName);
+                if (uniquePhysicalNodes.size() == replicaCount) {
+                    return new ArrayList&lt;&gt;(uniquePhysicalNodes);
+                }
+            }
+            // Wrap around from start of ring
+            for (String nodeName : ring.values()) {
+                uniquePhysicalNodes.add(nodeName);
+                if (uniquePhysicalNodes.size() == replicaCount) {
+                    break;
+                }
+            }
+            return new ArrayList&lt;&gt;(uniquePhysicalNodes);
+        } finally {
+            ringLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * MurmurHash-inspired 64-bit hash. Using a consistent non-cryptographic
+     * hash ensures uniform distribution without the overhead of MD5/SHA.
+     */
+    private long computeHash(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] hashBytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            // Take first 8 bytes as a long for a 64-bit position
+            long position = 0L;
+            for (int byteIndex = 0; byteIndex &lt; 8; byteIndex++) {
+                position |= ((long) (hashBytes[byteIndex] &amp; 0xFF)) &lt;&lt; (byteIndex * 8);
+            }
+            return position;
+        } catch (NoSuchAlgorithmException algorithmException) {
+            // MD5 is always available in the JVM; this branch is unreachable
+            throw new IllegalStateException("MD5 unavailable", algorithmException);
+        }
+    }
+}</code></pre>
+        <p><strong>Why <code>TreeMap</code>?</strong> <code>TreeMap</code> maintains sorted order, enabling O(log N) <code>ceilingEntry</code> and <code>firstEntry</code> lookups. A plain <code>HashMap</code> cannot support the clockwise-walk operation efficiently.</p>
+      </section>
+
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-07-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Scalability Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">When a node is added to a consistent hash ring with N nodes and K total keys, approximately how many keys need to be remapped?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="When a node is added to a consistent hash ring with N nodes and K total keys, approximately how many keys need to be remapped?" data-options='["All K keys","K/2 keys","K/N keys","0 keys — consistent hashing requires no remapping"]' data-correct="2" data-explanation="Only the keys between the new node and its predecessor in the ring need to move — approximately K/N keys. This is the core advantage over modular hashing which remaps ~K keys." style="display:none"></div>
+          <div data-question="Virtual nodes in consistent hashing primarily solve which problem?" data-options='["Hash collisions when two nodes hash to the same position","Uneven load distribution when physical nodes land in clusters on the ring","The inability to remove nodes from the ring","Network latency between nodes in different data centers"]' data-correct="1" data-explanation="Without virtual nodes, physical nodes may land in non-uniform positions on the ring, creating hotspots. Virtual nodes distribute each physical node across many ring positions, achieving statistical balance." style="display:none"></div>
+          <div data-question="Which load balancing algorithm is most appropriate for long-lived connections like WebSocket or database connections?" data-options='["Round Robin — simple and predictable","IP Hash — maintains stickiness","Least Connections — routes to the server handling the fewest active connections","Weighted Round Robin — respects server capacity"]' data-correct="2" data-explanation="Least Connections is ideal for long-lived connections because it dynamically accounts for the actual current load per server. Round Robin would ignore that slow servers accumulate a larger active connection queue." style="display:none"></div>
+          <div data-question="Twitter uses a hybrid fanout model. What problem does this solve compared to pure push fanout?" data-options='["It eliminates replication lag entirely","It prevents a celebrity with 50M followers from triggering 50M writes on every tweet","It removes the need for a message queue infrastructure","It enables real-time notifications without any server-side storage"]' data-correct="1" data-explanation="Pure push fanout creates write amplification proportional to follower count. A celebrity with 50M followers would trigger 50M inbox writes per tweet. Hybrid fanout pushes only to normal users and pulls celebrity posts at read time." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../08-observability/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../06-distributed/index.html" class="btn btn--outline">← Module 06: Distributed Systems</a>
+        <a href="../08-observability/index.html" class="btn btn--primary">Module 08: Observability →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 07</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

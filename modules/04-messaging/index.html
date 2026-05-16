@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master Kafka architecture, delivery guarantees, pub-sub vs point-to-point queues, dead-letter queues, and backpressure patterns for MAANG system design interviews.">
+  <title>Messaging &amp; Event Streaming — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/04-messaging/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#kafka-arch" class="module-toc__link">Kafka Architecture</a></li>
+          <li><a href="#delivery" class="module-toc__link">Delivery Guarantees</a></li>
+          <li><a href="#patterns" class="module-toc__link">Pub-Sub vs Point-to-Point</a></li>
+          <li><a href="#dlq" class="module-toc__link">Dead-Letter Queues</a></li>
+          <li><a href="#backpressure" class="module-toc__link">Backpressure</a></li>
+          <li><a href="#code" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-off Table</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-04" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 04</span>
+        </nav>
+        <div class="module-header__number">Module 04</div>
+        <h1 class="module-header__title">Messaging &amp; Event Streaming</h1>
+        <p class="module-header__desc">
+          Asynchronous messaging decouples services and absorbs traffic spikes.
+          Kafka handles 10 million events per second at LinkedIn. Understand its internals deeply
+          enough to explain partitioning, consumer groups, and exactly-once semantics on a whiteboard.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 40 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Intermediate</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> High Frequency</div>
+        </div>
+      </header>
+
+      <!-- Section: Kafka Architecture -->
+      <section class="content-section" id="kafka-arch" aria-labelledby="kafka-arch-title">
+        <h2 class="content-section__title" id="kafka-arch-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          Kafka Architecture Deep Dive
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 240" class="content-section__diagram" role="img" aria-label="Kafka architecture: producers, brokers with partitions, and consumer groups">
+            <!-- Producers -->
+            <text x="50" y="15" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#6366f1">Producers</text>
+            <rect x="10" y="22" width="80" height="22" rx="4" fill="#6366f1"/>
+            <text x="50" y="37" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Order Service</text>
+            <rect x="10" y="50" width="80" height="22" rx="4" fill="#6366f1"/>
+            <text x="50" y="65" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Payment Service</text>
+            <!-- Arrows to broker -->
+            <line x1="90" y1="33" x2="140" y2="80" stroke="#6366f1" stroke-width="1.5"/>
+            <line x1="90" y1="61" x2="140" y2="100" stroke="#6366f1" stroke-width="1.5"/>
+            <!-- Broker / Topic -->
+            <text x="250" y="15" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#0ea5e9">Topic: orders (3 partitions)</text>
+            <rect x="140" y="60" width="220" height="30" rx="4" fill="#0ea5e9" opacity="0.15" stroke="#0ea5e9" stroke-width="1.5"/>
+            <text x="185" y="79" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#0284c7">Partition 0</text>
+            <rect x="145" y="64" width="75" height="20" rx="3" fill="none" stroke="#0ea5e9" stroke-width="1"/>
+            <!-- Partition segments -->
+            <rect x="225" y="60" width="50" height="30" rx="4" fill="#0ea5e9" opacity="0.15" stroke="#0ea5e9" stroke-width="1.5"/>
+            <text x="250" y="79" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#0284c7">P 1</text>
+            <rect x="285" y="60" width="70" height="30" rx="4" fill="#0ea5e9" opacity="0.15" stroke="#0ea5e9" stroke-width="1.5"/>
+            <text x="320" y="79" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#0284c7">Partition 2</text>
+            <!-- Offsets label -->
+            <text x="250" y="105" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Each partition = immutable ordered log; consumer tracks offset</text>
+            <!-- Consumer Group -->
+            <text x="430" y="15" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#16a34a">Consumer Group</text>
+            <rect x="390" y="55" width="80" height="22" rx="4" fill="#16a34a"/>
+            <text x="430" y="70" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Consumer A</text>
+            <text x="430" y="81" text-anchor="middle" font-family="Inter,sans-serif" font-size="7" fill="#bbf7d0">(P0 + P1)</text>
+            <rect x="390" y="90" width="80" height="22" rx="4" fill="#16a34a"/>
+            <text x="430" y="105" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Consumer B</text>
+            <text x="430" y="116" text-anchor="middle" font-family="Inter,sans-serif" font-size="7" fill="#bbf7d0">(P2)</text>
+            <line x1="360" y1="75" x2="390" y2="66" stroke="#16a34a" stroke-width="1.5"/>
+            <line x1="360" y1="75" x2="390" y2="101" stroke="#16a34a" stroke-width="1.5"/>
+            <!-- Replication indicator -->
+            <rect x="140" y="130" width="220" height="22" rx="4" fill="#f59e0b" opacity="0.2" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="250" y="145" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#b45309">Replica (follower broker) — reads same log, no writes</text>
+            <line x1="250" y1="90" x2="250" y2="130" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,2"/>
+            <text x="255" y="114" font-family="Inter,sans-serif" font-size="8" fill="#f59e0b">replicated</text>
+            <!-- Key concepts -->
+            <text x="240" y="175" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#475569" font-weight="600">Key concepts:</text>
+            <text x="240" y="188" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">1 partition → max 1 consumer per group  |  offset = position in log</text>
+            <text x="240" y="200" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">More partitions = more parallelism  |  replication-factor=3 for durability</text>
+          </svg>
+
+          <h3>Brokers and Topics</h3>
+          <p>
+            A Kafka cluster consists of multiple <strong>brokers</strong> (servers). Each broker holds
+            a subset of partitions. A <strong>topic</strong> is a logical stream of records divided into
+            one or more <strong>partitions</strong>. Partitions are the unit of parallelism — more partitions
+            enable more parallel consumers. Each partition is an ordered, immutable log of records.
+          </p>
+          <h3>Partitions and Ordering</h3>
+          <p>
+            Kafka guarantees ordering <em>within a partition</em> — not across partitions.
+            To ensure order for a specific entity (e.g., all events for order-123 are ordered),
+            use the entity ID as the partition key: <code>producer.send(topic, orderId, event)</code>.
+            The same key always maps to the same partition (via hash), guaranteeing per-key ordering.
+          </p>
+          <h3>Consumer Groups</h3>
+          <p>
+            Each consumer in a group is assigned exclusive ownership of one or more partitions.
+            Within a group, each partition is consumed by exactly one consumer (no duplication).
+            Multiple consumer groups can read the same topic independently — each maintains its own offsets.
+            This enables fan-out: Order events processed by both the Inventory service group and the
+            Analytics service group independently.
+          </p>
+          <h3>Offsets and Retention</h3>
+          <p>
+            Kafka is a distributed log, not a traditional queue. Records are retained for a configurable period
+            (default: 7 days), regardless of whether they've been consumed.
+            Consumers can replay from any offset. This enables event sourcing and audit trails natively.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Delivery Guarantees -->
+      <section class="content-section" id="delivery" aria-labelledby="delivery-title">
+        <h2 class="content-section__title" id="delivery-title">
+          <span class="content-section__title-icon" aria-hidden="true">📬</span>
+          Delivery Guarantees
+        </h2>
+        <div class="content-section__body">
+          <h3>At-Most-Once</h3>
+          <p>
+            Producer fires and forgets (<code>acks=0</code>). Consumer commits offset before processing.
+            Messages may be lost. Acceptable for metrics/analytics where occasional loss is tolerable.
+            Never use for financial transactions.
+          </p>
+          <h3>At-Least-Once (Default)</h3>
+          <p>
+            Producer retries on failure (<code>acks=all</code>, <code>retries=MAX_INT</code>).
+            Consumer commits offset <em>after</em> successful processing.
+            On crash between processing and commit, the record is redelivered → possible duplicates.
+            Application must be <strong>idempotent</strong>: processing the same message twice produces the same result.
+            Idempotency strategies: database upserts keyed by message ID, idempotency keys in APIs,
+            deduplication tables with TTL.
+          </p>
+          <h3>Exactly-Once (Kafka 0.11+)</h3>
+          <p>
+            Kafka's idempotent producer assigns a sequence number to each message per partition.
+            The broker deduplicates retransmissions. Combined with Kafka transactions (atomic read-process-write),
+            this achieves exactly-once semantics <em>within the Kafka ecosystem</em>.
+          </p>
+          <p>
+            <strong>Configuration:</strong>
+            <code>enable.idempotence=true</code> (idempotent producer) +
+            <code>transactional.id</code> (named transactions) +
+            consumer <code>isolation.level=read_committed</code> (only read committed transaction data).
+          </p>
+          <p>
+            <strong>Important caveat:</strong> Exactly-once within Kafka-to-Kafka pipelines.
+            Kafka → external system (database, API) still requires application-level idempotency.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Pub-Sub vs Point-to-Point -->
+      <section class="content-section" id="patterns" aria-labelledby="patterns-title">
+        <h2 class="content-section__title" id="patterns-title">
+          <span class="content-section__title-icon" aria-hidden="true">📡</span>
+          Pub-Sub vs Point-to-Point Queues
+        </h2>
+        <div class="content-section__body">
+          <h3>Point-to-Point (Traditional Queue: SQS, RabbitMQ)</h3>
+          <p>
+            A message is consumed by exactly one consumer. Once consumed, it is deleted from the queue.
+            Best for task distribution: send an email, process an image, charge a card.
+            Competing consumers naturally distribute load without coordination.
+            SQS Standard: at-least-once, unordered. SQS FIFO: exactly-once, ordered, lower throughput (3,000 msg/s with batching).
+          </p>
+          <h3>Publish-Subscribe (Kafka, SNS, Google Pub/Sub)</h3>
+          <p>
+            A message is broadcast to all subscribers independently. Each subscriber (consumer group in Kafka)
+            processes every message. Best for event-driven architecture: "Order placed" event consumed by
+            Inventory, Email, Analytics, and Recommendation services simultaneously.
+            No coupling between publisher and subscribers.
+          </p>
+          <h3>When to Use Which</h3>
+          <ul>
+            <li><strong>Use a queue (SQS)</strong> when you want exactly one service to process each task. Email sending, payment processing, image resizing.</li>
+            <li><strong>Use pub-sub (Kafka)</strong> when multiple independent services need the same event. Event sourcing, audit logs, real-time analytics.</li>
+            <li><strong>Use Kafka over SQS</strong> when you need: message retention &gt;14 days, replay capability, &gt;100K messages/sec, strict per-key ordering, or stream processing (Kafka Streams, Flink).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Dead-Letter Queues -->
+      <section class="content-section" id="dlq" aria-labelledby="dlq-title">
+        <h2 class="content-section__title" id="dlq-title">
+          <span class="content-section__title-icon" aria-hidden="true">☠️</span>
+          Dead-Letter Queues (DLQ)
+        </h2>
+        <div class="content-section__body">
+          <p>
+            A DLQ stores messages that failed processing after N retry attempts.
+            Without a DLQ, a poison-pill message (e.g., malformed JSON) blocks the consumer forever.
+            With a DLQ, the message is sidelined after max retries, the queue continues processing,
+            and engineers can inspect and replay DLQ messages after fixing the bug.
+          </p>
+          <h3>DLQ Pattern</h3>
+          <ol>
+            <li>Consumer processes message → throws exception</li>
+            <li>Queue retries with exponential backoff (1s, 2s, 4s, 8s...)</li>
+            <li>After maxReceiveCount (e.g., 5), message is moved to DLQ</li>
+            <li>Alerting fires on DLQ depth &gt; threshold</li>
+            <li>Engineer fixes root cause, replays DLQ to original queue</li>
+          </ol>
+          <p>
+            <strong>SQS DLQ setup:</strong> Create a separate SQS queue and configure the source queue's
+            <code>RedrivePolicy</code> with <code>deadLetterTargetArn</code> and <code>maxReceiveCount</code>.
+          </p>
+          <p>
+            <strong>Kafka equivalent:</strong> No native DLQ, but the pattern is implemented by catching
+            exceptions in the consumer, writing the failed message to a <code>topic-name.DLT</code> (dead-letter topic)
+            with error metadata headers, and committing the original offset to unblock the partition.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Backpressure -->
+      <section class="content-section" id="backpressure" aria-labelledby="backpressure-title">
+        <h2 class="content-section__title" id="backpressure-title">
+          <span class="content-section__title-icon" aria-hidden="true">🌊</span>
+          Backpressure
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Backpressure is a mechanism for a slow consumer to signal a fast producer to slow down,
+            preventing memory exhaustion and cascade failures. Without backpressure, a slow downstream
+            service causes the upstream queue to grow unboundedly until OOM.
+          </p>
+          <h3>Kafka Backpressure</h3>
+          <p>
+            Kafka provides natural backpressure: the consumer controls its read rate via <code>max.poll.records</code>
+            and polling frequency. If consumers fall behind, the lag (topic partition offset lag) grows — this is
+            the key metric to monitor (<code>consumer-lag</code> in CloudWatch / Prometheus <code>kafka_consumer_group_lag</code>).
+            Alert when lag exceeds a threshold (e.g., 10,000 messages × avg processing time &gt; SLA).
+          </p>
+          <h3>Reactive Streams Backpressure</h3>
+          <p>
+            Reactive Streams (Project Reactor, RxJava) formalize backpressure with the <code>Subscription.request(n)</code>
+            contract: a subscriber signals exactly how many items it can handle. The producer respects this bound.
+            Overflow strategies: BUFFER (queue items), DROP (discard excess), LATEST (keep only newest), ERROR (fail fast).
+          </p>
+          <h3>Application-Level Backpressure</h3>
+          <p>
+            Semaphore-based: limit concurrent in-flight requests. When the semaphore is exhausted, new requests
+            either queue (bounded), drop (shed load), or return a 503 (immediate feedback to caller).
+            Circuit breakers (Resilience4j, Hystrix) provide a higher-level backpressure mechanism:
+            when failure rate exceeds threshold, open the circuit and fail fast rather than queueing.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Java Implementation -->
+      <section class="content-section" id="code" aria-labelledby="code-title">
+        <h2 class="content-section__title" id="code-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation: Kafka Producer/Consumer with Idempotency
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.serialization.*;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.logging.Logger;
+
+/**
+ * Demonstrates idempotent Kafka producer and at-least-once consumer
+ * with application-level deduplication for true exactly-once processing
+ * when writing to an external system (like a database).
+ *
+ * Producer: idempotent (enable.idempotence=true) + acks=all + retries
+ * Consumer: manual offset commit after successful processing + deduplication
+ */
+public class IdempotentKafkaPatterns {
+
+    private static final Logger LOG = Logger.getLogger(IdempotentKafkaPatterns.class.getName());
+    private static final String ORDERS_TOPIC = "orders";
+    private static final String BOOTSTRAP_SERVERS = "localhost:9092";
+    private static final int DEDUP_CACHE_SIZE_MAX = 10_000;
+
+    // --- PRODUCER ---
+
+    /**
+     * Creates an idempotent Kafka producer.
+     * enable.idempotence=true automatically sets:
+     *   acks=all, retries=MAX_INT, max.in.flight.requests.per.connection=5
+     * This guarantees each message is written exactly once to a partition,
+     * even if the producer retries due to transient network failures.
+     */
+    public static Producer&lt;String, String&gt; createIdempotentProducer() {
+        Properties producerProperties = new Properties();
+        producerProperties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
+        producerProperties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProperties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        // Idempotence: broker assigns a sequence number per (producer, partition).
+        // Duplicate retransmissions are detected and discarded at the broker level.
+        producerProperties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        // Compression reduces network and disk I/O (~4-8x for JSON payloads)
+        producerProperties.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
+
+        // Batching: wait up to 5ms to accumulate records into a batch
+        producerProperties.put(ProducerConfig.LINGER_MS_CONFIG, 5);
+        producerProperties.put(ProducerConfig.BATCH_SIZE_CONFIG, 64 * 1024); // 64 KB batches
+
+        return new KafkaProducer&lt;&gt;(producerProperties);
+    }
+
+    /**
+     * Sends an order event with the orderId as the partition key.
+     * Using orderId as key guarantees all events for the same order
+     * land on the same partition → strict ordering per order.
+     *
+     * @param producer    the Kafka producer
+     * @param orderId     the order identifier (used as partition key)
+     * @param orderPayload JSON-serialized order event
+     */
+    public static void sendOrderEvent(Producer&lt;String, String&gt; producer,
+                                      String orderId,
+                                      String orderPayload) {
+        ProducerRecord&lt;String, String&gt; kafkaRecord =
+            new ProducerRecord&lt;&gt;(ORDERS_TOPIC, orderId, orderPayload);
+
+        producer.send(kafkaRecord, (metadata, sendException) -&gt; {
+            if (sendException != null) {
+                LOG.severe("[Producer] Failed to send order " + orderId
+                    + ": " + sendException.getMessage());
+                // In production: push to a local retry queue or DLQ
+            } else {
+                LOG.info("[Producer] Order " + orderId
+                    + " sent to " + metadata.topic()
+                    + " partition=" + metadata.partition()
+                    + " offset=" + metadata.offset());
+            }
+        });
+    }
+
+    // --- CONSUMER ---
+
+    /**
+     * Creates a Kafka consumer configured for at-least-once delivery.
+     * enable.auto.commit=false is critical: we commit offsets manually
+     * only after successful processing, ensuring we never skip a message.
+     */
+    public static Consumer&lt;String, String&gt; createAtLeastOnceConsumer(String consumerGroupId) {
+        Properties consumerProperties = new Properties();
+        consumerProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
+        consumerProperties.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
+        consumerProperties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProperties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+        // Manual commit: never auto-commit — we control when offset advances
+        consumerProperties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+
+        // How many records to fetch per poll() call
+        consumerProperties.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 100);
+
+        // Backpressure: if processing takes > 5 min, consumer is considered dead
+        // and partitions are reassigned. Set slightly above max processing batch time.
+        consumerProperties.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 300_000);
+
+        return new KafkaConsumer&lt;&gt;(consumerProperties);
+    }
+
+    /**
+     * Order processor with application-level deduplication.
+     * Even though the producer is idempotent (no broker-side duplicates),
+     * consumer-side at-least-once delivery means the SAME message can be
+     * redelivered if the consumer crashes between processing and committing.
+     * Solution: maintain a processed-IDs set (backed by a DB in production).
+     */
+    public static class IdempotentOrderProcessor {
+
+        // In production: use Redis SETNX or DB unique constraint on messageId
+        private final Set&lt;String&gt; processedMessageIds =
+            Collections.newSetFromMap(new LinkedHashMap&lt;String, Boolean&gt;() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry&lt;String, Boolean&gt; eldest) {
+                    return size() &gt; DEDUP_CACHE_SIZE_MAX;
+                }
+            });
+
+        /**
+         * Processes an order event exactly once.
+         * Duplicate messages (same messageId) are detected and skipped.
+         *
+         * @param messageId    unique ID embedded in the message (e.g., UUID in payload)
+         * @param orderPayload the raw message payload
+         * @return true if processed, false if duplicate
+         */
+        public boolean processOrder(String messageId, String orderPayload) {
+            if (processedMessageIds.contains(messageId)) {
+                LOG.warning("[Consumer] Duplicate detected, skipping: " + messageId);
+                return false;
+            }
+            // Simulate processing: update inventory, send email, etc.
+            LOG.info("[Consumer] Processing order: " + messageId);
+            // In production: wrap this AND the dedup set update in a DB transaction
+            processedMessageIds.add(messageId);
+            return true;
+        }
+    }
+
+    /**
+     * Main consume loop: poll → process → commit.
+     * Offset committed only after successful processing of the entire batch.
+     */
+    public static void runConsumerLoop(Consumer&lt;String, String&gt; consumer,
+                                       IdempotentOrderProcessor processor) {
+        consumer.subscribe(List.of(ORDERS_TOPIC));
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                ConsumerRecords&lt;String, String&gt; consumerRecords =
+                    consumer.poll(Duration.ofMillis(500));
+
+                for (ConsumerRecord&lt;String, String&gt; kafkaRecord : consumerRecords) {
+                    // Message ID from headers or payload — not the Kafka offset
+                    String messageId = "order-" + kafkaRecord.partition() + "-" + kafkaRecord.offset();
+                    try {
+                        processor.processOrder(messageId, kafkaRecord.value());
+                    } catch (RuntimeException processingException) {
+                        LOG.severe("[Consumer] Processing failed for " + messageId
+                            + ": " + processingException.getMessage());
+                        // In production: send to DLQ topic after max retries
+                        // Do NOT commit offset — Kafka will redeliver
+                        return;
+                    }
+                }
+                // Commit after all records in batch are processed successfully
+                consumer.commitSync();
+            }
+        } finally {
+            consumer.close();
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Trade-off Table -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-off Table
+        </h2>
+        <div class="content-section__body">
+          <table class="content-table" aria-label="Messaging system trade-offs">
+            <thead>
+              <tr><th>Property</th><th>Kafka</th><th>SQS Standard</th><th>SQS FIFO</th><th>RabbitMQ</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Throughput</td><td>&gt;1M msg/sec</td><td>Nearly unlimited</td><td>3K/sec (batched)</td><td>~50K/sec</td></tr>
+              <tr><td>Ordering</td><td>Per-partition</td><td>No guarantee</td><td>Per MessageGroupId</td><td>Per-queue</td></tr>
+              <tr><td>Retention</td><td>Days to weeks (replay)</td><td>Up to 14 days</td><td>Up to 14 days</td><td>Until consumed</td></tr>
+              <tr><td>Delivery</td><td>At-least-once; exactly-once within Kafka</td><td>At-least-once</td><td>Exactly-once</td><td>At-least-once</td></tr>
+              <tr><td>Fan-out</td><td>Native (consumer groups)</td><td>Via SNS → multiple SQS</td><td>Via SNS FIFO</td><td>Exchange routing</td></tr>
+              <tr><td>Best for</td><td>Event streaming, audit log, high volume</td><td>Task queues, decoupling</td><td>Financial transactions</td><td>Complex routing, RPC</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="module-04-quiz" role="region" aria-label="Module 04 quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Messaging Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A Kafka topic has 6 partitions and a consumer group has 8 consumers. How many consumers will be actively consuming messages?"
+               data-options='["8 — all consumers share the work","6 — one consumer per partition; 2 consumers sit idle","3 — each consumer handles 2 partitions","It depends on the partition key distribution"]'
+               data-correct="1"
+               data-explanation="In Kafka, each partition is assigned to at most one consumer per consumer group. With 6 partitions and 8 consumers, 6 consumers each own one partition and 2 consumers sit idle. The idle consumers serve as hot standby — if an active consumer dies, a rebalance assigns its partition to a waiting consumer. Adding more consumers than partitions is wasteful."
+               style="display:none"></div>
+          <div data-question="You need to ensure that all events for a specific user (user-123) are processed in chronological order in Kafka. What is the correct approach?"
+               data-options='["Use a single partition for the entire topic","Set the message timestamp to the event time and Kafka will sort automatically","Use user-123 as the Kafka message key — the same key always maps to the same partition, ensuring per-key ordering","Use FIFO mode which Kafka supports natively"]'
+               data-correct="2"
+               data-explanation="Kafka guarantees ordering only within a partition. Using the userId as the message key ensures all events for that user hash to the same partition and are consumed in order. A single partition eliminates parallelism. Kafka does not sort by timestamp — it only orders by arrival within a partition. Kafka has no FIFO mode (that's SQS FIFO)."
+               style="display:none"></div>
+          <div data-question="Your payment processing Kafka consumer commits offset BEFORE processing the payment. What delivery semantic is this, and what is the risk?"
+               data-options='["At-least-once — risk of double-charging the customer","At-most-once — if the consumer crashes after committing but before processing, the payment is lost","Exactly-once — this is the correct pattern for financial systems","At-least-once — idempotency prevents double processing automatically"]'
+               data-correct="1"
+               data-explanation="Committing offset before processing = at-most-once. If the consumer crashes between commit and processing, the payment offset has advanced — Kafka won't redeliver — and the payment is silently lost. The correct pattern is: process first, then commit offset (at-least-once). For payments, combine with idempotency keys on the downstream system to handle any duplicate deliveries safely."
+               style="display:none"></div>
+          <div data-question="A malformed payment message keeps crashing your Kafka consumer. The consumer retries and crashes in a loop, blocking all other messages in the partition. What is the solution?"
+               data-options='["Increase max.poll.records to skip the bad message","Implement a dead-letter topic (DLT): catch the exception after max retries, write the failed message to payments.DLT with error headers, then commit the original offset to unblock the partition","Delete and recreate the topic to clear the poison-pill message","Set auto.offset.reset=latest to skip the bad message"]'
+               data-correct="1"
+               data-explanation="The dead-letter topic pattern is the production solution. After N retries, catch the exception, write the original payload + error metadata to a DLT (e.g., payments.DLT), and commit the offset. The partition continues processing. An alert fires on DLT depth, engineers fix the bug, and replay the DLT. Setting auto.offset.reset=latest only applies to new consumer groups and would lose all messages."
+               style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../05-api-design/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../03-caching/index.html" class="module-nav__btn module-nav__btn--prev">← Module 03: Caching</a>
+        <a href="../05-api-design/index.html" class="module-nav__btn module-nav__btn--next">Module 05: API Design →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 04</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

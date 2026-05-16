@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a distributed key-value store like DynamoDB: consistent hashing, quorum reads/writes, vector clocks for conflict resolution, LSM-tree storage engine, 1M QPS at 99.999% durability.">
+  <title>Design a Key-Value Store — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/key-value-store/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-key-value" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=key-value" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design a Key-Value Store (like DynamoDB)</h1>
+        <p class="module-header__desc">Design a distributed key-value store handling 1M QPS with configurable consistency, consistent hashing for partitioning, quorum-based replication, vector clocks for conflict resolution, and LSM-tree storage engine.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Amazon (DynamoDB), Meta (Cassandra), LinkedIn (Voldemort)</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li><code>get(key)</code> — retrieve the value for a key</li>
+          <li><code>put(key, value)</code> — store or update a key-value pair</li>
+          <li><code>delete(key)</code> — remove a key</li>
+          <li>Configurable consistency: eventual (higher availability) or strong (linearizable)</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Throughput:</strong> 1M QPS total (mix of reads/writes)</li>
+          <li><strong>Data size:</strong> 10TB across the cluster</li>
+          <li><strong>Durability:</strong> 99.999% (data survives disk failures)</li>
+          <li><strong>Horizontal scaling:</strong> add nodes without downtime</li>
+          <li><strong>Fault tolerance:</strong> cluster continues operating with up to N-1 node failures (where N is replication factor)</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>This is a CAP theorem question.</strong> The interviewer is probing: do you understand the partition tolerance tradeoff? Strong consistency (CP) vs high availability (AP). Amazon Dynamo chose AP with eventual consistency for shopping cart — data loss less damaging than unavailability.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Keys in cluster</div>
+            <div class="estimation-card__value">10 Billion</div>
+            <div class="estimation-card__note">10TB ÷ 1KB avg value</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Nodes needed</div>
+            <div class="estimation-card__value">~30</div>
+            <div class="estimation-card__note">10TB ÷ 3-way replication ÷ 100GB/node</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">QPS per node</div>
+            <div class="estimation-card__value">~33K</div>
+            <div class="estimation-card__note">1M ÷ 30 nodes</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Total storage</div>
+            <div class="estimation-card__value">30 TB</div>
+            <div class="estimation-card__note">10TB × 3 replicas</div>
+          </div>
+        </div>
+        <p>30K QPS per node is achievable with a memory-mapped storage engine (RocksDB handles 100K+ QPS per node). The challenge is coordination — quorum writes to 3 nodes must complete before acknowledging the client, adding latency.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">// Internal storage structure — NOT a relational schema
+
+// Consistent hash ring — maps key hashes to nodes
+// Ring has 360 × virtual_nodes_per_physical_node positions
+// Virtual nodes improve load balance (avoids hot spots)
+
+// SSTable (Sorted String Table) on each node:
+// - Stored as immutable files sorted by key
+// - Bloom filter per SSTable (fast miss detection)
+// - Summary index: sparse key-offset pairs for binary search
+
+// Write-Ahead Log (WAL): append-only file for durability
+// Format: [timestamp][key_len][key][value_len][value][checksum]
+
+// MemTable: in-memory sorted structure (Red-Black tree or skip list)
+// When MemTable reaches threshold (~64MB), flush to new SSTable
+
+// Vector clock for each key: { node_id: logical_clock }
+// Tracks causal history of writes across replicas
+
+// Metadata stored per entry:
+// key, value, vector_clock, tombstone_flag, created_at, version</code></pre>
+        <div class="callout callout--info">
+          <strong>Why LSM-tree (Log-Structured Merge-tree)?</strong> Writes go to an in-memory MemTable first (extremely fast). Periodic flushes to disk are sequential (fast for SSDs and HDDs). Reads check MemTable → SSTables → use Bloom filters to skip SSTables that don't contain the key. Write-optimized at the cost of slightly slower reads (compaction keeps read overhead bounded).
+        </div>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">Client</div>
+            <div class="hld-arrow">put(k,v)</div>
+            <div class="hld-box">Any Node (Coordinator)</div>
+            <div class="hld-arrow">consistent hash → 3 nodes</div>
+            <div class="hld-box">Replica Nodes (N=3)</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Coordinator</div>
+            <div class="hld-arrow">wait for W=2 acks</div>
+            <div class="hld-box">Replica 1 ✓</div>
+            <div class="hld-arrow">parallel</div>
+            <div class="hld-box">Replica 2 ✓ | Replica 3</div>
+          </div>
+        </div>
+        <p><strong>Consistent hash ring:</strong> Keys are mapped to a position on a 0–2^32 ring via MD5 or MurmurHash. Each physical node owns multiple positions (virtual nodes). A key goes to the first N nodes clockwise on the ring.</p>
+        <p><strong>Quorum protocol:</strong> N=3 replicas, W=2 write quorum, R=2 read quorum. W+R=4 > N=3, so every read will see at least one node with the latest write → strong consistency. For eventual consistency, use R=1, W=1.</p>
+        <p><strong>Write path:</strong> Client → any coordinator node → hash key → identify 3 replica nodes → send write to all 3 in parallel → wait for W=2 ACKs → respond OK to client. Third replica receives async.</p>
+        <p><strong>Read path:</strong> Coordinator sends read to R=2 replicas → if they agree, return value → if they disagree, resolve conflict (vector clock or last-write-wins) → return winner, trigger read-repair on stale replica.</p>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// External client API
+interface KeyValueStore {
+    /**
+     * Gets the value for a key.
+     * @param key the lookup key
+     * @param consistency STRONG or EVENTUAL
+     * @return Optional.empty() if key doesn't exist
+     */
+    Optional&lt;byte[]&gt; get(String key, Consistency consistency);
+
+    /**
+     * Stores a key-value pair.
+     * @param key the key (max 2KB)
+     * @param value the value (max 400KB for DynamoDB, configurable here)
+     * @param consistency STRONG or EVENTUAL
+     * @param ttlSeconds optional expiry, 0 = never
+     */
+    void put(String key, byte[] value, Consistency consistency, long ttlSeconds);
+
+    /**
+     * Deletes a key (writes a tombstone record, compacted later).
+     */
+    void delete(String key);
+
+    enum Consistency { STRONG, EVENTUAL }
+}
+
+// Internal node-to-node RPC (via gRPC)
+// ReplicaService.replicateWrite(key, value, vectorClock, timestamp)
+// ReplicaService.replicateDelete(key, vectorClock, tombstone=true)
+// ReplicaService.syncReplica(startKey, endKey) // for anti-entropy repair</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Vector Clocks &amp; Conflict Resolution</h2>
+        <p>When two clients write to the same key concurrently on different replicas (possible under eventual consistency), both writes are valid from their perspective. Vector clocks track causality to determine if one write supersedes another or if they are truly concurrent.</p>
+        <p>A vector clock is a map of <code>{nodeId → logicalClock}</code>. When node A writes, it increments its own clock: <code>{A:1, B:0}</code>. If node B receives this write then makes its own write, B's clock becomes <code>{A:1, B:1}</code>. We can prove B's write happened after A's.</p>
+        <p>If two writes have clocks <code>{A:2, B:1}</code> and <code>{A:1, B:2}</code>, neither dominates — they are concurrent and we have a conflict. Resolution options: (1) application-level merge (shopping cart can union both), (2) last-write-wins using wall clock timestamp (simpler, loses one write).</p>
+        <div class="callout callout--warning">
+          <strong>Last-Write-Wins (LWW) tradeoff:</strong> Simpler to implement and reason about. Requires synchronized clocks (NTP drift can cause incorrect ordering). Amazon Dynamo uses LWW by default but exposes conflicting versions to the application for custom resolution.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Node failure mid-write:</strong> If a node goes down after coordinator sends write but before ACK, coordinator counts it as failed. If W=2 is still met with remaining nodes, write succeeds. Failed node catches up via Hinted Handoff (coordinator stores the write with a hint, delivers when node recovers).</li>
+          <li><strong>Network partition:</strong> Under AP mode (W=1, R=1), both sides continue serving. Reads may return stale data. After partition heals, anti-entropy gossip protocol synchronizes replicas using Merkle trees to find diverged key ranges.</li>
+          <li><strong>Hot key (celebrity problem):</strong> One key gets 100K writes/sec. Consistent hashing puts it on 3 nodes — those 3 nodes are overloaded. Solution: add random suffixes to create N logical sub-keys, read all N and merge. DynamoDB's adaptive capacity also detects and reroutes hot partitions.</li>
+          <li><strong>Compaction:</strong> SSTables accumulate on disk. Periodic compaction merges SSTables, removes deleted keys (tombstones), and reduces read amplification. During compaction, disk I/O spikes — schedule during low-traffic windows.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>The architecture follows Amazon Dynamo's design: consistent hashing for partitioning, quorum for consistency, vector clocks for conflict detection, gossip protocol for membership, and anti-entropy for replica repair.</p>
+        <p><strong>CAP summary:</strong> With W=2, R=2, N=3 → CP (consistent, partition-tolerant, sacrifices some availability). With W=1, R=1 → AP (available, partition-tolerant, eventual consistency). The system is configurable per-request — different use cases in the same cluster can have different consistency requirements.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Conflict resolution</td>
+                <td>Vector clocks (application-level merge)</td>
+                <td>Last-write-wins (LWW)</td>
+                <td>Configurable</td>
+                <td>Shopping cart needs merge; user profile can afford to lose one write. Expose both modes. Default to LWW for simplicity; let application opt into vector clocks.</td>
+              </tr>
+              <tr>
+                <td>Storage engine</td>
+                <td>LSM-tree (write-optimized)</td>
+                <td>B-tree (read-optimized)</td>
+                <td>LSM-tree</td>
+                <td>KV stores are typically write-heavy. LSM-tree converts random writes to sequential I/O (10x faster on HDD, 5x on SSD). Read overhead is bounded by compaction keeping SSTable count small.</td>
+              </tr>
+              <tr>
+                <td>Consistency level</td>
+                <td>Strong (W+R > N)</td>
+                <td>Eventual (W=1, R=1)</td>
+                <td>Configurable per-request</td>
+                <td>Different use cases need different consistency. Expose as a parameter so low-latency use cases (session cache) can use eventual while financial data uses strong.</td>
+              </tr>
+              <tr>
+                <td>Partitioning</td>
+                <td>Consistent hashing</td>
+                <td>Range-based partitioning</td>
+                <td>Consistent hashing</td>
+                <td>Range partitioning supports range queries but creates hot partitions for sequential keys. KV store has no range queries, so consistent hashing's uniform distribution is better.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * VectorClock
+ * Tracks causal ordering of writes across distributed nodes.
+ * Used to detect concurrent writes (conflicts) vs causal writes (no conflict).
+ */
+public class VectorClock {
+
+    // nodeId -> logical clock counter for that node
+    private final Map&lt;String, Long&gt; clockValues;
+
+    public VectorClock() {
+        this.clockValues = new HashMap&lt;&gt;();
+    }
+
+    public VectorClock(Map&lt;String, Long&gt; initialValues) {
+        this.clockValues = new HashMap&lt;&gt;(initialValues);
+    }
+
+    /**
+     * Increments this node's clock when it performs a write.
+     * Must be called before each local write operation.
+     *
+     * @param nodeId the node performing the write
+     * @return new VectorClock with incremented value for this node
+     */
+    public VectorClock increment(String nodeId) {
+        Map&lt;String, Long&gt; newValues = new HashMap&lt;&gt;(clockValues);
+        newValues.merge(nodeId, 1L, Long::sum);
+        return new VectorClock(newValues);
+    }
+
+    /**
+     * Merges two clocks by taking the max of each component.
+     * Used when a node receives a message from another node.
+     *
+     * @param other the clock from the received message
+     * @return merged VectorClock
+     */
+    public VectorClock merge(VectorClock other) {
+        Map&lt;String, Long&gt; mergedValues = new HashMap&lt;&gt;(clockValues);
+        other.clockValues.forEach((nodeId, clockValue) ->
+            mergedValues.merge(nodeId, clockValue, Math::max)
+        );
+        return new VectorClock(mergedValues);
+    }
+
+    /**
+     * Determines the causal relationship between this clock and another.
+     *
+     * @param other the clock to compare against
+     * @return BEFORE, AFTER, CONCURRENT, or EQUAL
+     */
+    public CausalRelation compareTo(VectorClock other) {
+        boolean thisIsLarger = false;
+        boolean otherIsLarger = false;
+
+        Set&lt;String&gt; allNodes = new HashSet&lt;&gt;(clockValues.keySet());
+        allNodes.addAll(other.clockValues.keySet());
+
+        for (String nodeId : allNodes) {
+            long thisValue = clockValues.getOrDefault(nodeId, 0L);
+            long otherValue = other.clockValues.getOrDefault(nodeId, 0L);
+
+            if (thisValue &gt; otherValue) {
+                thisIsLarger = true;
+            } else if (thisValue &lt; otherValue) {
+                otherIsLarger = true;
+            }
+        }
+
+        if (!thisIsLarger && !otherIsLarger) return CausalRelation.EQUAL;
+        if (thisIsLarger && !otherIsLarger)  return CausalRelation.AFTER;   // this happened after other
+        if (!thisIsLarger && otherIsLarger)  return CausalRelation.BEFORE;  // this happened before other
+        return CausalRelation.CONCURRENT; // conflict: neither dominates
+    }
+
+    public enum CausalRelation { BEFORE, AFTER, EQUAL, CONCURRENT }
+
+    public Map&lt;String, Long&gt; getValues() { return Collections.unmodifiableMap(clockValues); }
+}
+
+/**
+ * QuorumCoordinator
+ * Manages quorum-based reads and writes across replica nodes.
+ * Implements the coordinator role in the consistent hashing cluster.
+ */
+public class QuorumCoordinator {
+
+    private final int replicationFactor;    // N
+    private final int writeQuorum;          // W: min nodes to ACK before write success
+    private final int readQuorum;           // R: min nodes to read from
+
+    private final ConsistentHashRing hashRing;
+    private final ReplicaNodeClient replicaClient;
+
+    public QuorumCoordinator(int replicationFactor, int writeQuorum, int readQuorum,
+                              ConsistentHashRing hashRing, ReplicaNodeClient replicaClient) {
+        if (writeQuorum + readQuorum &lt;= replicationFactor) {
+            throw new IllegalArgumentException(
+                "W+R must be > N for strong consistency. Got W=" + writeQuorum
+                + " R=" + readQuorum + " N=" + replicationFactor
+            );
+        }
+        this.replicationFactor = replicationFactor;
+        this.writeQuorum = writeQuorum;
+        this.readQuorum = readQuorum;
+        this.hashRing = hashRing;
+        this.replicaClient = replicaClient;
+    }
+
+    /**
+     * Writes a value to N replicas, waiting for W acknowledgements.
+     * Returns after W ACKs — remaining replicas replicate asynchronously.
+     *
+     * @param key   the key to write
+     * @param value the value bytes
+     * @throws QuorumException if fewer than W replicas acknowledge within timeout
+     */
+    public void put(String key, byte[] value) {
+        List&lt;String&gt; replicaNodeIds = hashRing.getReplicaNodes(key, replicationFactor);
+        VectorClock newClock = replicaClient.getCurrentClock(key, replicaNodeIds.get(0))
+            .increment(getCurrentNodeId());
+
+        List&lt;CompletableFuture&lt;Boolean&gt;&gt; writeFutures = replicaNodeIds.stream()
+            .map(nodeId -> replicaClient.replicateWriteAsync(nodeId, key, value, newClock))
+            .toList();
+
+        long successfulAcknowledgements = writeFutures.stream()
+            .map(future -> {
+                try {
+                    return future.get(200, TimeUnit.MILLISECONDS);
+                } catch (Exception writeException) {
+                    return false;
+                }
+            })
+            .filter(Boolean::booleanValue)
+            .count();
+
+        if (successfulAcknowledgements &lt; writeQuorum) {
+            throw new QuorumException("Write quorum not met: got "
+                + successfulAcknowledgements + " of required " + writeQuorum);
+        }
+    }
+
+    /**
+     * Reads from R replicas and resolves conflicts if replicas disagree.
+     * Triggers read-repair on any stale replica found.
+     */
+    public Optional&lt;byte[]&gt; get(String key) {
+        List&lt;String&gt; replicaNodeIds = hashRing.getReplicaNodes(key, replicationFactor);
+
+        List&lt;ReplicaResponse&gt; responses = replicaNodeIds.stream()
+            .limit(readQuorum)
+            .map(nodeId -> replicaClient.read(nodeId, key))
+            .filter(Optional::isPresent)
+            .map(Optional::get)
+            .toList();
+
+        if (responses.isEmpty()) {
+            return Optional.empty();
+        }
+
+        ReplicaResponse latestResponse = resolveConflicts(responses);
+        triggerReadRepairIfNeeded(key, responses, latestResponse, replicaNodeIds);
+        return Optional.of(latestResponse.value());
+    }
+
+    private ReplicaResponse resolveConflicts(List&lt;ReplicaResponse&gt; responses) {
+        // Last-write-wins: return response with highest timestamp
+        return responses.stream()
+            .max(Comparator.comparingLong(ReplicaResponse::writeTimestampMs))
+            .orElseThrow();
+    }
+
+    private void triggerReadRepairIfNeeded(String key, List&lt;ReplicaResponse&gt; responses,
+            ReplicaResponse latestResponse, List&lt;String&gt; allReplicaNodeIds) {
+        boolean hasStaleReplica = responses.stream()
+            .anyMatch(response -> response.writeTimestampMs() &lt; latestResponse.writeTimestampMs());
+
+        if (hasStaleReplica) {
+            // Async: update stale replicas with the latest value
+            allReplicaNodeIds.forEach(nodeId ->
+                replicaClient.replicateWriteAsync(nodeId, key,
+                    latestResponse.value(), latestResponse.vectorClock())
+            );
+        }
+    }
+
+    private String getCurrentNodeId() {
+        return hashRing.getCurrentNodeId();
+    }
+
+    public record ReplicaResponse(byte[] value, VectorClock vectorClock, long writeTimestampMs) {}
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-key-value-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="With N=3 replicas, W=2, R=2, what is guaranteed?" data-options='["High availability — the system stays up even if all 3 nodes fail","Strong consistency — every read sees the latest write (W+R=4 > N=3)","Eventual consistency only","The system can handle 3x the write throughput"]' data-correct="1" data-explanation="W+R > N ensures that the set of nodes written to and the set of nodes read from always overlap by at least one node — that node will have the latest write. So every read sees the latest value: strong consistency." style="display:none"></div>
+          <div data-question="Two concurrent writes to the same key produce vector clocks {A:2, B:1} and {A:1, B:2}. What does this mean?" data-options='["The write with {A:2, B:1} wins because A has a higher counter","The writes are concurrent (neither dominates) — a conflict must be resolved","The write with {A:1, B:2} wins because B is more recent","Both writes will be lost due to the conflict"]' data-correct="1" data-explanation="A vector clock X dominates Y if every component of X >= Y's corresponding component. {A:2,B:1} vs {A:1,B:2}: A-dimension favors first, B-dimension favors second. Neither dominates — they are concurrent, meaning a conflict exists." style="display:none"></div>
+          <div data-question="Why does a key-value store use an LSM-tree instead of a B-tree?" data-options='["LSM-tree supports range queries; B-tree does not","LSM-tree converts random writes to sequential I/O by buffering in a MemTable first, making writes ~10x faster than B-tree's in-place updates","B-tree requires more memory than LSM-tree","LSM-tree is simpler to implement than B-tree"]' data-correct="1" data-explanation="B-trees do random I/O (update pages in-place). LSM-trees write sequentially — first to MemTable (memory), then flush to SSTable (sequential disk write). Sequential I/O is 10x faster on HDDs and significantly faster on SSDs." style="display:none"></div>
+          <div data-question="What is 'Hinted Handoff' in a distributed key-value store?" data-options='["A protocol for transferring ownership of keys between nodes","When a coordinator stores a write destined for a down node and delivers it when that node recovers","A read-repair mechanism that fixes stale replicas","The process of splitting a hot partition into two smaller partitions"]' data-correct="1" data-explanation="If a replica node is down during a write, the coordinator stores the write locally with a 'hint' (which node it's meant for). When that node recovers, the coordinator delivers the hint. This ensures writes aren't lost due to temporary node failures." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="message-queue.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="pastebin.html" class="btn btn--outline">← Prev: Pastebin</a>
+        <a href="message-queue.html" class="btn btn--outline">Next: Message Queue →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

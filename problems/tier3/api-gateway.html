@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design an API Gateway &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design an API Gateway &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-api-gateway" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-api-gateway" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Infrastructure</span>
+        </div>
+        <h1 class="module-header__title">Design an API Gateway</h1>
+        <p class="module-header__desc">An API gateway is a reverse proxy with a plugin/middleware pipeline: auth, rate limit, request transform, route, load balance, circuit break, response transform, cache. Each plugin is a single concern. Understanding this pipeline and when to put logic in the gateway vs the service is the interview signal.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; Kong, AWS API Gateway, Nginx</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><h3>Functional Requirements</h3><ul>
+            <li>Route requests to appropriate backend services based on path and method</li>
+            <li>Authentication and authorization (JWT validation, API key verification)</li>
+            <li>Rate limiting per client or API key</li>
+            <li>Request and response transformation (add headers, strip sensitive fields)</li>
+            <li>SSL termination, load balancing, circuit breaking</li>
+            <li>API composition: aggregate multiple service responses into one</li></ul><h3>Non-Functional Requirements</h3><ul>
+            <li><strong>Scale:</strong> 1M requests/sec across all services</li>
+            <li><strong>Latency overhead:</strong> &lt;5ms added by gateway</li>
+            <li><strong>Availability:</strong> 99.999% &mdash; gateway is in the hot path of every request</li></ul></div>
+      </section>
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li>1M req/sec &rarr; multiple stateless gateway instances behind load balancer</li>
+            <li>Rate limiting state (sliding window counters): 10M API keys &times; 16 bytes = 160MB &rarr; Redis Cluster</li>
+            <li>Circuit breaker state: O(services) in-memory per gateway instance &mdash; trivial</li></ul></div>
+      </section>
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Route registry (loaded at gateway startup, refreshed every 60s)
+routes: path_pattern, method, backend_service_url, auth_required, rate_limit_tier
+
+// Rate limit counters (Redis - sliding window)
+// Key: rate:{api_key}:{window_minute}  TTL: 2 minutes
+// INCR + EXPIRE on each request
+
+// Circuit breaker state (in-memory per gateway instance)
+circuit_states: service_id -> {state: CLOSED|OPEN|HALF_OPEN, failure_count, last_failure}</code></pre></div>
+      </section>
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Request pipeline (chain of responsibility):</strong> Auth &rarr; Rate Limit &rarr; Request Transform &rarr; Route Lookup &rarr; Load Balance &rarr; Circuit Breaker &rarr; Backend Call &rarr; Response Transform &rarr; Cache.</li>
+            <li><strong>Auth:</strong> JWT validation (offline -- verify signature with public key, no DB call). API key validation (Redis lookup). OAuth 2.0 token introspection (external call -- cache results).</li>
+            <li><strong>Rate limiting:</strong> Sliding window counter per (api_key, minute). Redis INCR + TTL. Reject with 429 if over limit.</li>
+            <li><strong>Circuit breaker:</strong> Track failure rate per backend service. CLOSED &rarr; OPEN at 50% failure rate. OPEN &rarr; reject immediately with 503. HALF_OPEN &rarr; try one request, close if succeeds.</li>
+            <li><strong>API composition:</strong> Fan out to multiple services in parallel, merge responses. Useful for BFF (Backend For Frontend) pattern.</li></ul></div>
+      </section>
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Gateway management API
+GET  /api/v1/routes           -- list all configured routes
+POST /api/v1/routes           -- add new route { path, method, backend, rate_limit_tier }
+GET  /api/v1/circuit-breakers -- list circuit breaker states per service
+
+// All client APIs pass through -- not a specific endpoint
+// Example proxied call:
+// Client: POST https://api.example.com/payments/v1/charge
+// Gateway: Auth -> RateLimit -> route to payments-service:8080/v1/charge
+
+// Health check
+GET /health  -> { status: "ok", circuit_breakers: {...}, rate_limit_redis: "connected" }</code></pre></div>
+      </section>
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Chain of Responsibility pattern for middleware:</strong></p>
+          <p>Each plugin implements: <code>void handle(Request req, Response res, Runnable next)</code>. Calling <code>next.run()</code> passes control to the next plugin. Not calling <code>next</code> short-circuits (e.g., auth plugin rejects with 401).</p>
+          <p>This is the same pattern as Express.js middleware, Servlet filters in Java, and Django middleware.</p>
+          <p><strong>Why put auth in the gateway vs each service?</strong></p>
+          <ul>
+            <li>Gateway: single enforcement point. Services receive pre-validated user context. Services trust the gateway (internal network -- accept X-User-Id header).</li>
+            <li>Each service: defense in depth. Services do not trust the gateway. Higher latency (each service validates independently).</li>
+            <li>Compromise: gateway validates JWT signature (fast, offline). Services check authorization (does this user have permission to this resource).</li>
+          </ul>
+          <p><strong>Circuit breaker states:</strong></p>
+          <ul>
+            <li>CLOSED: normal operation. Track failure rate.</li>
+            <li>OPEN: failure rate exceeded threshold. Reject all requests immediately. Start timer.</li>
+            <li>HALF-OPEN: timer expired. Allow one request through. If succeeds: CLOSED. If fails: back to OPEN.</li>
+          </ul></div>
+      </section>
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Gateway as SPOF:</strong> Multiple gateway instances behind a load balancer. Stateless design (rate limit state in Redis, circuit state local per instance). Horizontal scaling: add instances as traffic grows.</li>
+            <li><strong>Gateway vs service mesh:</strong> Gateway handles north-south (client &rarr; service) traffic. Service mesh (Istio/Linkerd) handles east-west (service &rarr; service) traffic. Do not duplicate both -- use gateway for external, service mesh for internal.</li></ul></div>
+      </section>
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body"><p>API gateway = chain-of-responsibility middleware pipeline (auth, rate limit, circuit break) + stateless instances + Redis for shared rate limit state. Key insight: JWT validation is offline (no network call), making auth latency negligible.</p></div>
+      </section>
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Decision</th><th>Gateway Auth</th><th>Per-Service Auth</th></tr></thead>
+            <tbody>
+              <tr><td>Enforcement</td><td>Single point: simpler, but gateway misconfiguration = security hole</td><td>Defense in depth: each service validates independently</td></tr>
+              <tr><td>Latency</td><td>JWT: offline verify, &lt;1ms. API key: one Redis read.</td><td>Each service makes auth call: 1-5ms per service</td></tr>
+              <tr><td>Rate limiting</td><td>Gateway: aggregated across all services for a client</td><td>Per-service: each service limits independently (no global view)</td></tr>
+            </tbody>
+          </table></div>
+      </section>
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body"><pre><code class="language-java">/**
+ * ApiGatewayPipeline -- executes a pluggable middleware chain for each request.
+ * Each plugin handles one concern (auth, rate limit, routing, circuit breaking).
+ */
+public class ApiGatewayPipeline {
+
+    private final List&lt;GatewayPlugin&gt; plugins;
+
+    public ApiGatewayPipeline(List&lt;GatewayPlugin&gt; plugins) {
+        this.plugins = List.copyOf(plugins);
+    }
+
+    public GatewayResponse process(GatewayRequest request) {
+        PluginChain chain = new PluginChain(plugins, 0);
+        GatewayResponse response = new GatewayResponse();
+        chain.handle(request, response);
+        return response;
+    }
+
+    public interface GatewayPlugin {
+        void handle(GatewayRequest request, GatewayResponse response, Runnable next);
+    }
+
+    private static class PluginChain {
+        private final List&lt;GatewayPlugin&gt; plugins;
+        private int index;
+
+        PluginChain(List&lt;GatewayPlugin&gt; plugins, int index) { this.plugins = plugins; this.index = index; }
+
+        void handle(GatewayRequest request, GatewayResponse response) {
+            if (index &gt;= plugins.size()) return;
+            GatewayPlugin current = plugins.get(index++);
+            PluginChain next = new PluginChain(plugins, index);
+            current.handle(request, response, () -&gt; next.handle(request, response));
+        }
+    }
+
+    // JWT Auth plugin -- validates offline (no network call)
+    public static class JwtAuthPlugin implements GatewayPlugin {
+        private final JwtValidator jwtValidator;
+        public JwtAuthPlugin(JwtValidator jwtValidator) { this.jwtValidator = jwtValidator; }
+
+        @Override
+        public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
+            String authHeader = request.getHeader("Authorization");
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                response.setStatus(401);
+                response.setBody("{\"error\":\"Missing or invalid Authorization header\"}");
+                return; // Short-circuit -- do NOT call next
+            }
+            JwtClaims claims = jwtValidator.validate(authHeader.substring(7));
+            if (claims == null) {
+                response.setStatus(401);
+                response.setBody("{\"error\":\"Invalid or expired JWT\"}");
+                return;
+            }
+            request.setAttribute("userId", claims.getSubject());
+            next.run(); // Continue to next plugin
+        }
+    }
+
+    // Rate limit plugin -- Redis sliding window counter
+    public static class RateLimitPlugin implements GatewayPlugin {
+        private final JedisPool jedisPool;
+        private final int requestsPerMinute;
+
+        public RateLimitPlugin(JedisPool jedisPool, int requestsPerMinute) {
+            this.jedisPool = jedisPool;
+            this.requestsPerMinute = requestsPerMinute;
+        }
+
+        @Override
+        public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
+            String apiKey = request.getHeader("X-Api-Key");
+            if (apiKey == null) { next.run(); return; }
+            long currentMinute = System.currentTimeMillis() / 60_000;
+            String rateLimitKey = "rate:" + apiKey + ":" + currentMinute;
+            try (Jedis jedis = jedisPool.getResource()) {
+                long requestCount = jedis.incr(rateLimitKey);
+                jedis.expire(rateLimitKey, 120);
+                if (requestCount &gt; requestsPerMinute) {
+                    response.setStatus(429);
+                    response.setBody("{\"error\":\"Rate limit exceeded\"}");
+                    return;
+                }
+            }
+            next.run();
+        }
+    }
+}</code></pre></div>
+      </section>
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-api-gateway-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="What is the chain of responsibility pattern in an API gateway, and why is it the right design?" data-options='["Chain of responsibility is a queuing pattern for batching requests to backend services", "Each plugin implements a handler interface with a next callback. Auth plugin validates JWT; if valid, calls next (rate limiter); if invalid, short-circuits with 401. This separates concerns: each plugin handles one thing, plugins are composable, order is configurable, adding a new concern (e.g., tracing) requires only adding a new plugin.", "The pattern ensures each plugin runs in parallel for low latency", "Chain of responsibility is specifically for database connection pool management"]' data-correct="1" data-explanation="The chain of responsibility is the natural pattern for middleware. Each handler decides whether to pass control to the next handler or short-circuit. This enables clean separation of concerns (each plugin is independently testable), flexible configuration (order matters), and zero coupling between plugins." style="display:none"></div>
+          <div data-question="Why is JWT authentication preferred over database-lookup authentication at the API gateway?" data-options='["JWT tokens are more secure than session tokens stored in Redis", "JWT signature validation is offline -- the gateway holds the auth server public key and validates the signature locally without any network call. Database-based session token lookup requires a Redis or DB call per request, adding 1-5ms and creating a hard dependency. At 1M req/sec, that is 1M Redis reads/sec just for auth.", "JWT tokens automatically expire so no cleanup is needed", "Database authentication requires the gateway to store user credentials locally"]' data-correct="1" data-explanation="JWT offline validation is the gateway killer feature. The public key is loaded at startup. Every JWT validation = one RSA/ECDSA signature verify = ~1ms CPU, zero network. The trade-off: JWTs cannot be revoked instantly (short expiry of 15 minutes is standard). For revocation, maintain a small blocked token list checked after JWT validation." style="display:none"></div>
+          <div data-question="When should API composition be done at the gateway vs a dedicated BFF (Backend For Frontend) service?" data-options='["API composition should never happen at the gateway under any circumstances", "Simple aggregations (merge two service responses) with low latency requirements: gateway is appropriate. Complex orchestration with conditional logic, error compensation, or different responses per client type: dedicated BFF service. The gateway should remain generic infrastructure -- avoid encoding business logic in it.", "All API composition must always go through a dedicated BFF service", "API composition should always happen client-side to reduce server load"]' data-correct="1" data-explanation="The gateway is infrastructure -- it should be generic, stateless, and business-logic-free. Putting complex product logic in the gateway makes it fragile and hard to test. A BFF is owned by the frontend team, deployed independently, and aggregates multiple backend calls into mobile-optimized or web-optimized responses." style="display:none"></div>
+          <div data-question="What triggers a circuit breaker to transition from CLOSED to OPEN, and what happens to requests in OPEN state?" data-options='["OPEN state means the circuit is functioning normally and all requests pass through", "When failure rate exceeds a threshold (e.g., 50% of requests to a service fail or timeout over a 10-second window), the circuit transitions to OPEN. All subsequent requests are immediately rejected with 503 (no attempt to call the backend). This prevents cascading failures: a slow service no longer consumes gateway threads waiting for responses.", "OPEN state allows 1% of requests through to continuously test backend recovery", "Circuit breakers only activate for HTTP 500 errors, not for timeout errors"]' data-correct="1" data-explanation="The circuit breaker prevents cascading failures -- one slow service can take down the entire gateway if all threads are waiting for it. OPEN = fast fail: caller gets 503 immediately instead of waiting 30s for a timeout. After a timer (e.g., 30 seconds), transitions to HALF-OPEN: one probe request. Success means CLOSED; failure means back to OPEN." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="feature-flags.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Feature Flags &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="distributed-tracing.html" class="btn btn--outline">&larr; Distributed Tracing</a>
+        <a href="feature-flags.html" class="btn btn--primary">Next: Feature Flags &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

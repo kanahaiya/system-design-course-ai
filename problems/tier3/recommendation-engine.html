@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Recommendation Engine — RESHADED walkthrough covering collaborative filtering, matrix factorization, ANN lookup, candidate generation, and cold start problem for MAANG interviews.">
+  <title>Design Recommendation Engine — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-recommendation" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=recommendation" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
+          <span class="tag">60 min</span><span class="tag">ML Systems</span>
+        </div>
+        <h1 class="module-header__title">Design a Recommendation Engine</h1>
+        <p class="module-header__desc">Recommendation is a two-stage funnel: candidate generation (retrieve top-K candidates from millions of items quickly using embeddings + ANN) followed by re-ranking (score each candidate with a rich feature set). Each stage optimizes for different trade-offs.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Netflix, Spotify, Amazon</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> 100M items</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Recommend items (products, songs, movies) based on user history and preferences</li>
+            <li>Handle cold-start: new users with no history, new items with no interactions</li>
+            <li>Real-time updates: recent interactions should influence recommendations quickly</li>
+            <li>Diversity: avoid recommending only the most popular items</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 100M users, 50M items, 10B interactions/day</li>
+            <li><strong>Latency:</strong> Recommendation response &lt;200ms</li>
+            <li><strong>Offline training:</strong> Full model retrain daily; incremental update hourly</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>50M items × 128-dim float32 embedding = 25.6GB for all item embeddings → fits in GPU RAM for ANN index</li>
+            <li>100M users × 128-dim user embeddings = 51.2GB → shard across multiple ANN servers</li>
+            <li>Candidate retrieval: ANN top-1000 in &lt;10ms (HNSW index). Re-ranking: score 1000 candidates in &lt;50ms.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// User-item interactions (Cassandra — write-heavy, time-series)
+interactions: (user_id, item_id, interaction_type, timestamp)
+  // interaction_type: view, click, purchase, like, skip
+
+// Embeddings (stored in Redis + ANN index like Faiss/Weaviate)
+user_embeddings: user_id → 128-dim float vector
+item_embeddings: item_id → 128-dim float vector
+  // Updated by offline training job daily
+  // Retrieved by ANN service for similarity search
+
+// Pre-computed recommendations (Redis, 1hr TTL)
+// Key: recs:{user_id}  Value: JSON list of item_ids
+// Generated by offline batch job for all active users
+// Fallback: popular items for new users (cold start)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Offline Training (Spark + GPU cluster, daily):</strong> Reads interaction log from Cassandra/S3. Trains matrix factorization model (or neural collaborative filtering). Produces user/item embeddings. Writes to Redis + ANN index.</li>
+            <li><strong>Candidate Generation (online, &lt;10ms):</strong> Given user_id → fetch user embedding → ANN query (HNSW) → top-1000 similar item embeddings → candidate item IDs.</li>
+            <li><strong>Re-ranking (online, &lt;50ms):</strong> Score each of 1000 candidates using richer features (recency, context, diversity penalty, business rules). Return top-20.</li>
+            <li><strong>Serving:</strong> Pre-computed recommendations in Redis for active users (batch update hourly). Online fallback via ANN for cache miss.</li>
+            <li><strong>Cold start — new user:</strong> Serve popular items by category. After 5+ interactions, run online recommendation.</li>
+            <li><strong>Cold start — new item:</strong> Use content-based features (item embeddings from item metadata) until interaction data accumulates.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">GET /v1/recommendations?userId={}&context=homepage&limit=20
+  Returns: [{ itemId, score, reason: "because_you_liked_X" }]
+
+POST /v1/interactions
+  Body: { userId, itemId, interactionType: view|click|purchase|skip, timestamp }
+  // Async: publishes to Kafka for model updates
+
+GET /v1/items/{itemId}/similar?limit=10
+  // Item-to-item: find similar items (used for "You might also like")</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Two-Tower Model + ANN<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Two-Tower Neural Network:</strong></p>
+          <ul>
+            <li>User tower: takes user features (history, demographics) → produces 128-dim user embedding</li>
+            <li>Item tower: takes item features (metadata, category, text description) → produces 128-dim item embedding</li>
+            <li>Similarity: cosine(user_embedding, item_embedding) = probability of interaction</li>
+            <li>Training: positive pairs (user, interacted_item) vs negative sampling (user, random_item)</li>
+          </ul>
+          <p><strong>ANN (Approximate Nearest Neighbor) search:</strong></p>
+          <ul>
+            <li>Exact search of 50M item embeddings for each query: O(50M × 128) = too slow</li>
+            <li>HNSW (Hierarchical Navigable Small World): graph-based index. Query: O(log N) comparisons. ~95% recall at 10ms latency vs 100% recall at 5s.</li>
+            <li>Faiss (Facebook): GPU-accelerated ANN. 50M items → index fits in 25GB GPU RAM → &lt;5ms query.</li>
+          </ul>
+          <p><strong>Why approximate (ANN) not exact:</strong> Missing 5% of the optimal candidates is acceptable. If items 501-1000 would have appeared in exact search but not ANN, the re-ranker would likely not promote them above the top 20 anyway. The quality loss is negligible at scale.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Filter bubble:</strong> Pure collaborative filtering amplifies popularity bias — popular items get more clicks → ranked higher → even more clicks. Mitigation: diversity penalty in re-ranker (penalize items too similar to already-shown items), exploration bucket (10% of recs are exploratory).</li>
+            <li><strong>Real-time updates:</strong> Daily retraining means a user's purchases today don't affect recommendations until tomorrow. Mitigation: session-based recommendations layer on top using recent interaction sequence (e.g., last 10 items) to bias candidates in real-time.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a recommendation engine serving 100M users with &lt;200ms latency. Key decisions: two-tower model for scalable embedding generation, HNSW/Faiss ANN for fast candidate retrieval, two-stage funnel (candidate generation + re-ranking), Redis pre-computed cache for active users, and content-based cold start fallback.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>Candidate retrieval</td><td>ANN (approximate)</td><td>Exact nearest neighbor</td><td>50M items: exact search takes seconds. ANN achieves 95% recall in 5ms. Quality loss negligible since re-ranker handles final ordering.</td></tr>
+              <tr><td>Model type</td><td>Two-tower neural network</td><td>Matrix factorization (SVD)</td><td>Two-tower: handles new items via content features (cold start). SVD: pure ID-based, can't handle cold start. Two-tower more complex but better coverage.</td></tr>
+              <tr><td>Serving strategy</td><td>Pre-computed + online fallback</td><td>All-online inference</td><td>Pre-computed: &lt;1ms Redis read for 99% of requests. Online: 150ms for ANN+rerank. Pre-computed scales cheaply; online reserved for cache misses and new users.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * CandidateRetriever — retrieves top-K candidate items for a user using
+ * pre-computed embeddings and approximate nearest neighbor (ANN) search.
+ */
+public class CandidateRetriever {
+
+    private static final int CANDIDATE_COUNT = 1000;
+    private static final String USER_EMBEDDING_PREFIX = "embedding:user:";
+
+    private final JedisPool jedisPool;
+    private final AnnIndex itemAnnIndex; // Faiss/HNSW index loaded in memory
+
+    public CandidateRetriever(JedisPool jedisPool, AnnIndex itemAnnIndex) {
+        this.jedisPool = jedisPool;
+        this.itemAnnIndex = itemAnnIndex;
+    }
+
+    /**
+     * Returns top candidate items for a user by embedding similarity.
+     * First fetches the user's embedding, then does ANN search over item space.
+     *
+     * @param userId  the user to generate recommendations for
+     * @return list of candidate item IDs (unranked, to be passed to re-ranker)
+     */
+    public List&lt;String&gt; retrieveCandidates(String userId) {
+        float[] userEmbedding = fetchUserEmbedding(userId);
+        if (userEmbedding == null) {
+            return retrieveColdStartCandidates();
+        }
+        return itemAnnIndex.findNearest(userEmbedding, CANDIDATE_COUNT);
+    }
+
+    /**
+     * Fetches the user's embedding vector from Redis.
+     * Embeddings are stored as binary-encoded float arrays for space efficiency.
+     * Returns null if user has no embedding (new user → cold start).
+     */
+    private float[] fetchUserEmbedding(String userId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            byte[] embeddingBytes = jedis.get((USER_EMBEDDING_PREFIX + userId).getBytes());
+            if (embeddingBytes == null) {
+                return null;
+            }
+            return decodeBinaryToFloats(embeddingBytes);
+        }
+    }
+
+    /**
+     * Cold start: return popular items across categories as seed candidates.
+     * These will be further filtered/ranked by the re-ranker.
+     */
+    private List&lt;String&gt; retrieveColdStartCandidates() {
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Popular items pre-computed by a daily job
+            return jedis.lrange("cold_start:popular_items", 0, CANDIDATE_COUNT - 1);
+        }
+    }
+
+    /**
+     * Decodes a packed binary float array stored in Redis.
+     * Using binary encoding: 128 floats × 4 bytes = 512 bytes vs ~1KB for JSON.
+     */
+    private float[] decodeBinaryToFloats(byte[] bytes) {
+        float[] floats = new float[bytes.length / Float.BYTES];
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(floats);
+        return floats;
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-recommendation-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why is exact nearest neighbor search over 50M items impractical for online recommendations?" data-options='["SQL databases don't support vector comparisons","Exact search requires computing cosine similarity against all 50M item embeddings (128 floats each) for every user request — O(50M × 128) = 6.4B operations per query, taking 3–5 seconds. ANN achieves 95% recall in under 10ms by trading exactness for speed using graph-based indexing.","50M items exceeds the maximum index size","Nearest neighbor search is an NP-complete problem"]' data-correct="1" data-explanation="This is why specialized ANN libraries (Faiss, HNSW, Annoy) exist. The trade-off: 100% recall at 5 seconds vs 95% recall at 5ms. For recommendations, finding 950 of the true top-1000 candidates is indistinguishable from finding all 1000 — the re-ranker will select the same top-20 in both cases." style="display:none"></div>
+          <div data-question="What is the cold-start problem and what strategies address it?" data-options='["Cold start refers to slow database query performance on new tables","New users have no interaction history — collaborative filtering produces garbage recommendations. Strategies: (1) New user: onboarding quiz for preferences, serve popular items by category. (2) New item: use content-based features (metadata, text embeddings) until interaction data accumulates. (3) Hybrid: blend collaborative + content-based.","Cold start only affects items, not users","Cold start is solved by caching warm-up before launch"]' data-correct="1" data-explanation="Cold start is one of the central challenges in recommendation systems. Pure collaborative filtering (matrix factorization) cannot handle it — there's no column for a new user or row for a new item. Content-based filtering (using item/user attribute features) doesn't require interaction history — it's the standard cold-start solution, often blended with collaborative signals as data accumulates." style="display:none"></div>
+          <div data-question="Why does a recommendation system use two stages (candidate generation + re-ranking) rather than scoring all items directly?" data-options='["Two stages are required for regulatory compliance","Scoring 50M items with a rich ML model per request would take minutes. Stage 1 (ANN): cheap, fast, retrieves top-1000 candidates in 5ms using simple embedding similarity. Stage 2 (re-ranking): expensive rich model scores only 1000 candidates with context features — feasible in 50ms. Two stages achieve both quality and speed.","Re-ranking is only needed for personalized recommendations","Candidate generation requires a separate ML team"]' data-correct="1" data-explanation="Classic recall-precision funnel: Stage 1 maximizes recall cheaply (don't miss relevant items). Stage 2 maximizes precision on the small candidate set (promote the best items using expensive features: recency, context, diversity, business rules). Each stage is optimized independently. This architecture is used by Google, YouTube, Spotify, and Amazon." style="display:none"></div>
+          <div data-question="Why is collaborative filtering (users who liked X also liked Y) better than content-based filtering (items similar to items you liked) for discovering serendipitous content?" data-options='["Collaborative filtering is computationally simpler","Collaborative filtering discovers non-obvious patterns: users with similar taste across hundreds of interactions reveal preferences that item metadata doesn't capture. A user who likes jazz and hiking might love a specific documentary — content-based would need that documentary to have jazz/hiking tags; collaborative filtering discovers this through shared taste patterns.","Content-based filtering requires more training data","Collaborative filtering doesn't require item metadata"]' data-correct="1" data-explanation="Content-based filtering is limited by the quality of item features — a novel recommendation requires the item to have the right labels. Collaborative filtering surfaces items that similar users loved, even if those items don't 'look' related by metadata. This is how Spotify discovers songs you'd love but would never search for." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="cdn.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: CDN →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="content-moderation.html" class="btn btn--outline">← Content Moderation</a>
+        <a href="cdn.html" class="btn btn--primary">Next: CDN →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

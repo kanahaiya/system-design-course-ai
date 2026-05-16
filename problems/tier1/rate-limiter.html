@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Rate Limiter — full RESHADED walkthrough covering sliding window log, token bucket, Redis Lua scripts for atomicity, and distributed rate limiting for MAANG interviews.">
+  <title>Design a Rate Limiter — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/rate-limiter/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-rate-limiter" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=rate-limiter" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Infrastructure</span>
+        </div>
+        <h1 class="module-header__title">Design a Rate Limiter</h1>
+        <p class="module-header__desc">Every API at every MAANG company uses one. Interviewers love this because it tests algorithm knowledge (5 algorithms), distributed systems thinking, and the edge case of race conditions under concurrent load.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Amazon, Stripe, Cloudflare</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> &lt;1ms latency budget</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Limit requests per user/IP/API key to N requests per time window (configurable)</li>
+            <li>Return HTTP <code>429 Too Many Requests</code> with <code>Retry-After</code> header when exceeded</li>
+            <li>Support multiple simultaneous limits: e.g., 100/minute AND 1000/day</li>
+            <li>Different limits per tier: free (10/min), pro (100/min), enterprise (1000/min)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> Add &lt; 1ms to every request (cannot be the bottleneck)</li>
+            <li><strong>Availability:</strong> 99.9% — if rate limiter is down, <strong>fail open</strong> (pass the request through)</li>
+            <li><strong>Distributed:</strong> Must work correctly across 50 API server nodes — no node-local counter</li>
+            <li><strong>Accuracy:</strong> Cannot allow more than N+ε requests (small tolerance acceptable)</li>
+          </ul>
+          <div class="callout callout--tip">
+            <strong>Crucial to clarify:</strong> Should failure be fail-open (allow request) or fail-closed (reject request)? For revenue-generating APIs, fail-open is almost always right — you'd rather allow a few extra requests than block paying customers because Redis is down.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Throughput:</strong> 100K QPS through rate limiter middleware</li>
+            <li><strong>Active users:</strong> 1M → 1M counters in Redis</li>
+            <li><strong>Memory per counter (fixed window):</strong> ~50 bytes per key → 50MB total — trivial for Redis</li>
+            <li><strong>Memory per counter (sliding window log):</strong> 100 timestamps × 8 bytes × 1M users = ~800MB — manageable</li>
+            <li><strong>Redis INCR latency:</strong> ~0.1ms per operation — well within the 1ms budget</li>
+            <li><strong>Lua script overhead:</strong> ~0.2ms — still within budget</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Redis key patterns:
+
+// Fixed Window Counter:
+// Key:   rl:fixed:{user_id}:{window_start_unix}
+// Value: integer count
+// TTL:   window_duration_seconds
+// Example: rl:fixed:user_123:1700000 = 47 (TTL: 60)
+
+// Sliding Window Log (most accurate):
+// Key:   rl:log:{user_id}
+// Type:  Sorted Set — member=request_id (UUID), score=timestamp_ms
+// TTL:   window_duration_ms (auto-expiry of old entries via ZREMRANGEBYSCORE)
+
+// Token Bucket:
+// Key:   rl:token:{user_id}
+// Type:  Hash — { "tokens": 95, "lastRefillMs": 1700000000000 }
+
+// Rate limit config (in application config or Redis):
+// Plans: { "free": 10, "pro": 100, "enterprise": 1000 }  (per minute)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Placement: API Gateway Middleware</h3>
+          <p>Rate limiter runs as middleware in the API Gateway — before the request reaches any application logic. This ensures rejected requests cost the minimum compute.</p>
+
+          <h3>Request Flow</h3>
+          <ol>
+            <li>Request arrives at API Gateway</li>
+            <li>Middleware extracts rate limit key (user_id / API key / IP)</li>
+            <li>Look up user's plan → get limit configuration</li>
+            <li>Execute atomic Redis operation (Lua script) to check + increment counter</li>
+            <li>If within limit: pass request to downstream service; set <code>X-RateLimit-Remaining</code> header</li>
+            <li>If over limit: return 429 with <code>Retry-After: {seconds}</code> header</li>
+          </ol>
+
+          <h3>Distributed Accuracy</h3>
+          <p>All 50 nodes share a single Redis cluster — no node-local state. This guarantees correct counts across the entire fleet. The trade-off: every request adds one Redis round-trip (~0.1ms). Within the 1ms budget.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Rate limiter is not an external API — it's middleware.
+// But it emits standard HTTP headers:
+
+// When request is ALLOWED:
+HTTP 200 OK
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 47
+X-RateLimit-Reset: 1700000060      // Unix timestamp when window resets
+
+// When request is BLOCKED:
+HTTP 429 Too Many Requests
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1700000060
+Retry-After: 45                    // Seconds until retry is allowed
+Content-Type: application/json
+{ "error": "rate_limit_exceeded", "message": "Too many requests. Retry after 45 seconds." }
+
+// Admin API to update limits (internal only):
+// PUT /internal/v1/rate-limits/{userId}
+// Body: { "requestsPerMinute": 500, "requestsPerDay": 10000 }</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Algorithms and Atomicity
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>The 5 Algorithms (Know All of Them)</h3>
+          <ol>
+            <li><strong>Fixed Window Counter:</strong> Count resets at window boundary. Simple. Problem: burst at window boundary (send 100 at 00:59, 100 at 01:01 = 200 in 2 seconds).</li>
+            <li><strong>Sliding Window Log:</strong> Store timestamp of every request. Count entries within last window_size. Exact accuracy. Problem: memory scales with limit size.</li>
+            <li><strong>Sliding Window Counter:</strong> Blend current and previous window counts weighted by time overlap. Good accuracy, low memory.</li>
+            <li><strong>Token Bucket:</strong> Bucket refills at rate R tokens/sec. Max capacity C. Each request consumes one token. Allows short bursts up to C. Used by AWS API Gateway.</li>
+            <li><strong>Leaky Bucket:</strong> Requests queue; processed at fixed rate. Smooth output. Problem: bursty requests queue up and may expire.</li>
+          </ol>
+
+          <h3>Race Condition: Why You Need a Lua Script</h3>
+          <p>Two requests arrive simultaneously. Both read count=99 (limit=100). Both think they're the 100th request. Both write count=100. You've allowed 101 requests. Fix: use a Redis Lua script that atomically checks-and-increments in one operation — Redis is single-threaded, so Lua scripts are always atomic.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Redis failure:</strong> Fail open — let all requests through. Log the failure. Alert on duty. Do not cascade a Redis outage into an API outage.</li>
+            <li><strong>Redis latency spike:</strong> Set a 2ms timeout on Redis calls. If timeout, fail open.</li>
+            <li><strong>Multiple limit tiers:</strong> Run two Redis commands — one per-minute check, one per-day check. If either fails, block. Lua script can check both atomically.</li>
+            <li><strong>Distributed Redis cluster:</strong> Use consistent hashing to route each user's key to the same Redis shard — avoids split-brain counting.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"We implement a sliding window log using Redis sorted sets, executed atomically via Lua script to prevent race conditions. All 50 API Gateway nodes share a Redis cluster, giving consistent distributed counts. The rate limiter adds ~0.2ms per request (well within the 1ms budget). On Redis failure, we fail open to prevent availability impact. 429 responses include Retry-After headers for client backoff."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Algorithm Comparison
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Algorithm</th><th>Accuracy</th><th>Memory</th><th>Burst Handling</th><th>Complexity</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Fixed Window</td>
+                <td>Poor (boundary burst)</td>
+                <td>O(1)</td>
+                <td>2× burst at boundary</td>
+                <td>Simplest</td>
+              </tr>
+              <tr>
+                <td>Sliding Window Log</td>
+                <td><strong>Exact</strong></td>
+                <td>O(limit_size)</td>
+                <td>None</td>
+                <td>Medium</td>
+              </tr>
+              <tr>
+                <td>Sliding Window Counter</td>
+                <td>~Good</td>
+                <td>O(1)</td>
+                <td>Small</td>
+                <td>Medium</td>
+              </tr>
+              <tr>
+                <td>Token Bucket</td>
+                <td>Good</td>
+                <td>O(1)</td>
+                <td><strong>Allows burst up to capacity</strong></td>
+                <td>Medium</td>
+              </tr>
+              <tr>
+                <td>Leaky Bucket</td>
+                <td>Good</td>
+                <td>O(queue_size)</td>
+                <td>Smooths bursts (queue)</td>
+                <td>Medium</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * SlidingWindowRateLimiter — implements sliding window log using Redis sorted sets.
+ * Uses a Lua script for atomic check-and-record to prevent race conditions.
+ */
+public class SlidingWindowRateLimiter {
+    private static final String KEY_PREFIX = "rl:log:";
+
+    // Lua script: atomically removes expired entries, counts current, conditionally adds new.
+    // Returns 1 if allowed, 0 if rejected.
+    private static final String SLIDING_WINDOW_LUA_SCRIPT = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local window_start = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local request_id = ARGV[4]
+        local window_ttl = tonumber(ARGV[5])
+
+        -- Remove entries outside the window
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
+
+        -- Count current entries in window
+        local count = redis.call('ZCARD', key)
+
+        if count < limit then
+            -- Add this request's timestamp to the log
+            redis.call('ZADD', key, now, request_id)
+            -- Reset TTL on the key
+            redis.call('EXPIRE', key, window_ttl)
+            return 1  -- allowed
+        else
+            return 0  -- rejected
+        end
+        """;
+
+    private final RedisClient redisClient;
+    private final int requestsPerWindow;
+    private final long windowDurationMs;
+
+    public SlidingWindowRateLimiter(RedisClient redisClient,
+                                    int requestsPerWindow,
+                                    long windowDurationMs) {
+        this.redisClient = redisClient;
+        this.requestsPerWindow = requestsPerWindow;
+        this.windowDurationMs = windowDurationMs;
+    }
+
+    /**
+     * Checks if a request is allowed and records it if so.
+     *
+     * @param rateLimitKey  The identifier: userId, API key, or IP
+     * @return RateLimitResult indicating allowed/blocked and remaining count
+     */
+    public RateLimitResult checkAndRecord(String rateLimitKey) {
+        String redisKey = KEY_PREFIX + rateLimitKey;
+        long nowMs = System.currentTimeMillis();
+        long windowStartMs = nowMs - windowDurationMs;
+        String requestId = UUID.randomUUID().toString();
+        long windowTtlSeconds = windowDurationMs / 1000 + 1;
+
+        try {
+            long scriptResult = redisClient.evalLua(
+                    SLIDING_WINDOW_LUA_SCRIPT,
+                    List.of(redisKey),
+                    List.of(
+                            String.valueOf(nowMs),
+                            String.valueOf(windowStartMs),
+                            String.valueOf(requestsPerWindow),
+                            requestId,
+                            String.valueOf(windowTtlSeconds)
+                    )
+            );
+
+            boolean isAllowed = scriptResult == 1L;
+            long currentCount = isAllowed
+                    ? redisClient.zcard(redisKey)
+                    : requestsPerWindow;
+            long remaining = Math.max(0, requestsPerWindow - currentCount);
+            long resetAtMs = nowMs + windowDurationMs;
+
+            return new RateLimitResult(isAllowed, remaining, requestsPerWindow, resetAtMs);
+
+        } catch (RedisException redisException) {
+            // Fail open — Redis unavailable, allow the request
+            System.err.println("[SlidingWindowRateLimiter] Redis error, failing open: "
+                    + redisException.getMessage());
+            return RateLimitResult.failOpen(requestsPerWindow);
+        }
+    }
+}
+
+/**
+ * TokenBucketRateLimiter — allows burst traffic up to bucket capacity.
+ * Tokens refill at a fixed rate. Each request consumes one token.
+ */
+public class TokenBucketRateLimiter {
+    private static final String KEY_PREFIX = "rl:token:";
+
+    private final RedisClient redisClient;
+    private final int bucketCapacity;          // Max tokens (burst size)
+    private final double refillRatePerSecond;  // Tokens added per second
+
+    public TokenBucketRateLimiter(RedisClient redisClient,
+                                  int bucketCapacity,
+                                  double refillRatePerSecond) {
+        this.redisClient = redisClient;
+        this.bucketCapacity = bucketCapacity;
+        this.refillRatePerSecond = refillRatePerSecond;
+    }
+
+    /**
+     * Attempts to consume one token from the bucket.
+     * Uses compare-and-swap with Redis WATCH for optimistic locking.
+     *
+     * @param rateLimitKey The user or API key identifier
+     * @return true if a token was available (request allowed), false otherwise
+     */
+    public boolean tryConsume(String rateLimitKey) {
+        String redisKey = KEY_PREFIX + rateLimitKey;
+        long nowMs = System.currentTimeMillis();
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                BucketState currentState = getBucketState(redisKey, nowMs);
+                double tokensAfterRefill = calculateTokensAfterRefill(currentState, nowMs);
+
+                if (tokensAfterRefill < 1.0) {
+                    return false; // No tokens available
+                }
+
+                double tokensAfterConsume = tokensAfterRefill - 1.0;
+                boolean saved = saveBucketState(redisKey, tokensAfterConsume, nowMs);
+
+                if (saved) {
+                    return true;
+                }
+                // CAS failed — retry (another request modified the bucket concurrently)
+
+            } catch (RedisException redisException) {
+                System.err.println("[TokenBucketRateLimiter] Redis error, failing open: "
+                        + redisException.getMessage());
+                return true; // Fail open
+            }
+        }
+        // All CAS retries exhausted — treat as throttled to be safe
+        return false;
+    }
+
+    private BucketState getBucketState(String redisKey, long nowMs) {
+        Map<String, String> bucketHash = redisClient.hgetall(redisKey);
+        if (bucketHash.isEmpty()) {
+            // First request for this key — initialize full bucket
+            return new BucketState(bucketCapacity, nowMs);
+        }
+        double tokens = Double.parseDouble(bucketHash.get("tokens"));
+        long lastRefillMs = Long.parseLong(bucketHash.get("lastRefillMs"));
+        return new BucketState(tokens, lastRefillMs);
+    }
+
+    private double calculateTokensAfterRefill(BucketState state, long nowMs) {
+        long elapsedMs = nowMs - state.getLastRefillMs();
+        double tokensToAdd = elapsedMs / 1000.0 * refillRatePerSecond;
+        return Math.min(bucketCapacity, state.getTokens() + tokensToAdd);
+    }
+
+    private boolean saveBucketState(String redisKey, double tokens, long nowMs) {
+        // Use Redis WATCH + MULTI/EXEC for optimistic locking
+        return redisClient.watchedMultiExec(redisKey, () -> {
+            redisClient.hset(redisKey, "tokens", String.valueOf(tokens));
+            redisClient.hset(redisKey, "lastRefillMs", String.valueOf(nowMs));
+            redisClient.expire(redisKey, 3600); // 1 hour TTL for inactive users
+        });
+    }
+}
+
+/**
+ * RateLimitResult — immutable result of a rate limit check.
+ */
+public final class RateLimitResult {
+    private final boolean allowed;
+    private final long remaining;
+    private final long limit;
+    private final long resetAtMs;
+
+    public RateLimitResult(boolean allowed, long remaining, long limit, long resetAtMs) {
+        this.allowed = allowed;
+        this.remaining = remaining;
+        this.limit = limit;
+        this.resetAtMs = resetAtMs;
+    }
+
+    public static RateLimitResult failOpen(long limit) {
+        return new RateLimitResult(true, limit, limit, System.currentTimeMillis() + 60_000L);
+    }
+
+    public boolean isAllowed() { return allowed; }
+    public long getRemaining() { return remaining; }
+    public long getLimit() { return limit; }
+    public long getResetAtMs() { return resetAtMs; }
+    public long getRetryAfterSeconds() {
+        return Math.max(0, (resetAtMs - System.currentTimeMillis()) / 1000);
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-rate-limiter-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why is a Lua script required for the sliding window log algorithm in Redis, rather than separate ZADD + ZCARD commands?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Lua scripts are faster than individual Redis commands</button></li>
+              <li><button class="quiz__option" data-correct="true">Without atomic execution, two concurrent requests can both read count=99 and both get allowed, exceeding the limit by 1</button></li>
+              <li><button class="quiz__option" data-correct="false">ZADD and ZCARD cannot be used on the same key</button></li>
+              <li><button class="quiz__option" data-correct="false">Lua scripts handle TTL expiry automatically</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">What is the key difference between a fixed window and a sliding window rate limiter?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Fixed window uses Redis; sliding window uses a local counter</button></li>
+              <li><button class="quiz__option" data-correct="true">Fixed window resets at a fixed time boundary, allowing 2× the limit in 2× window_size; sliding window counts any rolling time period</button></li>
+              <li><button class="quiz__option" data-correct="false">Sliding window is less accurate than fixed window</button></li>
+              <li><button class="quiz__option" data-correct="false">Fixed window allows bursts; sliding window does not allow any requests after limit</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">When should you choose a token bucket over a sliding window log?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">When you need exact accuracy with no burst tolerance</button></li>
+              <li><button class="quiz__option" data-correct="true">When your API should allow short bursts (e.g., a user sending 20 requests quickly is OK, as long as the average rate is within limits)</button></li>
+              <li><button class="quiz__option" data-correct="false">When memory usage is the primary concern</button></li>
+              <li><button class="quiz__option" data-correct="false">When the rate limiter must run without Redis</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">If Redis becomes unavailable, what should the rate limiter do and why?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Reject all requests (fail closed) to protect downstream services</button></li>
+              <li><button class="quiz__option" data-correct="false">Queue all requests until Redis recovers</button></li>
+              <li><button class="quiz__option" data-correct="true">Allow all requests (fail open) — a Redis outage should not cascade into blocking paying customers from using the API</button></li>
+              <li><button class="quiz__option" data-correct="false">Switch to a local in-memory counter per node</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="whatsapp.html" class="btn btn--outline">← WhatsApp</a>
+        <a href="distributed-cache.html" class="btn btn--primary">Next: Distributed Cache →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

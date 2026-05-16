@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Content Moderation System — RESHADED walkthrough covering ML pipelines, human review queues, hash-based detection, and appeal systems for MAANG interviews.">
+  <title>Design Content Moderation System — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-moderation" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=moderation" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
+          <span class="tag">60 min</span><span class="tag">ML Systems</span>
+        </div>
+        <h1 class="module-header__title">Design Content Moderation System</h1>
+        <p class="module-header__desc">Content moderation at scale (500M posts/day) cannot be human-only — ML classifiers make the first decision. But ML has errors. A three-stage pipeline: automated ML → high-confidence auto-action or human review queue → human decision + feedback loop.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, YouTube, Twitter</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🛡️</span> Trust &amp; Safety</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Automatically detect and remove policy-violating content (hate speech, violence, CSAM, spam)</li>
+            <li>Route ambiguous content to human reviewers</li>
+            <li>Users can appeal moderation decisions</li>
+            <li>Support text, images, and video content types</li>
+            <li>Hash-based exact matching for known harmful content (PhotoDNA for CSAM)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 500M posts/day across modalities</li>
+            <li><strong>Precision vs recall:</strong> Configurable per violation category (CSAM: 100% recall, some false positives OK; hate speech: higher precision, lower recall)</li>
+            <li><strong>Latency:</strong> ML scoring: &lt;500ms; human review queue: SLA varies by severity (CSAM: &lt;1hr; hate speech: &lt;24hr)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>500M posts/day = 5,800/sec → ML classifier must handle 10K/sec (with spike headroom)</li>
+            <li>ML accuracy 95% → 25M posts/day flagged for human review out of 500M</li>
+            <li>Humans review ~300 items/day → need ~83K human reviewers at full load (batched + prioritized)</li>
+            <li>Hash matching: image fingerprints ~100 bytes × 1B known hashes = 100GB hash index → fits in Redis or in-memory</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Moderation decisions (PostgreSQL)
+moderation_decisions:
+    decision_id   UUID PRIMARY KEY,
+    content_id    UUID NOT NULL,
+    content_type  ENUM(text, image, video),
+    ml_score      FLOAT,          -- 0.0-1.0 violation confidence
+    ml_label      VARCHAR(50),    -- hate_speech, violence, spam, etc.
+    action        ENUM(approved, removed, human_review),
+    reviewer_id   UUID,           -- null if auto-actioned
+    reviewed_at   TIMESTAMP,
+    appealed      BOOLEAN DEFAULT FALSE,
+    appeal_outcome ENUM(upheld, overturned)
+
+// Human review queue (Redis sorted set — priority queue)
+// Key: review:queue:{category}  Score: priority (CSAM=100, violence=80, hate=50)
+// Member: content_id
+
+// Known harmful hash index (Redis SET or in-memory hash table)
+// Key: harmful:hashes  Member: perceptual_hash (PhotoDNA fingerprint)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Ingestion:</strong> Content upload → Kafka → Moderation Pipeline fan-out (text classifier, image classifier, hash matcher in parallel).</li>
+            <li><strong>Hash Matcher:</strong> Compute perceptual hash (pHash for images, SimHash for text). Look up in known-harmful hash index (Redis). Exact match → auto-remove immediately, no ML needed.</li>
+            <li><strong>ML Classifiers:</strong> Text: fine-tuned BERT/RoBERTa. Image: CNN (ResNet/EfficientNet). Video: frame sampling + image classifier. Returns confidence score 0–1.</li>
+            <li><strong>Decision Logic:</strong> Score &gt; 0.95 → auto-remove. Score 0.6–0.95 → human review queue. Score &lt; 0.6 → approve.</li>
+            <li><strong>Human Review Queue:</strong> Redis priority queue. Reviewers pull from queue by priority. Decisions feed back into ML training data.</li>
+            <li><strong>Feedback Loop:</strong> Human reviewer decisions (especially overturns of auto-actions) are sampled for model retraining weekly.</li>
+            <li><strong>Appeals:</strong> User appeals → re-routes to senior reviewer. Overturn → restore content + adjust threshold for that user's account.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Internal APIs
+POST /internal/moderate          // async: submit content for moderation
+  Body: { contentId, contentType, contentUrl, userId }
+
+GET  /internal/review/next?category=hate_speech   // reviewer fetches next item
+POST /internal/review/{decisionId}
+  Body: { action: remove|approve, reviewerNotes }
+
+// User-facing
+POST /v1/appeals/{contentId}     // appeal a moderation decision
+GET  /v1/appeals/{contentId}     // appeal status</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Multi-Stage Pipeline + Threshold Tuning<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Stage 1 — Hash matching (deterministic, &lt;1ms):</strong> PhotoDNA (perceptual hashing for images). SimHash for near-duplicate text spam. Any exact/near match to known-harmful content = auto-remove. No ML latency, no errors on known content.</p>
+          <p><strong>Stage 2 — ML scoring (probabilistic, 50–500ms):</strong></p>
+          <ul>
+            <li>ML score represents confidence: 0.99 = very likely violation. 0.51 = borderline.</li>
+            <li>Threshold tuning: different thresholds per category. CSAM: auto-remove at 0.80 (high recall, some false positives accepted). Hate speech: auto-remove at 0.95 (high precision, avoid censoring legitimate speech).</li>
+          </ul>
+          <p><strong>Stage 3 — Human review:</strong> Ambiguous items (0.60–threshold). Humans provide ground truth. Senior reviewers handle appeals.</p>
+          <p><strong>Feedback loop quality:</strong> Track reviewer agreement rate. If two reviewers consistently disagree on a category → the category's ML training data has label noise → flag for policy clarification.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Adversarial evasion:</strong> Bad actors modify text/images slightly to evade classifiers. Mitigation: adversarial training (include perturbed examples in training), ensemble models, hash-based detection for known variants.</li>
+            <li><strong>False positive impact:</strong> Removing legitimate content harms free expression. Track false positive rate; alert when it spikes. For high-stakes categories (political speech), require human review instead of auto-remove.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a content moderation system handling 500M posts/day. Key decisions: hash matching for known content (zero ML latency), ML classifiers with configurable thresholds per category, Redis priority queue for human reviewers, and weekly feedback loops to improve model accuracy.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <tbody>
+              <tr><td>ML action threshold</td><td>Configurable per category</td><td>Single global threshold</td><td>Different categories have different risk profiles. CSAM: maximize recall. Hate speech: balance precision/recall. A single threshold compromises both.</td></tr>
+              <tr><td>Review queue prioritization</td><td>Priority by severity (CSAM=100, spam=10)</td><td>FIFO queue</td><td>CSAM must be reviewed within 1hr (legal requirement). Spam can wait 24hr. Priority ensures SLAs are met even under queue backlog.</td></tr>
+              <tr><td>Hash matching</td><td>Perceptual hash (pHash)</td><td>Cryptographic hash (SHA)</td><td>SHA only matches identical bytes — one pixel change evades it. pHash is tolerant of compression/resizing artifacts. Near-duplicate detection required for re-uploaded known content.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ModerationPipeline — orchestrates hash matching, ML scoring, and routing decisions.
+ * Processes one content item through all stages and returns the moderation action.
+ */
+public class ModerationPipeline {
+
+    private static final float AUTO_REMOVE_THRESHOLD = 0.95f;
+    private static final float HUMAN_REVIEW_THRESHOLD = 0.60f;
+
+    private final HashMatcher hashMatcher;
+    private final MlClassifier mlClassifier;
+    private final ReviewQueuePublisher reviewQueuePublisher;
+    private final ModerationDecisionStore decisionStore;
+
+    public ModerationPipeline(HashMatcher hashMatcher, MlClassifier mlClassifier,
+                               ReviewQueuePublisher reviewQueuePublisher,
+                               ModerationDecisionStore decisionStore) {
+        this.hashMatcher = hashMatcher;
+        this.mlClassifier = mlClassifier;
+        this.reviewQueuePublisher = reviewQueuePublisher;
+        this.decisionStore = decisionStore;
+    }
+
+    /**
+     * Runs content through all moderation stages and persists the decision.
+     *
+     * @param contentItem  content metadata and URL
+     * @return ModerationAction indicating what happened to the content
+     */
+    public ModerationAction moderate(ContentItem contentItem) {
+        // Stage 1: Hash matching — fast, deterministic, handles known-bad content
+        if (hashMatcher.isKnownHarmful(contentItem)) {
+            ModerationDecision decision = ModerationDecision.autoRemove(
+                contentItem.getContentId(), "hash_match", 1.0f
+            );
+            decisionStore.persist(decision);
+            return ModerationAction.REMOVE;
+        }
+
+        // Stage 2: ML classification
+        ClassificationResult mlResult = mlClassifier.classify(contentItem);
+
+        if (mlResult.getScore() &gt;= AUTO_REMOVE_THRESHOLD) {
+            // High-confidence violation — auto-remove
+            ModerationDecision decision = ModerationDecision.autoRemove(
+                contentItem.getContentId(), mlResult.getLabel(), mlResult.getScore()
+            );
+            decisionStore.persist(decision);
+            return ModerationAction.REMOVE;
+        }
+
+        if (mlResult.getScore() &gt;= HUMAN_REVIEW_THRESHOLD) {
+            // Ambiguous — route to human reviewers with priority based on category
+            int reviewPriority = calculateReviewPriority(mlResult.getLabel(), mlResult.getScore());
+            reviewQueuePublisher.enqueue(contentItem.getContentId(), mlResult.getLabel(), reviewPriority);
+            ModerationDecision decision = ModerationDecision.pendingReview(
+                contentItem.getContentId(), mlResult.getLabel(), mlResult.getScore()
+            );
+            decisionStore.persist(decision);
+            return ModerationAction.PENDING_REVIEW; // content stays up until reviewed
+        }
+
+        // Low confidence — approve
+        ModerationDecision decision = ModerationDecision.approved(
+            contentItem.getContentId(), mlResult.getScore()
+        );
+        decisionStore.persist(decision);
+        return ModerationAction.APPROVE;
+    }
+
+    /**
+     * Higher priority items reviewed first.
+     * CSAM (child safety) always gets maximum priority regardless of score.
+     */
+    private int calculateReviewPriority(String violationLabel, float score) {
+        int basePriority = switch (violationLabel) {
+            case "csam"        -> 100;
+            case "violence"    -> 80;
+            case "hate_speech" -> 60;
+            case "spam"        -> 20;
+            default            -> 40;
+        };
+        // Higher ML score within a category = slightly higher priority
+        return (int) (basePriority + score * 10);
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-moderation-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why is a perceptual hash (pHash) used for image matching rather than a cryptographic hash (SHA-256)?" data-options='["pHash is faster to compute than SHA-256","A perceptual hash is tolerant of minor changes (compression, resizing, slight color adjustments). SHA-256 changes completely when even one bit changes — a bad actor re-saving a CSAM image at different quality would evade SHA matching but not pHash matching.","pHash provides stronger collision resistance","SHA-256 cannot process image files"]' data-correct="1" data-explanation="SHA-256 is a cryptographic hash — designed to avalanche (complete change on 1-bit input change). For content matching, this is a weakness: any trivial re-encoding evades it. pHash extracts perceptual features (frequency domain, color histograms) that survive minor visual changes, enabling near-duplicate detection." style="display:none"></div>
+          <div data-question="Why should the CSAM detection threshold be set lower (e.g., 0.80) than the hate speech threshold (e.g., 0.95)?" data-options='["CSAM models are less accurate so they need a lower threshold","CSAM removal requires maximum recall — missing a CSAM item (false negative) is catastrophic and illegal. Some false positives (legitimate content incorrectly removed) are acceptable. Hate speech false positives harm free expression significantly, so a higher precision threshold is appropriate.","Lower thresholds always produce better accuracy","CSAM is easier to detect so a lower threshold is sufficient"]' data-correct="1" data-explanation="This is the precision-recall trade-off applied to policy risk. CSAM: legal mandate for removal, real harm from false negatives → minimize false negatives (high recall, lower threshold). Hate speech: legitimate speech looks similar to policy violations, cultural context matters, false positives censor users → maximize precision (higher threshold, more false negatives acceptable)." style="display:none"></div>
+          <div data-question="How does the human review feedback loop improve ML classifier accuracy over time?" data-options='["Human reviews are only used for appeals, not for model improvement","Human reviewer decisions — especially when they overturn an auto-action — are labeled training data. Overturned removals indicate false positives; overturned approvals indicate false negatives. This labeled data is used to retrain the model weekly, reducing both error types over time.","The feedback loop only works for text classifiers, not image classifiers","Human reviews automatically update model weights in real time"]' data-correct="1" data-explanation="Active learning from production: human decisions on ambiguous cases (the hard examples) provide high-value training signal. If the model consistently misclassifies a particular type of content (e.g., satire vs. hate speech), human overturns on those cases will be over-represented in the training batch, correcting the model's blind spots." style="display:none"></div>
+          <div data-question="A user appeals a removal. What is the correct process, and what should happen if the appeal is overturned?" data-options='["All appeals are automatically approved to reduce complaints","Appeal routes to a senior reviewer who re-evaluates with full context. If overturned: content is restored, the original removal is marked as a false positive, the user may receive an explanation, and the removal decision feeds into model retraining as a labeled false positive example.","Appeals must be processed by the same reviewer who made the original decision","Overturned appeals permanently disable automated moderation for that user"]' data-correct="1" data-explanation="Appeals serve two purposes: fairness (users deserve recourse) and model improvement (overturns are valuable training signal). A senior reviewer with more context is appropriate since borderline cases needed human review in the first place. Overturned decisions should be logged as false positives, improving future model calibration." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="recommendation-engine.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Recommendation Engine →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="distributed-db.html" class="btn btn--outline">← Distributed DB</a>
+        <a href="recommendation-engine.html" class="btn btn--primary">Next: Recommendation Engine →</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master CAP theorem, BASE vs ACID, consistency models, back-of-envelope estimation, and latency numbers essential for MAANG system design interviews.">
+  <title>Distributed Systems Fundamentals — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/01-fundamentals/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#cap" class="module-toc__link">CAP Theorem</a></li>
+          <li><a href="#acid-base" class="module-toc__link">ACID vs BASE</a></li>
+          <li><a href="#consistency" class="module-toc__link">Consistency Models</a></li>
+          <li><a href="#estimation" class="module-toc__link">Back-of-Envelope</a></li>
+          <li><a href="#latency" class="module-toc__link">Latency Cheat Sheet</a></li>
+          <li><a href="#code" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-off Table</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-01" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 01</span>
+        </nav>
+        <div class="module-header__number">Module 01</div>
+        <h1 class="module-header__title">Distributed Systems Fundamentals</h1>
+        <p class="module-header__desc">
+          The bedrock theorems and mental models every MAANG interviewer expects you to know cold.
+          CAP, ACID vs BASE, consistency guarantees, and the latency numbers that anchor every
+          estimation you'll ever do on a whiteboard.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Foundation</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> Essential</div>
+        </div>
+      </header>
+
+      <!-- Section: CAP Theorem -->
+      <section class="content-section" id="cap" aria-labelledby="cap-title">
+        <h2 class="content-section__title" id="cap-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔺</span>
+          CAP Theorem
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Brewer's CAP theorem (2000, proved by Gilbert &amp; Lynch 2002) states that a distributed
+            data store can guarantee at most <strong>two</strong> of three properties simultaneously:
+          </p>
+          <ul>
+            <li><strong>Consistency (C)</strong> — Every read returns the most recent write or an error. All nodes see the same data at the same time.</li>
+            <li><strong>Availability (A)</strong> — Every request receives a (non-error) response, though it may not contain the most recent write.</li>
+            <li><strong>Partition tolerance (P)</strong> — The system continues operating even when network partitions cause arbitrary message loss between nodes.</li>
+          </ul>
+          <p>
+            <strong>The real insight:</strong> In any real network, partitions <em>will</em> happen. So P is non-negotiable.
+            The practical choice is always <strong>CP vs AP</strong>:
+          </p>
+          <ul>
+            <li><strong>CP systems</strong> (HBase, Zookeeper, etcd): On partition, reject writes to maintain consistency. Prefer correctness over uptime.</li>
+            <li><strong>AP systems</strong> (Cassandra, DynamoDB, CouchDB): On partition, continue serving stale data. Prefer uptime over correctness.</li>
+          </ul>
+
+          <!-- Animated SVG diagram -->
+          <svg viewBox="0 0 480 320" class="content-section__diagram" role="img" aria-label="CAP theorem triangle showing CP, AP, and CA regions">
+            <defs>
+              <marker id="arr1" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Triangle -->
+            <polygon points="240,30 60,280 420,280" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+            <!-- Labels at vertices -->
+            <text x="240" y="20" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#6366f1">Consistency</text>
+            <text x="40" y="298" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#6366f1">Availability</text>
+            <text x="440" y="298" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#6366f1">Partition Tol.</text>
+            <!-- CP region label -->
+            <text x="185" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#e11d48">CP</text>
+            <text x="185" y="144" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">HBase · etcd</text>
+            <text x="185" y="156" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Zookeeper</text>
+            <!-- AP region label -->
+            <text x="295" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#0ea5e9">AP</text>
+            <text x="295" y="144" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Cassandra · DynamoDB</text>
+            <text x="295" y="156" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">CouchDB · Riak</text>
+            <!-- CA region label -->
+            <text x="240" y="250" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#16a34a">CA</text>
+            <text x="240" y="264" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Traditional RDBMS (single-node)</text>
+            <!-- Animated highlight on CP side -->
+            <line x1="240" y1="30" x2="60" y2="280" stroke="#e11d48" stroke-width="3" stroke-dasharray="8,4">
+              <animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.5s" repeatCount="indefinite"/>
+            </line>
+            <!-- Animated highlight on AP side -->
+            <line x1="240" y1="30" x2="420" y2="280" stroke="#0ea5e9" stroke-width="3" stroke-dasharray="8,4">
+              <animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.5s" repeatCount="indefinite"/>
+            </line>
+            <!-- "You are here" marker for partition -->
+            <circle cx="240" cy="280" r="6" fill="#f59e0b">
+              <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite"/>
+            </circle>
+            <text x="240" y="310" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#f59e0b">Partition happens here → choose CP or AP</text>
+          </svg>
+
+          <p>
+            <strong>PACELC extension:</strong> PACELC (2012) improves on CAP by noting that even
+            <em>without</em> partitions, there is a latency vs consistency trade-off (L vs C).
+            DynamoDB defaults to AP+L (low latency eventual consistency) but offers strongly
+            consistent reads at higher latency cost.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: ACID vs BASE -->
+      <section class="content-section" id="acid-base" aria-labelledby="acid-base-title">
+        <h2 class="content-section__title" id="acid-base-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚗️</span>
+          ACID vs BASE
+        </h2>
+        <div class="content-section__body">
+          <p>
+            <strong>ACID</strong> is the transaction model of traditional relational databases.
+            <strong>BASE</strong> is the relaxed model embraced by large-scale NoSQL systems.
+          </p>
+          <h3>ACID Properties</h3>
+          <ul>
+            <li><strong>Atomicity</strong> — A transaction is all-or-nothing. If any operation fails, the entire transaction rolls back. Implemented via write-ahead logs (WAL) and two-phase commit (2PC).</li>
+            <li><strong>Consistency</strong> — A transaction brings the database from one valid state to another, preserving all defined rules (constraints, cascades, triggers).</li>
+            <li><strong>Isolation</strong> — Concurrent transactions execute as if they were serial. Isolation levels (READ UNCOMMITTED → SERIALIZABLE) trade performance for correctness.</li>
+            <li><strong>Durability</strong> — Once committed, a transaction survives crashes. Achieved via WAL flushed to disk before commit acknowledgment.</li>
+          </ul>
+          <h3>BASE Properties</h3>
+          <ul>
+            <li><strong>Basically Available</strong> — The system guarantees availability (per CAP's definition), accepting that some data may be stale.</li>
+            <li><strong>Soft state</strong> — State may change over time even without input, as the system converges to consistency.</li>
+            <li><strong>Eventually consistent</strong> — Given no new updates, all replicas will eventually converge to the same value. Conflict resolution (last-write-wins, CRDTs, vector clocks) is the hard part.</li>
+          </ul>
+          <p>
+            <strong>Interview signal:</strong> Don't say "NoSQL is BASE." Say: "Cassandra uses tunable consistency — I can request QUORUM reads for stronger guarantees at higher latency cost, or ONE for lowest latency with eventual consistency. The choice depends on whether we're handling financial transactions or social media timelines."
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Consistency Models -->
+      <section class="content-section" id="consistency" aria-labelledby="consistency-title">
+        <h2 class="content-section__title" id="consistency-title">
+          <span class="content-section__title-icon" aria-hidden="true">📊</span>
+          Consistency Models (Strongest to Weakest)
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 200" class="content-section__diagram" role="img" aria-label="Consistency spectrum from strong to eventual">
+            <defs>
+              <linearGradient id="consistencyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#e11d48;stop-opacity:1"/>
+                <stop offset="100%" style="stop-color:#16a34a;stop-opacity:1"/>
+              </linearGradient>
+            </defs>
+            <rect x="20" y="80" width="440" height="20" rx="10" fill="url(#consistencyGrad)"/>
+            <!-- Labels -->
+            <text x="20" y="70" font-family="Inter,sans-serif" font-size="10" fill="#e11d48" font-weight="600">Strongest</text>
+            <text x="390" y="70" font-family="Inter,sans-serif" font-size="10" fill="#16a34a" font-weight="600">Weakest</text>
+            <!-- Model markers -->
+            <circle cx="60" cy="90" r="5" fill="white" stroke="#e11d48" stroke-width="2"/>
+            <text x="60" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Linearizable</text>
+            <text x="60" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Google Spanner</text>
+            <circle cx="160" cy="90" r="5" fill="white" stroke="#f59e0b" stroke-width="2"/>
+            <text x="160" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Sequential</text>
+            <text x="160" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Zookeeper</text>
+            <circle cx="260" cy="90" r="5" fill="white" stroke="#f59e0b" stroke-width="2"/>
+            <text x="260" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Causal</text>
+            <text x="260" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">MongoDB sessions</text>
+            <circle cx="360" cy="90" r="5" fill="white" stroke="#16a34a" stroke-width="2"/>
+            <text x="360" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Read-your-writes</text>
+            <text x="360" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">DynamoDB sticky</text>
+            <circle cx="440" cy="90" r="5" fill="white" stroke="#16a34a" stroke-width="2"/>
+            <text x="440" y="130" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Eventual</text>
+            <text x="440" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">DNS · Cassandra ONE</text>
+            <text x="240" y="185" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#6366f1">← Higher latency cost · Lower latency cost →</text>
+          </svg>
+          <ul>
+            <li><strong>Linearizability (strong consistency)</strong> — Operations appear instantaneous and atomic. Every read reflects the latest completed write across all nodes. Requires synchronous replication and Paxos/Raft consensus. High latency.</li>
+            <li><strong>Sequential consistency</strong> — All nodes see operations in the same order, but not necessarily real-time order. Cheaper than linearizability.</li>
+            <li><strong>Causal consistency</strong> — If operation A causally precedes B (A happened-before B), all nodes see A before B. Unrelated operations can be reordered. Used by MongoDB with causal sessions.</li>
+            <li><strong>Read-your-writes</strong> — A client always reads its own writes, even if other clients may see stale data. Session-level guarantee.</li>
+            <li><strong>Eventual consistency</strong> — Given no new updates, all replicas eventually converge. Conflict resolution is application-defined. Lowest latency, highest availability.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Back-of-Envelope Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="estimation-title">
+        <h2 class="content-section__title" id="estimation-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧮</span>
+          Back-of-Envelope Estimation
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Interviewers use estimation to test whether you think in orders of magnitude.
+            Be within 10× — precision is not the goal, sanity is.
+          </p>
+          <h3>Power of 2 Reference</h3>
+          <ul>
+            <li>2¹⁰ = 1,024 ≈ 1 thousand (KB)</li>
+            <li>2²⁰ ≈ 1 million (MB)</li>
+            <li>2³⁰ ≈ 1 billion (GB)</li>
+            <li>2⁴⁰ ≈ 1 trillion (TB)</li>
+          </ul>
+          <h3>Common Estimation Anchors</h3>
+          <ul>
+            <li><strong>Twitter DAU:</strong> ~240M active users, ~500M tweets/day ≈ 6,000 tweets/sec</li>
+            <li><strong>YouTube:</strong> 500 hours of video uploaded per minute → ~50 GB/min raw storage</li>
+            <li><strong>Throughput rules:</strong> A single server handles ~10,000 RPS for simple reads; ~1,000 RPS for heavy writes with durable commits</li>
+            <li><strong>Storage:</strong> 1 character = 1 byte; 1 tweet (280 chars + metadata) ≈ 300 bytes; 500M tweets/day × 300B ≈ 150 GB/day</li>
+          </ul>
+          <h3>Estimation Template</h3>
+          <ol>
+            <li>DAU / MAU → daily request volume</li>
+            <li>Reads vs writes ratio (social: 100:1, financial: 10:1)</li>
+            <li>Peak = 2–3× average</li>
+            <li>Object size × daily volume = daily storage ingestion</li>
+            <li>Retention period × daily ingestion = total storage</li>
+            <li>Bandwidth = throughput × object size</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Section: Latency Cheat Sheet -->
+      <section class="content-section" id="latency" aria-labelledby="latency-title">
+        <h2 class="content-section__title" id="latency-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚡</span>
+          Latency Numbers Every Engineer Must Know
+        </h2>
+        <div class="content-section__body">
+          <p>Originally from Jeff Dean (Google). These are approximate but order-of-magnitude correct.</p>
+          <table class="content-table" aria-label="Latency reference numbers">
+            <thead>
+              <tr><th>Operation</th><th>Latency</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>L1 cache reference</td><td>0.5 ns</td><td>On-chip, fastest possible</td></tr>
+              <tr><td>L2 cache reference</td><td>7 ns</td><td>14× L1</td></tr>
+              <tr><td>Main memory (RAM) reference</td><td>100 ns</td><td>200× L1</td></tr>
+              <tr><td>SSD random read</td><td>100 μs (0.1 ms)</td><td>1,000× RAM</td></tr>
+              <tr><td>HDD seek</td><td>10 ms</td><td>100× SSD</td></tr>
+              <tr><td>Read 1 MB from memory</td><td>250 μs</td><td>~4 GB/s bandwidth</td></tr>
+              <tr><td>Read 1 MB from SSD</td><td>1 ms</td><td>~1 GB/s sequential</td></tr>
+              <tr><td>Round trip within datacenter</td><td>0.5 ms</td><td>Same AZ</td></tr>
+              <tr><td>Round trip same region, cross-AZ</td><td>1–5 ms</td><td>EC2 cross-AZ</td></tr>
+              <tr><td>Round trip US → Europe</td><td>~150 ms</td><td>Speed of light + routing</td></tr>
+              <tr><td>Mutex lock/unlock</td><td>25 ns</td><td>Hot path concern</td></tr>
+              <tr><td>Redis GET (network roundtrip)</td><td>~1 ms</td><td>Same DC</td></tr>
+              <tr><td>MySQL query (indexed)</td><td>1–10 ms</td><td>Warm buffer pool</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <strong>Mental model:</strong> Memory is 1,000× faster than SSD. SSD is 100× faster than disk.
+            Network within DC is milliseconds. Cross-continent is hundreds of milliseconds.
+            A cache miss to disk in a hot path is catastrophic.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Java Implementation -->
+      <section class="content-section" id="code" aria-labelledby="code-title">
+        <h2 class="content-section__title" id="code-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation: CAP Theorem Illustrated
+        </h2>
+        <div class="content-section__body">
+          <p>
+            This implementation shows a simplified distributed key-value store that explicitly models
+            the CP vs AP choice during a network partition. The <code>PartitionPolicy</code> enum
+            makes the trade-off explicit rather than hiding it.
+          </p>
+          <pre><code class="language-java">import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Optional;
+import java.util.logging.Logger;
+
+/**
+ * Illustrates CAP theorem choices in a simplified distributed KV store.
+ * In CP mode: rejects writes during partition to guarantee consistency.
+ * In AP mode: accepts writes during partition, resolves conflicts with
+ *             last-write-wins (LWW) after partition heals.
+ */
+public class CapKeyValueStore {
+
+    private static final Logger LOG = Logger.getLogger(CapKeyValueStore.class.getName());
+
+    public enum PartitionPolicy { CP, AP }
+
+    private record VersionedValue(String value, long timestampMs) {}
+
+    private final ConcurrentHashMap&lt;String, VersionedValue&gt; localStore = new ConcurrentHashMap&lt;&gt;();
+    private final AtomicBoolean partitioned = new AtomicBoolean(false);
+    private final PartitionPolicy policy;
+
+    public CapKeyValueStore(PartitionPolicy policy) {
+        this.policy = policy;
+    }
+
+    /**
+     * Simulates a network partition event.
+     * After this, the node cannot reach its replicas.
+     */
+    public void simulatePartition(boolean isPartitioned) {
+        partitioned.set(isPartitioned);
+        LOG.info("Partition state changed: " + isPartitioned + " (policy=" + policy + ")");
+    }
+
+    /**
+     * Write a key-value pair.
+     *
+     * CP: throws PartitionException during partition — consistency preserved.
+     * AP: accepts the write and marks it dirty for later reconciliation.
+     *
+     * @param key   the storage key
+     * @param value the value to store
+     * @throws PartitionException if CP policy and node is partitioned
+     */
+    public void put(String key, String value) throws PartitionException {
+        if (partitioned.get()) {
+            if (policy == PartitionPolicy.CP) {
+                // CP: refuse the write. The client gets an error, but data stays consistent.
+                throw new PartitionException(
+                    "CP mode: write rejected during partition. Consistency guaranteed, availability sacrificed."
+                );
+            }
+            // AP: accept the write. Availability preserved, consistency sacrificed temporarily.
+            LOG.warning("AP mode: accepting write during partition. May create conflict on " + key);
+        }
+
+        long timestamp = System.currentTimeMillis();
+        localStore.put(key, new VersionedValue(value, timestamp));
+        LOG.info("Written: " + key + "=" + value + " @" + timestamp);
+    }
+
+    /**
+     * Read a value by key.
+     * CP: may return empty if partition prevents quorum read confirmation.
+     * AP: always returns local value (may be stale).
+     *
+     * @param key the key to look up
+     * @return the value, or empty if CP-mode uncertainty during partition
+     */
+    public Optional&lt;String&gt; get(String key) {
+        if (partitioned.get() &amp;&amp; policy == PartitionPolicy.CP) {
+            // A real CP system would return an error here rather than stale data.
+            // We return empty to model "no stale read" guarantee.
+            LOG.warning("CP mode: read rejected during partition — cannot confirm quorum.");
+            return Optional.empty();
+        }
+        return Optional.ofNullable(localStore.get(key))
+                       .map(VersionedValue::value);
+    }
+
+    /**
+     * Reconciles a conflicting remote value after partition heals.
+     * Uses last-write-wins (LWW) based on timestamp — simplest conflict resolution.
+     * Production systems use vector clocks or CRDTs for richer semantics.
+     *
+     * @param key         the conflicted key
+     * @param remoteValue the value from the other partition
+     * @param remoteTs    the timestamp of the remote write
+     */
+    public void reconcile(String key, String remoteValue, long remoteTs) {
+        localStore.merge(key, new VersionedValue(remoteValue, remoteTs), (local, remote) -&gt; {
+            // LWW: higher timestamp wins
+            String winner = local.timestampMs() &gt;= remote.timestampMs()
+                            ? "local" : "remote";
+            LOG.info("Conflict on '" + key + "': " + winner + " wins (LWW)");
+            return local.timestampMs() &gt;= remote.timestampMs() ? local : remote;
+        });
+    }
+
+    public static class PartitionException extends Exception {
+        public PartitionException(String message) { super(message); }
+    }
+
+    // --- Demo ---
+    public static void main(String[] args) throws Exception {
+        System.out.println("=== CP Mode Demo ===");
+        CapKeyValueStore cpStore = new CapKeyValueStore(PartitionPolicy.CP);
+        cpStore.put("user:42", "Alice");
+        cpStore.simulatePartition(true);
+        try {
+            cpStore.put("user:42", "AliceUpdated"); // This will throw
+        } catch (PartitionException partitionException) {
+            System.out.println("Expected: " + partitionException.getMessage());
+        }
+
+        System.out.println("\n=== AP Mode Demo ===");
+        CapKeyValueStore apStore = new CapKeyValueStore(PartitionPolicy.AP);
+        apStore.put("user:42", "Bob");
+        apStore.simulatePartition(true);
+        apStore.put("user:42", "BobUpdated"); // Accepted, diverged state
+        apStore.simulatePartition(false);
+        // Simulating remote node had "BobFromReplica" written at a later timestamp
+        apStore.reconcile("user:42", "BobFromReplica", System.currentTimeMillis() + 1000);
+        System.out.println("After reconciliation: " + apStore.get("user:42").orElse("empty"));
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: Trade-off Table -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-off Table
+        </h2>
+        <div class="content-section__body">
+          <table class="content-table" aria-label="Trade-offs between consistency models and system properties">
+            <thead>
+              <tr><th>Property</th><th>Strong Consistency (CP)</th><th>Eventual Consistency (AP)</th><th>When to choose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Read latency</td><td>High (quorum round-trip)</td><td>Low (local read)</td><td>AP for timelines, CP for balances</td></tr>
+              <tr><td>Write availability</td><td>Low (rejected on partition)</td><td>High (always accepted)</td><td>AP for shopping carts, CP for inventory counts</td></tr>
+              <tr><td>Conflict resolution</td><td>Not needed (single truth)</td><td>Required (LWW, CRDT, manual)</td><td>CP when conflict resolution is business logic</td></tr>
+              <tr><td>Implementation complexity</td><td>Medium (Raft/Paxos)</td><td>High (vector clocks, CRDTs)</td><td>CP often simpler to reason about</td></tr>
+              <tr><td>Examples</td><td>Bank transfers, distributed locks, leader election</td><td>DNS, shopping carts, social likes, view counts</td><td>Match to SLA requirements</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="module-01-quiz" role="region" aria-label="Module 01 quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Fundamentals Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="You are designing a payment processing system. A network partition occurs. Which CAP choice is correct and why?"
+               data-options='["AP — payment availability is more important than consistency","CP — a payment must never be double-charged or lost; reject writes during partition","CA — use a single-region DB to avoid partitions entirely","CP — but only if using Paxos; Raft is not sufficient"]'
+               data-correct="1"
+               data-explanation="CP is correct for payments. A double charge or lost payment is a business catastrophe. Rejecting the write during partition (returning an error to the client) is preferable to creating inconsistent state. CA is not realistic — network partitions in distributed systems are inevitable."
+               style="display:none"></div>
+          <div data-question="Cassandra uses tunable consistency. A team sets read/write consistency to ONE for maximum speed. What guarantee do they lose?"
+               data-options='["Durability — writes may not reach disk","Availability — the cluster may refuse reads","Linearizability — reads may return stale data from a replica that hasn't received the latest write","Partition tolerance — the cluster cannot handle node failures"]'
+               data-correct="2"
+               data-explanation="With ONE consistency, Cassandra reads from a single replica without checking others. If that replica hasn't received the latest write yet (replication lag), you get stale data. Durability and partition tolerance are unaffected by the consistency level setting."
+               style="display:none"></div>
+          <div data-question="An engineer says 'Our system is eventually consistent — within 50ms all replicas agree.' What is the critical flaw in this statement?"
+               data-options='["Eventual consistency has no time bound — the statement is technically incorrect as eventual consistency only guarantees convergence eventually, not within any specific window","50ms is too slow for modern systems","The engineer should use linearizable consistency instead","This is a correct description of eventual consistency"]'
+               data-correct="0"
+               data-explanation="Eventual consistency makes no timing guarantees. 'Within 50ms' is a bounded staleness guarantee, not eventual consistency. Real eventual consistency could take seconds, minutes, or theoretically longer if partitions persist. The correct term for time-bounded staleness is 'bounded staleness consistency' (used by Azure Cosmos DB)."
+               style="display:none"></div>
+          <div data-question="Using Jeff Dean's latency numbers, a request needs to: read 1 MB from SSD, make 2 same-datacenter round trips, and read 1 MB from RAM. Approximately how long does this take?"
+               data-options='["~0.35 ms","~2.25 ms","~12 ms","~150 ms"]'
+               data-correct="1"
+               data-explanation="SSD 1MB read ≈ 1ms + 2 DC round trips × 0.5ms = 1ms + 1ms = 2ms + RAM 1MB read ≈ 0.25ms = total ~2.25ms. This order-of-magnitude calculation is what matters — not precision, but knowing SSD is ~1ms and DC round trip is ~0.5ms."
+               style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../02-storage/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev / Next Navigation -->
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../00-framework/index.html" class="module-nav__btn module-nav__btn--prev">← Module 00: RESHADED Framework</a>
+        <a href="../02-storage/index.html" class="module-nav__btn module-nav__btn--next">Module 02: Storage &amp; Databases →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 01</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

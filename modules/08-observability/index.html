@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master observability with RED and USE methods, distributed tracing with OpenTelemetry, SLO/SLA/SLI error budgets, and alerting strategies for MAANG system design.">
+  <title>Observability &amp; Monitoring — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/08-observability/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#methods" class="module-toc__link">RED &amp; USE Methods</a></li>
+          <li><a href="#tracing" class="module-toc__link">Distributed Tracing</a></li>
+          <li><a href="#alerting" class="module-toc__link">Alerting Strategies</a></li>
+          <li><a href="#slo" class="module-toc__link">SLO / SLA / SLI</a></li>
+          <li><a href="#error-budgets" class="module-toc__link">Error Budgets</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-08" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 08</span>
+        </nav>
+        <div class="module-header__number">Module 08</div>
+        <h1 class="module-header__title">Observability &amp; Monitoring</h1>
+        <p class="module-header__desc">Build observable systems using the RED and USE frameworks, instrument distributed traces with OpenTelemetry, define meaningful SLOs, and design alerting that pages on symptoms — not causes.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+        </div>
+      </header>
+
+      <section id="methods" class="content-section">
+        <h2>RED Method and USE Method</h2>
+        <p>Two complementary frameworks cover the key dimensions of system health:</p>
+
+        <h3>RED Method (for request-driven services)</h3>
+        <p>Proposed by Tom Wilkie, RED focuses on the experience of each request:</p>
+        <ul>
+          <li><strong>Rate:</strong> Requests per second the service is receiving.</li>
+          <li><strong>Errors:</strong> Rate of failed requests (5xx, timeouts, explicit error codes).</li>
+          <li><strong>Duration:</strong> Distribution of request latency (p50, p95, p99 — not averages).</li>
+        </ul>
+        <p>These three metrics answer: "Is my service doing work, is it doing it correctly, and is it doing it fast enough?" They are user-facing signals and directly map to SLIs.</p>
+
+        <h3>USE Method (for resources)</h3>
+        <p>Proposed by Brendan Gregg, USE analyses each physical or virtual resource:</p>
+        <ul>
+          <li><strong>Utilization:</strong> Average time the resource is busy (CPU %, disk I/O %)</li>
+          <li><strong>Saturation:</strong> Work the resource cannot service — queue depth, run queue length</li>
+          <li><strong>Errors:</strong> Error events (ECC errors, network drops, disk errors)</li>
+        </ul>
+        <p>USE answers "which resource is the bottleneck?" It's applied to every resource: CPU, memory, disks, network interfaces, bus bandwidth. High saturation (not just high utilization) is the early warning sign of degradation.</p>
+
+        <table class="trade-off-table">
+          <caption>RED vs USE: When to Apply Each</caption>
+          <thead><tr><th>Framework</th><th>Applied to</th><th>Primary question answered</th></tr></thead>
+          <tbody>
+            <tr><td>RED</td><td>Services / APIs / microservices</td><td>Are users experiencing errors or slow responses?</td></tr>
+            <tr><td>USE</td><td>Infrastructure resources (CPU, disk, NIC)</td><td>Which resource is becoming a bottleneck?</td></tr>
+            <tr><td>Both together</td><td>Full system</td><td>Service degradation + root cause in one dashboard</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="tracing" class="content-section">
+        <h2>Distributed Tracing with OpenTelemetry</h2>
+        <p>A distributed trace follows a single request as it propagates across multiple services. It answers "where did the latency come from?" in a microservices call chain.</p>
+
+        <h3>Core Concepts</h3>
+        <ul>
+          <li><strong>Trace:</strong> The entire end-to-end journey of one request, identified by a unique <code>traceId</code>. Contains all spans from all services that processed the request.</li>
+          <li><strong>Span:</strong> A single unit of work within a trace (e.g., one HTTP call, one DB query). Has a start time, duration, service name, operation name, status, and key-value attributes. Spans have parent-child relationships forming a tree.</li>
+          <li><strong>Context Propagation:</strong> The <code>traceId</code> and <code>spanId</code> are injected into outgoing HTTP headers (W3C <code>traceparent</code> format) so downstream services can create child spans under the same trace.</li>
+          <li><strong>Baggage:</strong> Key-value data attached to a context and propagated across service boundaries (e.g., <code>userId</code>, <code>tenantId</code>). Unlike span attributes, baggage travels with every downstream call — use sparingly as it adds header overhead.</li>
+        </ul>
+
+        <figure class="diagram-container" aria-label="Distributed trace Gantt diagram">
+          <svg viewBox="0 0 660 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Distributed trace waterfall">
+            <title>Distributed Trace Waterfall</title>
+            <text x="10" y="20" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif" font-weight="600">Service</text>
+            <text x="180" y="20" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif" font-weight="600">0ms</text>
+            <text x="310" y="20" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif" font-weight="600">100ms</text>
+            <text x="440" y="20" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif" font-weight="600">200ms</text>
+            <text x="580" y="20" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif" font-weight="600">350ms</text>
+            <text x="10" y="55" fill="#e2e8f0" font-size="11" font-family="Inter,sans-serif">API Gateway</text>
+            <rect x="170" y="42" width="450" height="20" rx="3" fill="#3b82f6" opacity="0.8"/>
+            <text x="395" y="56" text-anchor="middle" fill="#fff" font-size="9" font-family="Inter,sans-serif">GET /orders/:id — 350ms</text>
+            <text x="10" y="90" fill="#e2e8f0" font-size="11" font-family="Inter,sans-serif">Order Svc</text>
+            <rect x="185" y="77" width="360" height="20" rx="3" fill="#6366f1" opacity="0.8"/>
+            <text x="365" y="91" text-anchor="middle" fill="#fff" font-size="9" font-family="Inter,sans-serif">getOrderById — 280ms</text>
+            <text x="10" y="125" fill="#e2e8f0" font-size="11" font-family="Inter,sans-serif">DB (Postgres)</text>
+            <rect x="200" y="112" width="90" height="20" rx="3" fill="#22c55e" opacity="0.8"/>
+            <text x="245" y="126" text-anchor="middle" fill="#fff" font-size="9" font-family="Inter,sans-serif">SELECT — 65ms</text>
+            <text x="10" y="160" fill="#e2e8f0" font-size="11" font-family="Inter,sans-serif">Inventory Svc</text>
+            <rect x="310" y="147" width="160" height="20" rx="3" fill="#f59e0b" opacity="0.8"/>
+            <text x="390" y="161" text-anchor="middle" fill="#fff" font-size="9" font-family="Inter,sans-serif">checkStock — 120ms</text>
+            <text x="10" y="195" fill="#e2e8f0" font-size="11" font-family="Inter,sans-serif">Cache (Redis)</text>
+            <rect x="310" y="182" width="40" height="20" rx="3" fill="#ef4444" opacity="0.8"/>
+            <text x="330" y="196" text-anchor="middle" fill="#fff" font-size="9" font-family="Inter,sans-serif">MISS</text>
+            <line x1="170" y1="30" x2="620" y2="30" stroke="#334155" stroke-width="1"/>
+          </svg>
+          <figcaption>Trace waterfall: each bar is a span. Gaps reveal latency between services; the Redis cache miss forced a slower DB path in Inventory Svc.</figcaption>
+        </figure>
+
+        <h3>OpenTelemetry Architecture</h3>
+        <p>OpenTelemetry (OTel) is the CNCF standard for vendor-neutral instrumentation. The pipeline: instrumented application → OTel SDK → OTel Collector (batches, transforms, routes) → backend (Jaeger, Zipkin, Grafana Tempo, Datadog). The Collector decouples your code from the specific backend, enabling backend switching without code changes.</p>
+      </section>
+
+      <section id="alerting" class="content-section">
+        <h2>Alerting Strategies: Symptom-Based vs Cause-Based</h2>
+        <p><strong>Cause-based alerting</strong> fires when a specific component crosses a threshold: "CPU &gt; 80%", "disk &gt; 90%". Problems: too noisy (many causes never become user-visible symptoms), alerts for issues that auto-resolve, and misses novel failure modes.</p>
+        <p><strong>Symptom-based alerting</strong> fires when users are actually experiencing problems: "p99 latency &gt; 2s", "error rate &gt; 1%", "availability &lt; 99.9%". The SRE Google approach: alert on SLO burn rate, which directly measures how fast you're consuming your error budget.</p>
+        <p><strong>Multi-window burn rate alerts</strong> (from the SRE Workbook): use a fast window (1 hour) to detect severe burns and a slow window (6 hours) to catch gradual degradation. Alert only when both windows exceed the threshold, reducing false positives.</p>
+        <p>Keep a separate <strong>cause-based dashboard</strong> for diagnosis after a symptom alert fires — but don't page on causes alone.</p>
+      </section>
+
+      <section id="slo" class="content-section">
+        <h2>SLI, SLO, and SLA Definitions</h2>
+        <ul>
+          <li><strong>SLI (Service Level Indicator):</strong> A quantitative measure of service behavior. Example: "the ratio of requests completing in under 200ms." SLIs are measured continuously.</li>
+          <li><strong>SLO (Service Level Objective):</strong> The target for an SLI over a time window. Example: "99.5% of requests complete in under 200ms measured over 30 days." SLOs are internal targets used to drive engineering decisions.</li>
+          <li><strong>SLA (Service Level Agreement):</strong> A contractual commitment to customers with financial penalties for breach. SLAs are typically set below the SLO to leave headroom.</li>
+        </ul>
+        <table class="trade-off-table">
+          <caption>SLI / SLO / SLA Relationship</caption>
+          <thead><tr><th>Term</th><th>Who cares</th><th>Consequence of breach</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>SLI</td><td>Engineers</td><td>Triggers alert / incident</td><td>p99 latency = 180ms</td></tr>
+            <tr><td>SLO</td><td>Engineering + Product</td><td>Freezes feature work; reliability sprint</td><td>p99 &lt; 200ms for 99.5% of requests</td></tr>
+            <tr><td>SLA</td><td>Customers + Legal</td><td>Service credits, contract termination</td><td>99% availability monthly or 10% credit</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="error-budgets" class="content-section">
+        <h2>Error Budgets</h2>
+        <p>An error budget = 100% − SLO target. For a 99.9% availability SLO over 30 days, the error budget is 0.1% = <strong>43.2 minutes of downtime</strong>. This budget is the engineering team's licence to take risk (deployments, experiments, infra changes).</p>
+        <p>When the error budget is consumed: halt non-critical releases, prioritize reliability work. When the budget is healthy: invest in features and experiments. Error budgets create a shared language between SRE and product — reliability vs. velocity is quantified, not subjective.</p>
+        <p><strong>Burn rate:</strong> If you consume 5% of a monthly budget in 1 hour, the burn rate is 5% / (1/720) = 36× — an incident requiring immediate attention. Burn rate alerting (from Google SRE Workbook) is the most actionable alerting strategy.</p>
+      </section>
+
+      <section id="implementation" class="content-section">
+        <h2>Java Implementation: OTel Tracing + Error Rate Calculator</h2>
+        <pre><code class="language-java">// ── OpenTelemetry Span Instrumentation ────────────────────────────
+
+/**
+ * Demonstrates manual span creation with OpenTelemetry SDK.
+ * Attributes, events, and error recording follow OTel semantic conventions.
+ */
+public class OrderService {
+
+    private static final Tracer TRACER =
+        GlobalOpenTelemetry.getTracer("com.example.order-service", "1.0.0");
+
+    /**
+     * Fetches order with full distributed trace instrumentation.
+     * Creates a child span under whatever trace context is active (set by
+     * the HTTP framework's auto-instrumentation on the incoming request).
+     */
+    public Order getOrderById(String orderId, String userId) {
+        Span span = TRACER.spanBuilder("OrderService.getOrderById")
+            .setSpanKind(SpanKind.INTERNAL)
+            .startSpan();
+
+        // Make this span the active context so downstream calls create children
+        try (Scope scope = span.makeCurrent()) {
+            span.setAttribute("order.id", orderId);
+            span.setAttribute("user.id", userId);
+            span.addEvent("cache-lookup-start");
+
+            Order cachedOrder = orderCache.get(orderId);
+            if (cachedOrder != null) {
+                span.setAttribute("cache.hit", true);
+                return cachedOrder;
+            }
+
+            span.setAttribute("cache.hit", false);
+            span.addEvent("db-lookup-start");
+
+            Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+            span.setStatus(StatusCode.OK);
+            return order;
+
+        } catch (OrderNotFoundException notFoundException) {
+            span.recordException(notFoundException);
+            span.setStatus(StatusCode.ERROR, "Order not found: " + orderId);
+            throw notFoundException;
+        } finally {
+            span.end(); // Always end the span; never leave it open
+        }
+    }
+}
+
+// ── Sliding Window Error Rate Calculator ─────────────────────────
+
+/**
+ * Computes error rate over a sliding time window using a circular buffer
+ * of bucketed counters. Avoids storing individual request records.
+ *
+ * Example: 10 buckets × 6-second duration = 60-second sliding window.
+ */
+public class SlidingWindowErrorRateCalculator {
+
+    private static final int DEFAULT_BUCKET_COUNT = 10;
+    private static final long DEFAULT_BUCKET_DURATION_MS = 6_000; // 6 seconds per bucket
+
+    private final int bucketCount;
+    private final long bucketDurationMs;
+    private final long[] totalRequestCounts;
+    private final long[] errorRequestCounts;
+    private final long[] bucketTimestamps;
+    private int currentBucketIndex = 0;
+
+    public SlidingWindowErrorRateCalculator() {
+        this(DEFAULT_BUCKET_COUNT, DEFAULT_BUCKET_DURATION_MS);
+    }
+
+    public SlidingWindowErrorRateCalculator(int bucketCount, long bucketDurationMs) {
+        this.bucketCount = bucketCount;
+        this.bucketDurationMs = bucketDurationMs;
+        this.totalRequestCounts = new long[bucketCount];
+        this.errorRequestCounts = new long[bucketCount];
+        this.bucketTimestamps = new long[bucketCount];
+    }
+
+    /**
+     * Records the outcome of a single request into the current time bucket.
+     * Advances to a new bucket if the current one has expired.
+     */
+    public synchronized void recordRequest(boolean isError) {
+        long currentTimeMs = System.currentTimeMillis();
+        advanceBucketIfExpired(currentTimeMs);
+        totalRequestCounts[currentBucketIndex]++;
+        if (isError) {
+            errorRequestCounts[currentBucketIndex]++;
+        }
+    }
+
+    /**
+     * Returns the error rate (0.0–1.0) across all valid buckets in the window.
+     * Returns 0.0 if no requests have been recorded yet.
+     */
+    public synchronized double getErrorRate() {
+        long windowTotalRequests = 0L;
+        long windowErrorRequests = 0L;
+        long cutoffTimeMs = System.currentTimeMillis() - (bucketCount * bucketDurationMs);
+
+        for (int bucketIndex = 0; bucketIndex &lt; bucketCount; bucketIndex++) {
+            if (bucketTimestamps[bucketIndex] &gt; cutoffTimeMs) {
+                windowTotalRequests += totalRequestCounts[bucketIndex];
+                windowErrorRequests += errorRequestCounts[bucketIndex];
+            }
+        }
+        return windowTotalRequests == 0 ? 0.0
+            : (double) windowErrorRequests / windowTotalRequests;
+    }
+
+    private void advanceBucketIfExpired(long currentTimeMs) {
+        long bucketAge = currentTimeMs - bucketTimestamps[currentBucketIndex];
+        if (bucketAge &gt;= bucketDurationMs) {
+            currentBucketIndex = (currentBucketIndex + 1) % bucketCount;
+            // Clear the new bucket before writing to it
+            totalRequestCounts[currentBucketIndex] = 0;
+            errorRequestCounts[currentBucketIndex] = 0;
+            bucketTimestamps[currentBucketIndex] = currentTimeMs;
+        }
+    }
+}</code></pre>
+        <p><strong>Why a circular buffer?</strong> Storing individual request records would require unbounded memory proportional to request rate. Bucketing into fixed-size time slots gives O(1) memory regardless of traffic volume, and O(N) error rate calculation where N is the small bucket count.</p>
+      </section>
+
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-08-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Observability Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text">Which observability method is best applied to a CPU, disk, or network interface to identify infrastructure bottlenecks?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Which observability method is best applied to a CPU, disk, or network interface to identify infrastructure bottlenecks?" data-options='["RED method — Rate, Errors, Duration","USE method — Utilization, Saturation, Errors","The Four Golden Signals — latency, traffic, errors, saturation","DORA metrics — deployment frequency and lead time"]' data-correct="1" data-explanation="USE (Utilization, Saturation, Errors) is designed for physical/virtual resources. High CPU saturation (run queue depth) is the early warning that RED misses — you may see normal RED metrics just before the CPU becomes a bottleneck." style="display:none"></div>
+          <div data-question="In OpenTelemetry, what is the difference between a Span attribute and Baggage?" data-options='["Attributes are strings only; baggage supports complex objects","Attributes are local to one span; baggage propagates across all downstream services in the same trace","Baggage is encrypted; attributes are plaintext","Attributes require sampling; baggage is always recorded"]' data-correct="1" data-explanation="Span attributes are local metadata for one operation. Baggage is context that propagates to every downstream service in outgoing headers. Use baggage sparingly — every downstream service pays the header cost for every key-value pair." style="display:none"></div>
+          <div data-question="An SLO of 99.9% availability over 30 days means your error budget is approximately:" data-options='["4.3 minutes of downtime","43.2 minutes of downtime","7.2 hours of downtime","8.64 hours of downtime"]' data-correct="1" data-explanation="30 days × 24h × 60min = 43,200 minutes. 0.1% × 43,200 = 43.2 minutes. This is the total allowable downtime for the month before the SLO is breached." style="display:none"></div>
+          <div data-question="Symptom-based alerting is preferred over cause-based alerting because:" data-options='["It fires earlier, giving more time to respond before users are affected","It reduces noise by alerting only when users are actually experiencing problems, not when internal metrics cross thresholds","It is easier to configure in modern monitoring tools","It eliminates the need for distributed tracing"]' data-correct="1" data-explanation="Cause-based alerts (CPU > 80%) fire for many conditions that never become user-visible. Symptom-based alerts (p99 latency > SLO threshold) are actionable because they directly measure user impact. This dramatically reduces alert fatigue." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../09-security/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../07-scalability/index.html" class="btn btn--outline">← Module 07: Scalability</a>
+        <a href="../09-security/index.html" class="btn btn--primary">Module 09: Security →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 08</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

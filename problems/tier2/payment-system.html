@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Payment System — RESHADED walkthrough covering idempotency keys, double-entry bookkeeping, ACID transactions, and reconciliation for MAANG interviews.">
+  <title>Design a Payment System — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-payment" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=payment" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Correctness-critical</span>
+        </div>
+        <h1 class="module-header__title">Design a Payment System</h1>
+        <p class="module-header__desc">Payment systems have zero tolerance for money duplication or loss. The two cardinal rules: idempotency (charging a user twice is catastrophic) and double-entry bookkeeping (every debit has a corresponding credit — balances must always sum to zero).</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Stripe, PayPal, Amazon</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">💰</span> Zero money loss tolerance</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Transfer money between user accounts</li>
+            <li>Pay merchants (debit user account, credit merchant account)</li>
+            <li>View transaction history and balance</li>
+            <li>Support refunds and chargebacks</li>
+            <li>Multi-currency support</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Correctness:</strong> No double charges, no money creation or loss — ACID transactions required</li>
+            <li><strong>Idempotency:</strong> Retrying a failed payment request must not charge twice</li>
+            <li><strong>Scale:</strong> 1M transactions/day = ~12 TPS average, 100 TPS peak</li>
+            <li><strong>Latency:</strong> Payment response &lt;3s (includes bank authorization)</li>
+            <li><strong>Auditability:</strong> Every state change must be logged and traceable</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>1M transactions/day; each transaction = ~2 ledger entries (double-entry) → 2M ledger rows/day</li>
+            <li>Each ledger row ~200 bytes → 400MB/day, 150GB/year → fits in PostgreSQL easily</li>
+            <li>Idempotency keys: 1M/day with 24h TTL → 1M keys in Redis at any time → ~100MB RAM</li>
+            <li>Read:write ratio ~10:1 (users checking balances) → balance cache in Redis, recomputed from ledger on miss</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Double-entry ledger (PostgreSQL — ACID required)
+// Every payment creates TWO rows: debit on payer, credit on payee
+// SUM(amount) across all rows for an account = current balance
+ledger_entries:
+    entry_id     BIGINT PRIMARY KEY,
+    account_id   UUID NOT NULL,
+    amount       DECIMAL(19,4) NOT NULL,  -- negative = debit, positive = credit
+    currency     CHAR(3) NOT NULL,
+    entry_type   ENUM(debit, credit),
+    payment_id   UUID NOT NULL,           -- links the two sides of a transaction
+    created_at   TIMESTAMP NOT NULL,
+    INDEX on (account_id, created_at)
+
+// Payments (state machine)
+payments:
+    payment_id         UUID PRIMARY KEY,
+    idempotency_key    VARCHAR(255) UNIQUE NOT NULL,
+    payer_account_id   UUID,
+    payee_account_id   UUID,
+    amount             DECIMAL(19,4),
+    currency           CHAR(3),
+    status             ENUM(pending, processing, completed, failed, refunded),
+    external_txn_id    VARCHAR(255),   -- bank/card network reference
+    created_at         TIMESTAMP,
+    updated_at         TIMESTAMP</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Payment API:</strong> Client sends payment request with idempotency-key header. API checks Redis for existing result before processing.</li>
+            <li><strong>Idempotency Layer:</strong> Redis key = idempotency-key. If exists: return cached response. If not: process + store result in Redis (24h TTL) atomically.</li>
+            <li><strong>Payment Processor:</strong> Validates funds, calls external payment gateway (Stripe/bank), on success writes double-entry ledger rows in a single DB transaction.</li>
+            <li><strong>Ledger Service:</strong> Append-only. Balances computed as SUM(amount) for account. Cached in Redis, invalidated on new ledger entry.</li>
+            <li><strong>Reconciliation Job:</strong> Nightly batch job compares internal ledger with bank statements. Flags discrepancies for manual review.</li>
+            <li><strong>Audit Log (Kafka):</strong> Every payment state change emitted to Kafka topic. Consumers write to immutable audit log (S3/BigQuery).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Idempotency-Key header is REQUIRED on all write operations
+POST /v1/payments
+  Headers: Idempotency-Key: {client-generated-uuid}
+  Body: { payerAccountId, payeeAccountId, amount, currency }
+  Returns: { paymentId, status, amount, currency, createdAt }
+
+GET  /v1/payments/{paymentId}         // check status
+POST /v1/payments/{paymentId}/refund  // initiate refund
+  Headers: Idempotency-Key: {client-generated-uuid}
+
+GET  /v1/accounts/{accountId}/balance
+GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Idempotency Guarantees<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>The problem:</strong> Network failures happen. The client sends a payment request; the server processes it (charges the card) but the response is lost. The client retries. Without idempotency: the user is charged twice.</p>
+          <p><strong>Solution:</strong></p>
+          <ol>
+            <li>Client generates a UUID idempotency-key before the first attempt. Same key on every retry.</li>
+            <li>Server checks Redis: <code>GET idempotency:{key}</code>. If found: return cached response immediately (no processing).</li>
+            <li>If not found: acquire distributed lock on the key. Process payment. Store result: <code>SET idempotency:{key} {response} EX 86400</code> (24h TTL). Release lock. Return response.</li>
+            <li>Concurrent requests with the same key: lock ensures only one processes, the other waits and gets the cached result.</li>
+          </ol>
+          <p><strong>Why 24h TTL?</strong> After 24h, a retry of a 24-hour-old payment is almost certainly a bug, not a network retry. Expire the key to reclaim Redis memory.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Distributed transaction problem:</strong> Charging external bank + writing ledger are two different systems. Use the Outbox Pattern: write to ledger + outbox table in one DB transaction. Separate service polls outbox and calls bank API. On success, marks outbox row processed.</li>
+            <li><strong>Balance calculation cost:</strong> SUM of all ledger rows is O(N). For accounts with years of history: use periodic balance snapshots (checkpoint balance at end of each day) and SUM only since last snapshot.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a payment system with zero-tolerance for money duplication. Key decisions: Redis idempotency layer prevents double-charges on retry, double-entry ledger ensures every debit has a credit (sum = 0), ACID PostgreSQL transactions for ledger writes, Outbox Pattern for safe bank API calls, and nightly reconciliation to catch any discrepancies.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Idempotency storage</td><td>Redis (TTL-based)</td><td>DB unique constraint on idempotency_key</td><td>Redis: fast lookup, automatic expiry. DB unique constraint also valid but slower and requires cleanup job</td></tr>
+                <tr><td>Balance computation</td><td>SUM from ledger (with snapshots)</td><td>Mutable balance column</td><td>Mutable balance has update contention under concurrent transactions; ledger is append-only and auditable</td></tr>
+                <tr><td>Bank API integration</td><td>Outbox Pattern</td><td>Synchronous 2PC</td><td>2PC with external systems is unreliable; Outbox guarantees at-least-once delivery with DB-level atomicity</td></tr>
+                <tr><td>Currency storage</td><td>DECIMAL(19,4) not FLOAT</td><td>FLOAT or DOUBLE</td><td>Floating point has rounding errors — catastrophic for money. DECIMAL stores exact values.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * IdempotentPaymentService — processes payments with Redis-based idempotency.
+ * Guarantees: a payment with a given idempotency-key is executed at most once,
+ * even under concurrent retries.
+ */
+public class IdempotentPaymentService {
+
+    private static final String IDEMPOTENCY_KEY_PREFIX = "idempotency:";
+    private static final int IDEMPOTENCY_TTL_SECONDS = 86400; // 24 hours
+
+    private final JedisPool jedisPool;
+    private final PaymentProcessor paymentProcessor;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public IdempotentPaymentService(JedisPool jedisPool, PaymentProcessor paymentProcessor) {
+        this.jedisPool = jedisPool;
+        this.paymentProcessor = paymentProcessor;
+    }
+
+    /**
+     * Processes a payment idempotently.
+     * If this idempotency key was used before, returns the original result.
+     * Otherwise processes the payment and caches the result.
+     *
+     * @param idempotencyKey  client-generated UUID; must be the same on retries
+     * @param paymentRequest  payment details
+     * @return PaymentResult — same object on retries
+     */
+    public PaymentResult processPayment(String idempotencyKey, PaymentRequest paymentRequest) {
+        String redisKey = IDEMPOTENCY_KEY_PREFIX + idempotencyKey;
+
+        // Check for cached result (fast path — no lock needed for read)
+        String cachedResult = getFromRedis(redisKey);
+        if (cachedResult != null) {
+            return deserializePaymentResult(cachedResult);
+        }
+
+        // Acquire distributed lock to prevent concurrent duplicate processing
+        String lockKey = "lock:" + redisKey;
+        boolean lockAcquired = tryAcquireLock(lockKey, 30); // 30s timeout
+        if (!lockAcquired) {
+            throw new PaymentConflictException("Concurrent payment with same idempotency key");
+        }
+
+        try {
+            // Re-check after acquiring lock (another thread may have processed while we waited)
+            cachedResult = getFromRedis(redisKey);
+            if (cachedResult != null) {
+                return deserializePaymentResult(cachedResult);
+            }
+
+            // Process the payment — this calls external bank API and writes the ledger
+            PaymentResult paymentResult = paymentProcessor.execute(paymentRequest);
+
+            // Cache the result so retries return immediately
+            storeInRedis(redisKey, serializePaymentResult(paymentResult), IDEMPOTENCY_TTL_SECONDS);
+
+            return paymentResult;
+        } finally {
+            releaseLock(lockKey);
+        }
+    }
+
+    private String getFromRedis(String key) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            return jedis.get(key);
+        }
+    }
+
+    private void storeInRedis(String key, String value, int ttlSeconds) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.setex(key, ttlSeconds, value);
+        }
+    }
+
+    private boolean tryAcquireLock(String lockKey, int timeoutSeconds) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            // SET NX EX is atomic — prevents race condition between check and set
+            String result = jedis.set(lockKey, "1", SetParams.setParams().nx().ex(timeoutSeconds));
+            return "OK".equals(result);
+        }
+    }
+
+    private void releaseLock(String lockKey) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.del(lockKey);
+        }
+    }
+
+    private String serializePaymentResult(PaymentResult result) {
+        try {
+            return objectMapper.writeValueAsString(result);
+        } catch (JsonProcessingException jsonException) {
+            throw new RuntimeException("[IdempotentPaymentService.serialize] failed", jsonException);
+        }
+    }
+
+    private PaymentResult deserializePaymentResult(String json) {
+        try {
+            return objectMapper.readValue(json, PaymentResult.class);
+        } catch (JsonProcessingException jsonException) {
+            throw new RuntimeException("[IdempotentPaymentService.deserialize] failed", jsonException);
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-payment-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A client sends a payment request. The server charges the card successfully but the network drops before the response arrives. The client retries. What prevents a double charge?" data-options='["The database primary key constraint on payment_id prevents duplicate rows","The client sends an idempotency-key header on every request; the server checks Redis first and returns the cached result if the key was already processed","The bank API automatically detects and rejects duplicate transactions","The client checks if a payment already exists before retrying"]' data-correct="1" data-explanation="The idempotency-key is the client's 'fingerprint' for this specific intent. On retry, the server finds the key in Redis and returns the original response without re-processing. The client never knows the first attempt succeeded — it just gets the correct result on retry." style="display:none"></div>
+          <div data-question="In double-entry bookkeeping, when user A pays user B $100, how many ledger rows are written?" data-options='["One row recording the $100 transfer","Two rows: a -$100 debit on A's account and a +$100 credit on B's account","Four rows: debit/credit for both the send and receive events","One row per currency conversion involved"]' data-correct="1" data-explanation="Double-entry is the invariant: every debit has a corresponding credit. Two rows ensure SUM(all amounts) = 0 at all times — a built-in correctness check. If the sum ever doesn't equal zero, money was created or destroyed, indicating a bug." style="display:none"></div>
+          <div data-question="Why is DECIMAL(19,4) used instead of FLOAT for storing monetary amounts in the database?" data-options='["DECIMAL is faster to query than FLOAT","FLOAT and DOUBLE use binary floating point which cannot represent 0.10 exactly — 0.1 + 0.2 ≠ 0.3 in binary. This rounding error is catastrophic for financial calculations; DECIMAL stores exact decimal values","FLOAT cannot store negative numbers which are needed for debits","DECIMAL supports more decimal places than FLOAT"]' data-correct="1" data-explanation="This is a famous IEEE 754 floating point problem. 0.1 in binary is 0.10000000000000000555... — an infinite repeating fraction. Summing thousands of such values accumulates cents of error. Financial systems universally use DECIMAL (exact) or integer arithmetic (store cents as BIGINT)." style="display:none"></div>
+          <div data-question="What is the Outbox Pattern and why is it needed for payment systems?" data-options='["A pattern for storing failed payments in a separate 'outbox' table for retry","A pattern that ensures the DB write and the external bank API call are atomically coupled: write both the payment and an outbox record in one DB transaction; a separate process polls the outbox and calls the bank API — ensuring exactly-once delivery without 2PC","A Redis pub/sub pattern for notifying payment services","A queue-based pattern for batching multiple payments together for efficiency"]' data-correct="1" data-explanation="The core problem: you can't atomically write to a DB and call an external API. Outbox solves it by making the external call an 'intent' stored in the DB itself. Since DB write + outbox write are in one transaction, they're atomic. The polling processor ensures the bank call happens eventually, idempotently." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="code-judge.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Code Judge →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="google-maps.html" class="btn btn--outline">← Google Maps</a>
+        <a href="code-judge.html" class="btn btn--primary">Next: Code Judge →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

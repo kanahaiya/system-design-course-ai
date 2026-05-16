@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="System Design Cheatsheets — 12 printable reference cards covering latency numbers, CAP theorem, caching strategies, and key patterns for MAANG interviews.">
+  <title>Cheatsheets — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/cheatsheets/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/css/main.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="index.html" class="site-nav__link site-nav__link--active">Cheatsheets</a></li>
+        <li><a href="../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <button class="site-nav__cta" type="button" onclick="window.print()">Print as PDF</button>
+    </div>
+  </nav>
+
+  <main id="main" class="page-wrapper">
+    <div class="container--wide" style="padding-top:var(--space-12);padding-bottom:var(--space-16)">
+      <div style="text-align:center;margin-bottom:var(--space-10)">
+        <h1 style="font-size:var(--text-4xl);font-weight:800;margin-bottom:var(--space-4)">System Design Cheatsheets</h1>
+        <p style="font-size:var(--text-lg);color:var(--color-text-muted);max-width:560px;margin:0 auto var(--space-6)">12 reference cards covering every pattern, number, and framework for MAANG interviews.</p>
+        <button class="btn btn--primary" type="button" onclick="window.print()">🖨️ Print as PDF</button>
+      </div>
+
+      <div class="cheatsheet-grid">
+
+        <!-- Card 1: RESHADED Framework -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>📋</span> RESHADED Framework Checklist</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">R — Requirements</span><span class="cheatsheet-item__value">3–5 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">E — Estimation</span><span class="cheatsheet-item__value">3–5 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">S — Schema</span><span class="cheatsheet-item__value">3–5 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">H — High-level Design</span><span class="cheatsheet-item__value">10 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">A — APIs</span><span class="cheatsheet-item__value">5 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">D — Deep Dive</span><span class="cheatsheet-item__value">10 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">E — Evaluate</span><span class="cheatsheet-item__value">3 min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">D — Deliver</span><span class="cheatsheet-item__value">2 min</span></div>
+        </div>
+
+        <!-- Card 2: Latency Numbers -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>⚡</span> Latency Numbers Every Engineer Must Know</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">L1 cache ref</span><span class="cheatsheet-item__value">1 ns</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Branch mispredict</span><span class="cheatsheet-item__value">5 ns</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">L2 cache ref</span><span class="cheatsheet-item__value">7 ns</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Mutex lock/unlock</span><span class="cheatsheet-item__value">25 ns</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Main memory ref</span><span class="cheatsheet-item__value">100 ns</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Compress 1K bytes</span><span class="cheatsheet-item__value">10 µs</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Send 2K over 1Gbps</span><span class="cheatsheet-item__value">20 µs</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">SSD random read</span><span class="cheatsheet-item__value">150 µs</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Read 1MB from memory</span><span class="cheatsheet-item__value">250 µs</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">RTT same datacenter</span><span class="cheatsheet-item__value">500 µs</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">HDD seek</span><span class="cheatsheet-item__value">10 ms</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Read 1MB from SSD</span><span class="cheatsheet-item__value">1 ms</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Network RTT CA→Netherlands</span><span class="cheatsheet-item__value">150 ms</span></div>
+        </div>
+
+        <!-- Card 3: Estimation Quick Reference -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🔢</span> Estimation Quick Reference</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1M req/day</span><span class="cheatsheet-item__value">≈ 12 QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1B req/day</span><span class="cheatsheet-item__value">≈ 11,600 QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1 year</span><span class="cheatsheet-item__value">≈ 30M seconds</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1 GB</span><span class="cheatsheet-item__value">10⁹ bytes</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1 TB</span><span class="cheatsheet-item__value">10¹² bytes</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1 PB</span><span class="cheatsheet-item__value">10¹⁵ bytes</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Avg tweet</span><span class="cheatsheet-item__value">280 bytes</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Avg image</span><span class="cheatsheet-item__value">300 KB</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Avg video</span><span class="cheatsheet-item__value">50 MB/min</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">1 Gbps link</span><span class="cheatsheet-item__value">125 MB/s throughput</span></div>
+        </div>
+
+        <!-- Card 4: CAP Theorem -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>📐</span> CAP Theorem</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">CA (PostgreSQL, MySQL)</span><span class="cheatsheet-item__value">Strong consistency + availability; no partition tolerance</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">CP (HBase, ZooKeeper, etcd)</span><span class="cheatsheet-item__value">Strong consistency + partition tolerance; sacrifice availability on partition</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">AP (Cassandra, DynamoDB, CouchDB)</span><span class="cheatsheet-item__value">Availability + partition tolerance; eventual consistency</span></div>
+          <div class="cheatsheet-item" style="margin-top:var(--space-2)"><span class="cheatsheet-item__key" style="color:var(--color-text-muted);font-style:italic">Rule</span><span class="cheatsheet-item__value" style="color:var(--color-text-muted)">All distributed systems must tolerate partitions — choose C or A, not both</span></div>
+        </div>
+
+        <!-- Card 5: SQL vs NoSQL Decision -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🗄️</span> SQL vs NoSQL Decision</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">SQL (Postgres/MySQL)</span><span class="cheatsheet-item__value">ACID needed, relational data, stable schema, complex joins, &lt;10K QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Document (MongoDB)</span><span class="cheatsheet-item__value">Schema varies, full-doc reads, catalog/profile data</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Wide-column (Cassandra)</span><span class="cheatsheet-item__value">Time-series, write-heavy, multi-DC, &gt;100K QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Key-value (Redis, DynamoDB)</span><span class="cheatsheet-item__value">Simple lookup, cache, session, &lt;1ms latency needed</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Graph (Neo4j)</span><span class="cheatsheet-item__value">Relationship traversal is core — social graph, recommendations</span></div>
+        </div>
+
+        <!-- Card 6: Consistent Hashing -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🔄</span> Consistent Hashing</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Virtual nodes per physical</span><span class="cheatsheet-item__value">100–200</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Placement</span><span class="cheatsheet-item__value">hash(key) → clockwise successor on ring</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Adding node</span><span class="cheatsheet-item__value">Takes ~K/N keys from successor</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Removing node</span><span class="cheatsheet-item__value">Keys migrate to successor</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Load balance benefit</span><span class="cheatsheet-item__value">Virtual nodes even out skew from uneven key distribution</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">vs Modulo hashing</span><span class="cheatsheet-item__value">Modulo remaps ~90% of keys when adding node; consistent hashing remaps only K/N</span></div>
+        </div>
+
+        <!-- Card 7: Rate Limiting Algorithms -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🚦</span> Rate Limiting Algorithms</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Fixed Window</span><span class="cheatsheet-item__value">Simple; boundary burst problem (2× allowed at window edge)</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Sliding Window Log</span><span class="cheatsheet-item__value">Accurate; O(1) per req with Redis sorted set; high memory</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Sliding Window Counter</span><span class="cheatsheet-item__value">Approx accurate; O(1) memory; smooth; recommended default</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Token Bucket</span><span class="cheatsheet-item__value">Allows burst; O(1) with Redis + Lua atomic script</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Leaky Bucket</span><span class="cheatsheet-item__value">Smooth output rate; no burst allowed; good for payment APIs</span></div>
+        </div>
+
+        <!-- Card 8: Caching Strategies -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>💾</span> Caching Strategies</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Cache-aside (Lazy)</span><span class="cheatsheet-item__value">Read: check cache → miss → DB → fill cache. Write: update DB, invalidate cache. Best for read-heavy.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Write-through</span><span class="cheatsheet-item__value">Write to cache + DB simultaneously. Always fresh. Extra write latency.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Write-back</span><span class="cheatsheet-item__value">Write to cache only, async flush to DB. Fast writes; data loss risk.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Write-around</span><span class="cheatsheet-item__value">Write to DB only. Cache filled on read miss. Good for write-once data.</span></div>
+        </div>
+
+        <!-- Card 9: Database Replication -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🔁</span> Database Replication</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Leader-follower</span><span class="cheatsheet-item__value">Leader handles writes; followers serve reads. Simple; limited write scale. Failover complexity.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Multi-leader</span><span class="cheatsheet-item__value">Multiple write nodes; conflict resolution needed. Good for multi-DC active-active.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Leaderless (Dynamo)</span><span class="cheatsheet-item__value">Any node accepts writes; quorum W+R&gt;N ensures consistency. No SPOF; complex conflict resolution.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Quorum formula</span><span class="cheatsheet-item__value">W+R &gt; N for strong consistency. Common: N=3, W=2, R=2.</span></div>
+        </div>
+
+        <!-- Card 10: Kafka Key Concepts -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>📨</span> Kafka Key Concepts</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Flow</span><span class="cheatsheet-item__value">Producer → Broker (partition leader) → Followers (ISR)</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Consumer group</span><span class="cheatsheet-item__value">Each partition consumed by exactly one consumer in a group</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">At-least-once</span><span class="cheatsheet-item__value">acks=1; may produce duplicates on retry</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Exactly-once</span><span class="cheatsheet-item__value">acks=all + idempotent producer + transactional API</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Retention</span><span class="cheatsheet-item__value">Configurable; default 7 days</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Rebalance triggers</span><span class="cheatsheet-item__value">Consumer join/leave, partition added, session timeout</span></div>
+        </div>
+
+        <!-- Card 11: Common Back-of-Envelope Numbers -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>📊</span> Common Back-of-Envelope Numbers</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Twitter</span><span class="cheatsheet-item__value">300M DAU · 17K read QPS · 175 write QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">YouTube</span><span class="cheatsheet-item__value">2B MAU · 500 hrs/min uploaded · 5B views/day</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">WhatsApp</span><span class="cheatsheet-item__value">2B users · 100B msgs/day · 1.2M QPS</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Instagram</span><span class="cheatsheet-item__value">1B MAU · 100M photos/day</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Uber</span><span class="cheatsheet-item__value">10M trips/day · 250K location updates/sec</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Dropbox</span><span class="cheatsheet-item__value">500M users · 10PB total storage</span></div>
+        </div>
+
+        <!-- Card 12: Key Architecture Patterns -->
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-card__title"><span>🏗️</span> Key Architecture Patterns</div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Fanout on Write (Push)</span><span class="cheatsheet-item__value">Pre-populate feed on post. Fast reads; expensive writes; bad for celebrities (&gt;1M followers).</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Fanout on Read (Pull)</span><span class="cheatsheet-item__value">Build feed on request. Slow reads; no write amplification.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Hybrid</span><span class="cheatsheet-item__value">Push for normal users; pull for celebrities.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">CQRS</span><span class="cheatsheet-item__value">Separate read/write models for independent scaling.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Event Sourcing</span><span class="cheatsheet-item__value">Store events, not state. Full audit trail; replay to rebuild state.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Saga</span><span class="cheatsheet-item__value">Distributed transactions via compensating actions. Choreography vs orchestration.</span></div>
+          <div class="cheatsheet-item"><span class="cheatsheet-item__key">Circuit Breaker</span><span class="cheatsheet-item__value">CLOSED → OPEN → HALF-OPEN on failure threshold. Prevents cascade failures.</span></div>
+        </div>
+
+      </div><!-- end .cheatsheet-grid -->
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="../assets/js/shared.js" type="module"></script>
+</body>
+</html>

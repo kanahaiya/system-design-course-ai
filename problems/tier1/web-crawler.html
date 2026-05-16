@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a web crawler that crawls 1 billion pages per day using Bloom filters for deduplication, BFS URL frontier, politeness throttling, and distributed fetcher pools.">
+  <title>Design a Web Crawler — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/web-crawler/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-web-crawler" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=web-crawler" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design a Web Crawler</h1>
+        <p class="module-header__desc">Design a distributed web crawler that crawls 1 billion pages per day, deduplicates URLs and content at scale using Bloom filters and SimHash, while respecting politeness rules and robots.txt.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Google, Bing, Common Crawl, Amazon</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Start from a set of seed URLs and crawl the web via discovered links</li>
+          <li>Extract and store page content (HTML) to object storage</li>
+          <li>Discover new URLs from crawled pages and add to the frontier</li>
+          <li>Respect robots.txt and crawl-delay directives per domain</li>
+          <li>Avoid re-crawling duplicate or near-duplicate content</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Scale:</strong> 1B pages/day, 10B total URLs in the frontier</li>
+          <li><strong>Throughput:</strong> 11,574 pages/second sustained</li>
+          <li><strong>Politeness:</strong> no more than 1 request/second per domain</li>
+          <li><strong>Storage:</strong> ~10TB/day fetched, ~1TB/day after deduplication</li>
+          <li><strong>Freshness:</strong> popular pages re-crawled every hour, others weekly</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>The hardest problems:</strong> deduplication at 10B URL scale and politeness at 11K pages/sec across millions of domains. These two are what interviewers care about most.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Pages/second</div>
+            <div class="estimation-card__value">11,574</div>
+            <div class="estimation-card__note">1B ÷ 86,400</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Raw data fetched/day</div>
+            <div class="estimation-card__value">100 TB</div>
+            <div class="estimation-card__note">1B × 100KB avg page</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Stored after dedup</div>
+            <div class="estimation-card__value">~10 TB/day</div>
+            <div class="estimation-card__note">~10% unique content</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Bloom filter size</div>
+            <div class="estimation-card__value">~12 GB</div>
+            <div class="estimation-card__note">10B URLs, 1% FPR, 10 bits/element</div>
+          </div>
+        </div>
+        <p>The Bloom filter for 10B URLs at 1% false positive rate needs ~12GB of memory — fits in a single large machine or can be sharded. False positives (skip a valid URL) are acceptable; the web has plenty of redundancy.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- URL frontier (Cassandra — optimized for high write throughput)
+CREATE TABLE urls_to_crawl (
+    domain       TEXT,
+    url_hash     TEXT,
+    url          TEXT,
+    priority     INT,         -- 0=high (news), 5=low (archive)
+    last_crawled TIMESTAMP,
+    next_crawl   TIMESTAMP,
+    PRIMARY KEY (domain, url_hash)  -- partition by domain for politeness
+);
+
+-- Crawled pages index (DynamoDB or Cassandra)
+CREATE TABLE crawled_pages (
+    url_hash     TEXT PRIMARY KEY,
+    content_hash TEXT,          -- SHA-256 of content for exact dedup
+    simhash      BIGINT,        -- 64-bit SimHash for near-dedup
+    storage_key  TEXT,          -- S3 key: crawl/{year}/{month}/{url_hash}.gz
+    crawled_at   TIMESTAMP,
+    status_code  INT,
+    content_size INT
+);
+
+-- Robots cache (Redis, TTL = robots.txt max-age)
+-- Key: robots:{domain}
+-- Value: serialized RobotsRules object with crawl-delay, disallowed paths</code></pre>
+        <div class="callout callout--info">
+          <strong>Why Cassandra for the frontier?</strong> The frontier needs ~10B rows with high write throughput as discovered URLs pour in. Cassandra's wide-column model with domain as partition key co-locates all URLs for a domain, enabling efficient politeness enforcement.
+        </div>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box">URL Frontier (Cassandra)</div>
+            <div class="hld-arrow">→ batch of URLs</div>
+            <div class="hld-box">Fetcher Pool (1000 nodes)</div>
+            <div class="hld-arrow">→ HTML</div>
+            <div class="hld-box hld-box--storage">S3 Content Store</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Fetcher Pool</div>
+            <div class="hld-arrow">→ raw HTML</div>
+            <div class="hld-box">HTML Parser</div>
+            <div class="hld-arrow">→ extracted URLs</div>
+            <div class="hld-box">URL Deduplicator</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">URL Deduplicator</div>
+            <div class="hld-arrow">new URLs only</div>
+            <div class="hld-box">Priority Queue</div>
+            <div class="hld-arrow">→ enqueue</div>
+            <div class="hld-box">URL Frontier (Cassandra)</div>
+          </div>
+        </div>
+        <ol>
+          <li><strong>URL Frontier</strong> maintains a priority queue in Cassandra, partitioned by domain so each domain's URLs stay together</li>
+          <li><strong>Scheduler</strong> dequeues batches of URLs, checks robots.txt cache, enforces per-domain crawl-delay</li>
+          <li><strong>Fetcher Pool</strong> (~1000 distributed workers) fetches pages via HTTP. Each fetcher handles its own domain queues</li>
+          <li><strong>HTML Parser</strong> extracts all &lt;a href&gt; links, normalizes them (strip tracking params, lowercase, canonical form)</li>
+          <li><strong>Deduplicator</strong> checks Bloom filter: new URL → add to Bloom filter + enqueue; seen URL → discard</li>
+          <li><strong>Content Store</strong> computes SimHash of page body; if SimHash distance &lt; threshold → near-duplicate → skip storage</li>
+        </ol>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Internal APIs between crawler components
+
+// Scheduler → Fetcher: dispatch a batch of URLs to crawl
+POST /internal/fetch-batch
+Body: { "urls": ["https://...", ...], "fetcherId": "node-42",
+        "maxConcurrency": 100 }
+
+// Fetcher → Parser: deliver crawled page
+POST /internal/parse
+Body: { "url": "https://example.com/page", "statusCode": 200,
+        "contentType": "text/html", "body": "base64encodedHTML",
+        "crawledAt": "2025-01-01T10:00:00Z" }
+
+// Parser → Frontier: submit discovered URLs
+POST /internal/urls/discovered
+Body: { "sourceUrl": "https://...", "discoveredUrls": ["https://...", ...] }
+
+// Admin API: seed new domains
+POST /api/v1/seeds
+Body: { "urls": ["https://example.com/", ...], "priority": 0 }
+
+// Admin API: check crawl status
+GET /api/v1/domains/{domain}/status
+Response: { "domain": "example.com", "urlsCrawled": 15000,
+            "lastCrawled": "...", "nextCrawl": "..." }</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Deduplication at Scale</h2>
+        <h3>URL Deduplication — Bloom Filter</h3>
+        <p>A Bloom filter is a probabilistic data structure using k hash functions and a bit array. To add a URL: hash it k times, set those k bits. To check: hash k times, if all bits are set → probably seen; if any bit is 0 → definitely not seen.</p>
+        <p>At 10B URLs with 1% false positive rate: bit array size = 10B × 10 bits = 10B bits = 12.5 GB. This fits in memory and is shardable. False positives (skipping a URL we haven't seen) are acceptable — we miss ~1% of URLs but save massive DB lookups.</p>
+
+        <h3>Content Deduplication — SimHash</h3>
+        <p>SimHash creates a 64-bit fingerprint where similar documents have similar fingerprints (Hamming distance ≤ 3 = near-duplicate). Algorithm: tokenize text → hash each token → sum weighted hash bits → take sign of each bit dimension.</p>
+        <div class="callout callout--warning">
+          <strong>Why not MD5/SHA for content dedup?</strong> MD5 only catches exact duplicates. Two pages with 95% identical content (different ads, timestamps) have completely different MD5 hashes. SimHash catches near-duplicates.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Spider trap:</strong> Site generates infinite URLs (e.g., calendar with infinite next-page links). Solution: cap URL length at 2048 chars, limit depth per domain to 20 hops, limit URLs per domain to 10M.</li>
+          <li><strong>Dynamic content (JavaScript):</strong> Standard HTTP fetcher gets static HTML. Use a headless Chrome pool (Puppeteer) for JS-heavy sites flagged by a heuristic (site map or manually marked).</li>
+          <li><strong>DNS poisoning / malicious redirects:</strong> Validate that redirected domain is still allowed by robots.txt. Don't follow more than 5 redirects.</li>
+          <li><strong>Politeness enforcement:</strong> Each fetcher node owns a set of domains. Uses a per-domain timestamp to ensure minimum crawl-delay between requests to the same server.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>The architecture is a pipeline of loosely coupled services connected by message queues (Kafka). This allows independent scaling of each stage — if parsing is slow, add more parsers; if fetching is the bottleneck, add fetcher nodes.</p>
+        <p><strong>Key insight:</strong> The system is <em>eventually consistent by design</em>. A URL missed today due to a Bloom filter false positive will likely be discovered again from another page tomorrow. Correctness over time matters more than per-request correctness.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>URL dedup storage</td>
+                <td>Bloom filter (probabilistic)</td>
+                <td>Exact URL set in database</td>
+                <td>Bloom filter</td>
+                <td>10B URLs in a DB = expensive lookups. Bloom filter stores 10B entries in 12GB RAM with sub-millisecond lookup. 1% FPR is acceptable.</td>
+              </tr>
+              <tr>
+                <td>Crawl strategy</td>
+                <td>BFS (breadth-first)</td>
+                <td>Priority-based (PageRank-weighted)</td>
+                <td>Priority-based</td>
+                <td>BFS visits low-quality pages quickly. Priority queue lets high-authority domains get crawled first, improving index freshness for valuable content.</td>
+              </tr>
+              <tr>
+                <td>Content dedup</td>
+                <td>SHA-256 (exact match)</td>
+                <td>SimHash (near-duplicate)</td>
+                <td>Both</td>
+                <td>SHA-256 for exact match (fast, cheap). SimHash for near-duplicates (same article, different ads). Use SHA first, SimHash only if SHA misses.</td>
+              </tr>
+              <tr>
+                <td>Politeness enforcement</td>
+                <td>Centralized rate limiter</td>
+                <td>Per-fetcher domain ownership</td>
+                <td>Domain ownership</td>
+                <td>Centralized rate limiter is a bottleneck at 11K req/sec. Domain ownership means each fetcher node manages its own domain queue — no coordination needed.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * BloomFilter
+ * Space-efficient probabilistic data structure for URL deduplication.
+ * Uses k independent hash functions over a bit array.
+ * False positives possible; false negatives impossible.
+ */
+public class BloomFilter {
+
+    private final BitSet bitArray;
+    private final int bitArraySize;
+    private final int numberOfHashFunctions;
+
+    /**
+     * Creates a Bloom filter optimized for the given capacity and false-positive rate.
+     *
+     * @param expectedElements   number of elements to store (e.g., 10_000_000_000L for 10B)
+     * @param falsePositiveRate  acceptable false positive probability (e.g., 0.01 for 1%)
+     */
+    public BloomFilter(long expectedElements, double falsePositiveRate) {
+        // Optimal bit array size: m = -n*ln(p) / (ln(2))^2
+        this.bitArraySize = (int) Math.ceil(
+            -expectedElements * Math.log(falsePositiveRate) / (Math.log(2) * Math.log(2))
+        );
+        // Optimal k: k = (m/n) * ln(2)
+        this.numberOfHashFunctions = (int) Math.ceil(
+            ((double) bitArraySize / expectedElements) * Math.log(2)
+        );
+        this.bitArray = new BitSet(bitArraySize);
+    }
+
+    /**
+     * Adds a URL to the filter. After this call, mightContain() will return true.
+     *
+     * @param url the URL string to add
+     */
+    public void add(String url) {
+        for (int hashIndex = 0; hashIndex &lt; numberOfHashFunctions; hashIndex++) {
+            int bitPosition = computeHashPosition(url, hashIndex);
+            bitArray.set(bitPosition);
+        }
+    }
+
+    /**
+     * Tests whether a URL might be in the filter.
+     * Returns true = probably seen (act as if seen).
+     * Returns false = definitely not seen (safe to crawl).
+     *
+     * @param url the URL to test
+     * @return true if probably present, false if definitely absent
+     */
+    public boolean mightContain(String url) {
+        for (int hashIndex = 0; hashIndex &lt; numberOfHashFunctions; hashIndex++) {
+            int bitPosition = computeHashPosition(url, hashIndex);
+            if (!bitArray.get(bitPosition)) {
+                return false; // definite miss
+            }
+        }
+        return true; // probable hit
+    }
+
+    /**
+     * Computes the bit array position for this url + hash function index.
+     * Uses double hashing: h(url, i) = hash1(url) + i * hash2(url)
+     * This avoids needing k independent hash implementations.
+     */
+    private int computeHashPosition(String url, int hashIndex) {
+        long hash1 = murmurHash64(url, 0);
+        long hash2 = murmurHash64(url, hash1);
+        long combinedHash = Math.abs(hash1 + (long) hashIndex * hash2);
+        return (int) (combinedHash % bitArraySize);
+    }
+
+    private long murmurHash64(String input, long seed) {
+        // Simplified MurmurHash3 — production should use Guava's Hashing.murmur3_128()
+        long hashValue = seed ^ (input.length() * 0xc4ceb9fe1a85ec53L);
+        for (char character : input.toCharArray()) {
+            hashValue ^= character;
+            hashValue *= 0xff51afd7ed558ccdL;
+            hashValue ^= hashValue >>> 33;
+        }
+        return hashValue;
+    }
+}
+
+/**
+ * UrlNormalizer
+ * Converts raw extracted URLs into a canonical form to maximize dedup hit rate.
+ */
+public class UrlNormalizer {
+
+    // Query parameters that are tracking-only and should be stripped
+    private static final Set&lt;String&gt; TRACKING_PARAMS = Set.of(
+        "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+        "fbclid", "gclid", "msclkid", "ref", "source"
+    );
+
+    /**
+     * Normalizes a URL for deduplication purposes.
+     * Strips tracking params, normalizes scheme/host to lowercase,
+     * removes default ports, sorts remaining query params.
+     *
+     * @param rawUrl the raw URL extracted from HTML
+     * @param baseUrl the page URL this was extracted from (for relative URL resolution)
+     * @return normalized URL string, or empty if URL is invalid/unsupported
+     */
+    public Optional&lt;String&gt; normalize(String rawUrl, String baseUrl) {
+        try {
+            URI resolvedUri = URI.create(baseUrl).resolve(rawUrl.trim());
+            String scheme = resolvedUri.getScheme().toLowerCase();
+
+            if (!scheme.equals("http") && !scheme.equals("https")) {
+                return Optional.empty(); // skip mailto:, ftp:, javascript:, etc.
+            }
+
+            String normalizedHost = resolvedUri.getHost().toLowerCase();
+            String normalizedPath = normalizePath(resolvedUri.getPath());
+            String filteredQuery = filterQueryParameters(resolvedUri.getQuery());
+
+            String normalizedUrl = scheme + "://" + normalizedHost + normalizedPath;
+            if (filteredQuery != null && !filteredQuery.isEmpty()) {
+                normalizedUrl += "?" + filteredQuery;
+            }
+
+            return Optional.of(normalizedUrl);
+        } catch (IllegalArgumentException invalidUrlException) {
+            return Optional.empty();
+        }
+    }
+
+    private String normalizePath(String path) {
+        if (path == null || path.isEmpty()) {
+            return "/";
+        }
+        // Collapse double slashes, resolve .. segments
+        return path.replaceAll("//+", "/").toLowerCase();
+    }
+
+    private String filterQueryParameters(String queryString) {
+        if (queryString == null) {
+            return null;
+        }
+        return Arrays.stream(queryString.split("&"))
+            .filter(param -> {
+                String paramName = param.split("=")[0].toLowerCase();
+                return !TRACKING_PARAMS.contains(paramName);
+            })
+            .sorted()
+            .collect(Collectors.joining("&"));
+    }
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-web-crawler-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A Bloom filter returns true for a URL. What does this mean?" data-options='["The URL has definitely been crawled before","The URL has definitely NOT been crawled before","The URL has probably been crawled before (false positives possible)","The URL is invalid and should be discarded"]' data-correct="2" data-explanation="Bloom filters can have false positives (say 'seen' when actually not seen) but never false negatives. A 'true' means probably seen; a 'false' means definitely not seen." style="display:none"></div>
+          <div data-question="Why does the URL frontier partition by domain in Cassandra?" data-options='["To improve read performance for admins","To co-locate a domain's URLs for efficient politeness enforcement — one node owns one domain","To reduce storage costs by compressing similar domains","Because Cassandra requires partitioning by string type"]' data-correct="1" data-explanation="Politeness requires that requests to the same domain are spaced apart. If all URLs for a domain are on the same Cassandra partition, the fetcher can easily see the last crawl time and enforce the crawl-delay without cross-node coordination." style="display:none"></div>
+          <div data-question="Why is SimHash better than MD5 for detecting near-duplicate web pages?" data-options='["SimHash is faster to compute than MD5","SimHash produces a fingerprint where similar documents have similar fingerprints; MD5 only catches exact duplicates","SimHash uses less memory than MD5","MD5 cannot handle HTML documents"]' data-correct="1" data-explanation="Two pages with 95% identical content (different ads, different timestamps) have completely different MD5 hashes. SimHash produces a 64-bit fingerprint where near-duplicates have low Hamming distance, enabling near-duplicate detection." style="display:none"></div>
+          <div data-question="A website generates infinite calendar URLs like /2025/01/01, /2025/01/02, etc. How do you defend against this spider trap?" data-options='["Use HTTPS instead of HTTP","Set a maximum URL depth per domain and cap URLs per domain at 10M","Only crawl .com domains","Disable JavaScript rendering for calendar pages"]' data-correct="1" data-explanation="Spider traps generate infinite valid-looking URLs. Depth limits (max hops from seed) and per-domain URL caps prevent crawlers from being trapped in infinite loops while missing the rest of the web." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="pastebin.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="uber.html" class="btn btn--outline">← Prev: Uber</a>
+        <a href="pastebin.html" class="btn btn--outline">Next: Pastebin →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

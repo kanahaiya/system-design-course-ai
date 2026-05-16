@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a social media news feed like Facebook: 500M DAU, hybrid fanout on write for non-celebrities, fanout on read for celebrities, ranked feed using ML scoring, 6000 QPS feed reads.">
+  <title>Design Social Media News Feed — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/news-feed/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-news-feed" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=news-feed" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design Social Media News Feed (Facebook-style)</h1>
+        <p class="module-header__desc">Design a ranked news feed for 500M DAU with hybrid fanout (write for regular users, read for celebrities), ML-based ranking, Redis feed cache, and efficient pagination at 6000 QPS.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Facebook, Instagram, Twitter/X, LinkedIn, TikTok</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Users see a ranked feed of posts from people/pages they follow</li>
+          <li>Feed is ranked by relevance (not just chronological)</li>
+          <li>Support text, images, videos in posts</li>
+          <li>Paginated infinite scroll (20 posts per page)</li>
+          <li>Near real-time: new posts appear in feed within ~30 seconds</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Scale:</strong> 500M DAU, 50M posts/day, 500M feed reads/day</li>
+          <li><strong>Feed read QPS:</strong> 500M ÷ 86,400 ≈ 5,787 QPS (peak ~3x = 17K)</li>
+          <li><strong>Celebrity problem:</strong> A user with 100M followers posts → must fanout to 100M feeds</li>
+          <li><strong>Feed freshness:</strong> &lt; 30s from post to visible in followers' feeds</li>
+          <li><strong>Availability:</strong> 99.99% (social feeds are user-facing)</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>The celebrity problem is the crux of this question.</strong> If Beyoncé posts and has 100M followers, naive fanout-on-write would write 100M Redis entries. That takes minutes. The interviewer is testing whether you know the hybrid approach.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Feed reads/second</div>
+            <div class="estimation-card__value">5,787 QPS</div>
+            <div class="estimation-card__note">500M ÷ 86,400</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Redis feed cache size</div>
+            <div class="estimation-card__value">~80 GB</div>
+            <div class="estimation-card__note">500M users × 20 post IDs × 8B</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Post writes/second</div>
+            <div class="estimation-card__value">578 QPS</div>
+            <div class="estimation-card__note">50M posts ÷ 86,400</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Fan-out writes/second</div>
+            <div class="estimation-card__value">~57,800</div>
+            <div class="estimation-card__note">578 posts × avg 100 followers</div>
+          </div>
+        </div>
+        <p>The feed cache at 80GB fits across a Redis cluster. We store only post IDs (8 bytes each), not full post content — post content is fetched separately. This keeps the feed cache small and fast.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- MySQL: source of truth
+CREATE TABLE posts (
+    post_id     BIGINT PRIMARY KEY,
+    user_id     BIGINT NOT NULL,
+    content     TEXT,
+    media_url   VARCHAR(512),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    like_count  BIGINT DEFAULT 0,
+    comment_count BIGINT DEFAULT 0,
+    share_count   BIGINT DEFAULT 0,
+    INDEX idx_user_created (user_id, created_at DESC)
+);
+
+CREATE TABLE follows (
+    follower_id  BIGINT,
+    followee_id  BIGINT,
+    created_at   TIMESTAMP,
+    PRIMARY KEY (follower_id, followee_id),
+    INDEX idx_followee (followee_id)  -- "who follows this user?"
+);
+
+-- Redis: pre-computed feed cache
+-- Key: feed:{user_id}
+-- Type: Sorted Set
+-- Member: post_id
+-- Score: rank_score (computed by Ranking Service, NOT just timestamp)
+-- ZREVRANGE feed:{user_id} 0 19 → top 20 posts for user
+
+-- Redis: celebrity posts (NOT fanned out, fetched at read time)
+-- Key: celebrity_posts:{user_id}   (sorted set of recent post_ids)
+-- Threshold: users with > 1M followers are "celebrities"</code></pre>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <h3>Write Path (Fanout on Write)</h3>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">User posts</div>
+            <div class="hld-arrow">→ post created</div>
+            <div class="hld-box">Post Service</div>
+            <div class="hld-arrow">enqueue</div>
+            <div class="hld-box">Kafka: post-created</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Kafka: post-created</div>
+            <div class="hld-arrow">→ consume</div>
+            <div class="hld-box">Fanout Service</div>
+            <div class="hld-arrow">IF &lt; 1M followers</div>
+            <div class="hld-box">Write to each follower's Redis feed</div>
+          </div>
+        </div>
+        <h3>Read Path (Hybrid for Celebrities)</h3>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">User reads feed</div>
+            <div class="hld-arrow">→</div>
+            <div class="hld-box">Feed Service</div>
+            <div class="hld-arrow">ZREVRANGE</div>
+            <div class="hld-box hld-box--storage">Redis: feed:{user_id}</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Feed Service</div>
+            <div class="hld-arrow">+ fetch celebrity posts</div>
+            <div class="hld-box hld-box--storage">Redis: celebrity_posts:{*}</div>
+            <div class="hld-arrow">merge + re-rank</div>
+            <div class="hld-box">Return top 20</div>
+          </div>
+        </div>
+        <p><strong>Hybrid fanout:</strong> Regular users (≤ 1M followers): fanout on write — their posts are pushed to followers' feed caches. Celebrity users (&gt; 1M followers): fanout on read — their posts are stored separately and merged into the feed at read time. This prevents writing 100M Redis entries for a single post.</p>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Create a post
+POST /api/v1/posts
+Body: { "userId": 123, "content": "Hello world", "mediaUrl": "https://s3/img.jpg" }
+Response: { "postId": 789, "createdAt": "2025-01-01T10:00:00Z" }
+
+// Get news feed (paginated)
+GET /api/v1/feed/{userId}?cursor={cursor}&limit=20
+Response: {
+    "posts": [
+        { "postId": 789, "authorId": 456, "content": "...",
+          "likeCount": 1200, "rankScore": 0.94 }
+    ],
+    "nextCursor": "eyJvZmZzZXQiOjIwfQ",
+    "hasMore": true
+}
+
+// Like a post (triggers re-rank for affected users' feeds)
+POST /api/v1/posts/{postId}/like
+Body: { "userId": 123 }
+
+// Follow/unfollow (triggers feed refresh for follower)
+POST /api/v1/users/{userId}/follow
+Body: { "followeeId": 456 }</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Feed Ranking</h2>
+        <p>A purely chronological feed shows the most recent posts first. Facebook/Instagram's algorithmic feed ranks posts by predicted engagement, showing users what they're most likely to interact with.</p>
+        <p><strong>Simple scoring model (good enough for interview):</strong></p>
+        <pre><code class="language-java">score = w1 × recency_score
+      + w2 × like_rate        (likes ÷ impressions)
+      + w3 × comment_rate     (comments ÷ impressions)
+      + w4 × relationship_strength  (close friends = 1.0, weak follow = 0.1)</code></pre>
+        <p>where <code>w1 + w2 + w3 + w4 = 1.0</code> (weights tunable via A/B testing).</p>
+        <p><strong>Recency score:</strong> Use exponential decay — <code>recency = e^(-λ × age_in_hours)</code>. This makes a 1-hour-old post score 0.97 and a 24-hour-old post score ~0.28 (for λ=0.05).</p>
+        <div class="callout callout--info">
+          <strong>Online vs pre-computed ranking:</strong> Pre-computing scores at write time and storing in the sorted set score is fast at read time but stale (a post that gets 10K likes 6 hours later should rank higher than when first written). Online ranking (at read time) is fresh but adds latency. Facebook uses a tiered approach: pre-compute for old posts, re-rank recent posts online.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Celebrity posts in active users' feeds:</strong> A user who follows 100 celebrities and 500 regular users gets a feed that's 100 celebrity posts merged with the pre-computed feed at read time. Merge is O(k log k) where k ≤ 1000 — fast.</li>
+          <li><strong>User with 0 followers creates post:</strong> No fanout needed — feed will never show this post to others. Fanout service checks follower count before queuing work.</li>
+          <li><strong>Feed invalidation on unfollow:</strong> When user A unfollows user B, remove all of B's post IDs from A's feed cache. Scan is O(feed_size) — acceptable as unfollows are rare.</li>
+          <li><strong>A/B testing ranking weights:</strong> Assign each user to a bucket (hash(user_id) % 100). Bucket 0-49 gets weights [0.4, 0.3, 0.2, 0.1]; bucket 50-99 gets [0.3, 0.35, 0.25, 0.1]. Compare engagement metrics per bucket after 1 week.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>The news feed system's key architectural insight is the <strong>hybrid fanout strategy</strong>: regular users get pre-computed feed caches (fast reads), celebrities get their posts fetched and merged at read time (avoids write amplification). This asymmetry is the correct trade-off because celebrity write events are rare but have enormous fanout, while regular user posts have manageable fanout that benefits from pre-computation.</p>
+        <p>Ranking adds a layer of complexity on top of raw feed assembly. The Redis sorted set score field doubles as the rank score, keeping the feed pre-sorted. Re-ranking happens asynchronously when engagement signals change significantly.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Feed generation</td>
+                <td>Fanout on write (push)</td>
+                <td>Fanout on read (pull)</td>
+                <td>Hybrid</td>
+                <td>Pure write: celebrity with 100M followers writes → 100M Redis writes (minutes of lag). Pure read: 500M users each recompute feed on every load (too slow). Hybrid: write for &lt;1M followers, read for celebrities.</td>
+              </tr>
+              <tr>
+                <td>Feed ordering</td>
+                <td>Chronological (timestamp as score)</td>
+                <td>Algorithmic (rank score)</td>
+                <td>Algorithmic</td>
+                <td>Chronological is simpler but shows stale content from infrequent posters above breaking news. Algorithmic increases engagement 30-40% (industry data). Trade-off: harder to implement and less transparent to users.</td>
+              </tr>
+              <tr>
+                <td>Ranking timing</td>
+                <td>Pre-computed at write time</td>
+                <td>Online at read time</td>
+                <td>Tiered</td>
+                <td>Pre-computed is fast but scores go stale. Online is fresh but adds 50-100ms latency. Tiered: pre-compute for posts &gt; 1 hour old; re-rank recent posts online using current engagement signals.</td>
+              </tr>
+              <tr>
+                <td>Feed cache storage</td>
+                <td>Redis sorted set (post IDs only)</td>
+                <td>Redis hash (full post content)</td>
+                <td>IDs only</td>
+                <td>Full content: 500M users × 20 posts × ~1KB = 10TB Redis — cost-prohibitive. IDs: 500M × 20 × 8B = 80GB — fits in Redis. Fetch content from MySQL/S3 in a separate hydration step.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * FeedRankingService
+ * Scores and ranks feed items using a weighted multi-signal model.
+ * Weights are tunable via A/B testing without code changes.
+ */
+public class FeedRankingService {
+
+    // Default weights — tuned by A/B testing
+    private static final double RECENCY_WEIGHT = 0.35;
+    private static final double LIKE_RATE_WEIGHT = 0.25;
+    private static final double COMMENT_RATE_WEIGHT = 0.25;
+    private static final double RELATIONSHIP_WEIGHT = 0.15;
+
+    // Exponential decay constant: score halves every ~14 hours
+    private static final double DECAY_CONSTANT = 0.05;
+
+    /**
+     * Ranks a list of feed items using weighted scoring.
+     * Items are returned sorted descending by score (best first).
+     *
+     * @param candidateItems  raw feed items (from cache + celebrity posts)
+     * @param viewerId        the user viewing the feed (for relationship signals)
+     * @param rankingWeights  optional custom weights for A/B testing
+     * @return ranked list of feed items with scores attached
+     */
+    public List&lt;RankedFeedItem&gt; rankFeedItems(
+            List&lt;FeedItem&gt; candidateItems,
+            long viewerId,
+            RankingWeights rankingWeights) {
+
+        RankingWeights weights = rankingWeights != null ? rankingWeights
+            : new RankingWeights(RECENCY_WEIGHT, LIKE_RATE_WEIGHT,
+                                 COMMENT_RATE_WEIGHT, RELATIONSHIP_WEIGHT);
+
+        return candidateItems.stream()
+            .map(item -> new RankedFeedItem(item, computeScore(item, viewerId, weights)))
+            .sorted(Comparator.comparingDouble(RankedFeedItem::score).reversed())
+            .toList();
+    }
+
+    /**
+     * Computes a composite ranking score for a single feed item.
+     * All sub-scores are normalized to [0, 1] before weighting.
+     *
+     * @param item     the feed item to score
+     * @param viewerId the viewer (used for relationship strength lookup)
+     * @param weights  the weight configuration for this A/B test bucket
+     * @return composite score in range [0, 1]
+     */
+    private double computeScore(FeedItem item, long viewerId, RankingWeights weights) {
+        double recencyScore = computeRecencyScore(item.createdAtEpochSeconds());
+        double likeRateScore = computeEngagementRate(item.likeCount(), item.impressionCount());
+        double commentRateScore = computeEngagementRate(item.commentCount(), item.impressionCount());
+        double relationshipScore = computeRelationshipStrength(viewerId, item.authorId());
+
+        return weights.recency() * recencyScore
+            + weights.likeRate() * likeRateScore
+            + weights.commentRate() * commentRateScore
+            + weights.relationship() * relationshipScore;
+    }
+
+    /**
+     * Exponential decay: recent posts score near 1.0, old posts near 0.0.
+     * Half-life: ln(2) / DECAY_CONSTANT ≈ 14 hours.
+     */
+    private double computeRecencyScore(long createdAtEpochSeconds) {
+        long currentEpochSeconds = System.currentTimeMillis() / 1000;
+        double ageInHours = (currentEpochSeconds - createdAtEpochSeconds) / 3600.0;
+        return Math.exp(-DECAY_CONSTANT * ageInHours);
+    }
+
+    /**
+     * Engagement rate: interactions ÷ impressions, capped at 1.0.
+     * Small smoothing term prevents division by zero for new posts.
+     */
+    private double computeEngagementRate(long interactionCount, long impressionCount) {
+        if (impressionCount == 0) {
+            return 0.1; // prior for brand-new posts with no impressions yet
+        }
+        double rawRate = (double) interactionCount / impressionCount;
+        return Math.min(rawRate * 10.0, 1.0); // scale: 10% engagement rate = 1.0 score
+    }
+
+    /**
+     * Relationship strength: close friends = 1.0, casual follow = 0.1.
+     * In production this queries a Graph Service or feature store.
+     * Factors: mutual follows, DM frequency, comment history, tag history.
+     */
+    private double computeRelationshipStrength(long viewerId, long authorId) {
+        // Simplified: real system queries pre-computed edge weights from Graph DB
+        // Returned as a value in [0.0, 1.0]
+        return 0.5; // placeholder — production uses GraphQL/feature store lookup
+    }
+
+    public record FeedItem(long postId, long authorId, long createdAtEpochSeconds,
+                           long likeCount, long commentCount, long impressionCount) {}
+    public record RankedFeedItem(FeedItem item, double score) {}
+    public record RankingWeights(double recency, double likeRate,
+                                  double commentRate, double relationship) {}
+}
+
+/**
+ * FeedAssemblyService
+ * Assembles and returns a user's feed by combining pre-computed cache
+ * with real-time celebrity posts, then ranking the merged result.
+ */
+public class FeedAssemblyService {
+
+    private static final int CELEBRITY_FOLLOWER_THRESHOLD = 1_000_000;
+    private static final int FEED_PAGE_SIZE = 20;
+    private static final int CELEBRITY_POSTS_LOOKBACK_HOURS = 24;
+
+    private final RedisClient redisClient;
+    private final FeedRankingService rankingService;
+    private final PostRepository postRepository;
+    private final FollowRepository followRepository;
+
+    public FeedAssemblyService(RedisClient redisClient, FeedRankingService rankingService,
+                                PostRepository postRepository, FollowRepository followRepository) {
+        this.redisClient = redisClient;
+        this.rankingService = rankingService;
+        this.postRepository = postRepository;
+        this.followRepository = followRepository;
+    }
+
+    /**
+     * Assembles the ranked news feed for a user.
+     * Merges pre-computed feed cache (regular users) with celebrity posts (fetched on read).
+     *
+     * @param viewerId the user requesting their feed
+     * @param pageNumber zero-based page index for pagination
+     * @return ranked, paginated list of post IDs
+     */
+    public List&lt;Long&gt; assembleNewsFeed(long viewerId, int pageNumber) {
+        List&lt;Long&gt; cachedPostIds = fetchFromFeedCache(viewerId);
+        List&lt;Long&gt; celebrityPostIds = fetchCelebrityPostsForUser(viewerId);
+
+        List&lt;Long&gt; allPostIds = new ArrayList&lt;&gt;(cachedPostIds);
+        allPostIds.addAll(celebrityPostIds);
+
+        List&lt;FeedRankingService.FeedItem&gt; feedItems = hydratePostMetadata(allPostIds);
+        List&lt;FeedRankingService.RankedFeedItem&gt; rankedItems =
+            rankingService.rankFeedItems(feedItems, viewerId, null);
+
+        int startIndex = pageNumber * FEED_PAGE_SIZE;
+        int endIndex = Math.min(startIndex + FEED_PAGE_SIZE, rankedItems.size());
+
+        return rankedItems.subList(startIndex, endIndex).stream()
+            .map(ranked -> ranked.item().postId())
+            .toList();
+    }
+
+    private List&lt;Long&gt; fetchFromFeedCache(long userId) {
+        // ZREVRANGE feed:{userId} 0 199  — top 200 candidates before ranking
+        return redisClient.zrevrange("feed:" + userId, 0, 199);
+    }
+
+    private List&lt;Long&gt; fetchCelebrityPostsForUser(long viewerId) {
+        List&lt;Long&gt; followedCelebrityIds = followRepository.getCelebrityFollowees(
+            viewerId, CELEBRITY_FOLLOWER_THRESHOLD
+        );
+
+        return followedCelebrityIds.stream()
+            .flatMap(celebrityId ->
+                redisClient.zrevrange("celebrity_posts:" + celebrityId, 0, 9).stream()
+            )
+            .toList();
+    }
+
+    private List&lt;FeedRankingService.FeedItem&gt; hydratePostMetadata(List&lt;Long&gt; postIds) {
+        return postRepository.findByIds(postIds).stream()
+            .map(post -> new FeedRankingService.FeedItem(
+                post.postId(), post.userId(), post.createdAt().getTime() / 1000,
+                post.likeCount(), post.commentCount(), post.impressionCount()
+            ))
+            .toList();
+    }
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-news-feed-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A celebrity with 100M followers posts. Why does pure fanout-on-write fail?" data-options='["Redis doesn't support 100M entries per key","Writing to 100M users' feed caches would take minutes, causing unacceptable freshness lag","It works fine — Redis handles 100M writes in under 1 second","The celebrity's post would go to the wrong partition"]' data-correct="1" data-explanation="At 100K Redis writes/second, writing to 100M caches takes 1000 seconds (~17 minutes). The celebrity's post would only start appearing in feeds 17 minutes after posting. Hybrid approach: fetch celebrity posts at read time." style="display:none"></div>
+          <div data-question="Why does the Redis feed cache store only post IDs (8 bytes each) rather than full post content?" data-options='["Redis cannot store text","500M users × 20 posts × ~1KB content = 10TB Redis — cost-prohibitive; storing only IDs keeps it at 80GB","Post content is stored in the post_id itself","Full content would exceed Redis's 512MB key size limit"]' data-correct="1" data-explanation="Storing full post content would require 10TB of Redis — expensive. By storing only 8-byte post IDs and fetching content from MySQL/CDN in a hydration step, the feed cache stays at 80GB, which fits affordably in Redis." style="display:none"></div>
+          <div data-question="What happens to a user's feed cache when they unfollow someone?" data-options='["Nothing — the cache naturally expires after 24 hours","The Feed Service scans the user's feed cache and removes all post IDs from the unfollowed user","The entire feed cache is deleted and rebuilt from scratch","ZooKeeper notifies all shards to invalidate the entry"]' data-correct="1" data-explanation="On unfollow, the feed service scans the feed cache (O(feed_size)) and removes post IDs authored by the unfollowed user. This is acceptable because unfollows are rare events and feed size is bounded (e.g., 200 posts max)." style="display:none"></div>
+          <div data-question="In the ranking formula score = w1×recency + w2×likes + w3×comments + w4×relationship, what is the purpose of A/B testing different weight values?" data-options='["A/B testing is required by GDPR for personalization","Different weight combinations produce different feed rankings; A/B testing measures which weights maximize user engagement (time-on-app, meaningful interactions) before rolling out globally","A/B testing reduces infrastructure costs","Weight values must sum to exactly 1.0 — A/B testing verifies this"]' data-correct="1" data-explanation="Small changes to ranking weights can significantly impact user engagement. By running two groups simultaneously (e.g., w1=0.4 vs w1=0.3), you measure which produces better engagement metrics before committing to one configuration for all users." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="dropbox.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="message-queue.html" class="btn btn--outline">← Prev: Message Queue</a>
+        <a href="dropbox.html" class="btn btn--outline">Next: Dropbox →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

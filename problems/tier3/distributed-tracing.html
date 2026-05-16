@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Distributed Tracing System (like Jaeger) &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design a Distributed Tracing System (like Jaeger) &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-tracing" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-tracing" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Observability</span>
+        </div>
+        <h1 class="module-header__title">Design a Distributed Tracing System (like Jaeger)</h1>
+        <p class="module-header__desc">Distributed tracing answers why was this specific request slow across dozens of microservices. The key challenge: you cannot trace everything (too expensive), but random 1% sampling misses the rare slow outliers you most need to find. Adaptive sampling solves this.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; Jaeger, Zipkin, Datadog APM</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Trace a single request end-to-end across microservices</li>
+            <li>Visualize spans (service calls) with timing and metadata</li>
+            <li>Search traces by service, latency, error, or custom tags</li>
+            <li>Alert on SLO violations (p99 latency &gt; threshold)</li></ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 100K requests/sec, 1M spans/sec</li>
+            <li><strong>Sampling overhead:</strong> &lt;1% on traced services</li>
+            <li><strong>Retention:</strong> Last 7 days queryable; compress and archive older</li></ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li>1M spans/sec &times; 500 bytes/span = 500MB/sec = 43TB/day &rarr; with 1% sampling: 430GB/day</li>
+            <li>Span search index (service, tags) for search: 10% of raw size = 43GB/day &rarr; Elasticsearch handles this</li></ul></div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Trace storage (Cassandra -- partition by traceId for O(1) trace lookup)
+spans:
+    trace_id     UUID,         -- same across all spans in one request
+    span_id      UUID,
+    parent_span  UUID,         -- null for root span
+    service      VARCHAR(100),
+    operation    VARCHAR(100),
+    start_time   TIMESTAMP,
+    duration_us  INT,          -- microseconds
+    tags         MAP<STRING, STRING>,
+    status       ENUM(ok, error),
+    PRIMARY KEY (trace_id, span_id)
+
+// Span index (Elasticsearch -- for search: find traces by service/latency/tag)
+// Indexes: service, duration_us, status, tags.*</code></pre></div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Instrumentation:</strong> OpenTelemetry SDK in each service. Creates spans for outbound calls. Injects trace context into HTTP headers (W3C traceparent: 00-{traceId}-{spanId}-{flags}).</li>
+            <li><strong>Sampling decision:</strong> Made at trace root (head-based) or after trace completes (tail-based). Propagated to all downstream services via sampled flag in traceparent.</li>
+            <li><strong>Span collector:</strong> Agents in each pod batch spans and send to Kafka. Collector consumers write to Cassandra (by trace_id) and index to Elasticsearch.</li>
+            <li><strong>Trace assembly:</strong> Query Cassandra with trace_id &rarr; get all spans &rarr; build tree by parent_span linkage.</li>
+            <li><strong>UI:</strong> Gantt chart timeline, service dependency graph, latency histograms.</li></ul></div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body"><pre><code class="language-java">// Span Submission API (internal -- called by OpenTelemetry SDK)
+POST /api/v1/spans
+Body: [{ traceId, spanId, parentSpanId, service, operation, startTime, duration, tags, status }]
+
+// Trace Query API (Jaeger UI / developer tools)
+GET /api/v1/traces/{traceId}
+  Response: { traceId, spans: [...], duration, services: [...] }
+
+GET /api/v1/traces?service=auth&minDuration=500ms&limit=20
+  Response: { traces: [{ traceId, rootSpan, duration, services }] }
+
+GET /api/v1/services
+  Response: { services: ["auth", "payments", "inventory", ...] }</code></pre></div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Head-based sampling:</strong> Sampling decision made at trace root (first service). Propagated downstream via traceparent sampled flag (1=sample, 0=drop). Simple, predictable overhead, but cannot sample based on outcome -- you do not know if the trace will be slow until it is complete.</p>
+          <p><strong>Tail-based sampling:</strong> All spans buffered in-memory. Sampling decision made when trace is complete. Can use trace characteristics: is it slow? Did it have errors? This is the correct approach for capturing outliers -- slow traces are captured at higher rates than fast ones.</p>
+          <p><strong>Adaptive sampling:</strong> Start with 1% base rate. If a trace has p99 latency &gt; threshold, upgrade to 100% sample rate for that trace. Slow traces and error traces are always written; fast normal traces are sampled probabilistically.</p>
+          <p><strong>W3C Traceparent header format:</strong></p>
+          <p><code>traceparent: 00-{16-byte traceId}-{8-byte spanId}-{flags}</code></p>
+          <p>Flags byte: 0x01 = sampled. Services check this flag before creating child spans.</p></div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body"><ul>
+            <li><strong>Head-based vs tail-based trade-off:</strong> Head-based: zero buffering, simple. Tail-based: requires buffering all spans (memory-intensive), complex. For debugging production issues, tail-based is far more valuable -- you can guarantee slow/error traces are captured.</li>
+            <li><strong>Storage cost:</strong> Even at 1% sampling, 7-day retention requires ~3TB of span data + 300GB Elasticsearch index. Manageable but requires dedicated cluster separate from application Elasticsearch.</li></ul></div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body"><p>Distributed tracing = W3C traceparent propagation + adaptive tail-based sampling + Cassandra storage (by trace_id) + Elasticsearch index (by service/latency/tags). Key insight: always capture error traces and slow traces regardless of base sample rate.</p></div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Decision</th><th>Head-based Sampling</th><th>Tail-based Sampling</th></tr></thead>
+            <tbody>
+              <tr><td>When to decide</td><td>At trace root (start)</td><td>After trace completes (end)</td></tr>
+              <tr><td>Can capture slow outliers</td><td>No -- decision before outcome known</td><td>Yes -- decision after duration known</td></tr>
+              <tr><td>Memory overhead</td><td>None -- spans dropped immediately</td><td>High -- all spans buffered until trace complete</td></tr>
+              <tr><td>Implementation complexity</td><td>Low</td><td>High -- consistent hashing by traceId required</td></tr>
+            </tbody>
+          </table></div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body"><pre><code class="language-java">/**
+ * TraceSampler -- adaptive sampling that ensures slow/error traces are always captured.
+ * Base sampling rate: 1%. Traces exceeding latency threshold: 100% sampled.
+ */
+public class TraceSampler {
+
+    private static final double BASE_SAMPLE_RATE = 0.01; // 1% default
+    private static final long SLOW_TRACE_THRESHOLD_MS = 500; // 500ms = slow
+    private static final String SAMPLED_FLAG = "01";
+    private static final String NOT_SAMPLED_FLAG = "00";
+
+    private final Random random = new Random();
+
+    /**
+     * Decides whether to sample a completed trace.
+     * Prioritizes: (1) error traces, (2) slow traces, (3) probabilistic base rate.
+     */
+    public boolean shouldSample(String traceId, long durationMs, boolean hasErrors) {
+        if (hasErrors) {
+            return true; // Always sample error traces for debugging
+        }
+        if (durationMs &gt; SLOW_TRACE_THRESHOLD_MS) {
+            return true; // Always sample slow traces for performance analysis
+        }
+        return random.nextDouble() &lt; BASE_SAMPLE_RATE;
+    }
+
+    /**
+     * Generates W3C traceparent header for a new root span.
+     */
+    public String generateTraceparent(String traceId, String spanId, boolean sampledDecision) {
+        String sampledFlag = sampledDecision ? SAMPLED_FLAG : NOT_SAMPLED_FLAG;
+        return "00-" + traceId + "-" + spanId + "-" + sampledFlag;
+    }
+
+    /**
+     * Parses a traceparent header to extract trace context.
+     * Called by downstream services to continue the trace.
+     */
+    public TraceContext parseTraceparent(String traceparentHeader) {
+        if (traceparentHeader == null || traceparentHeader.isEmpty()) {
+            return TraceContext.newTrace(BASE_SAMPLE_RATE);
+        }
+        String[] parts = traceparentHeader.split("-");
+        if (parts.length &lt; 4) {
+            return TraceContext.newTrace(BASE_SAMPLE_RATE);
+        }
+        boolean isSampled = SAMPLED_FLAG.equals(parts[3]);
+        return new TraceContext(parts[1], parts[2], isSampled);
+    }
+
+    public record TraceContext(String traceId, String parentSpanId, boolean isSampled) {
+        static TraceContext newTrace(double sampleRate) {
+            return new TraceContext(
+                UUID.randomUUID().toString().replace("-", ""),
+                null,
+                Math.random() &lt; sampleRate
+            );
+        }
+    }
+}</code></pre></div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-tracing-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why does simple 1% random sampling fail to capture the traces you most need for debugging?" data-options='["1% sampling creates too much storage overhead", "Slow outliers (p99 latency) represent ~1% of traces. Random 1% sampling captures only 0.01% of slow traces -- missing almost all of them. You are most likely to debug the fast 99% while the actual slow paths go unsampled. Adaptive sampling solves this by always capturing slow traces regardless of base sampling rate.", "1% sampling causes incorrect latency histogram calculations", "Random sampling requires a centralized coordination service"]' data-correct="1" data-explanation="This is a well-known limitation of uniform sampling for observability. A request taking 5 seconds is interesting; a request taking 10ms is not. If both are sampled at 1%, you see 1% of interesting traces and 1% of boring traces. Tail-based adaptive sampling inverts this: slow traces at 100%, fast traces at 1%." style="display:none"></div>
+          <div data-question="How does the W3C traceparent header propagate sampling decisions across microservices?" data-options='["Each service makes an independent sampling decision based on its own sample rate", "The traceparent header contains a flags byte where bit 0 = sampled. Service A sets flags=0x01 (sampled) and includes it in all outbound HTTP calls. Service B reads the header, sees sampled=true, and creates a child span. The sampling decision propagates to all downstream services automatically.", "Services communicate sampling decisions via a separate gRPC metadata call", "The load balancer strips trace headers between services for security reasons"]' data-correct="1" data-explanation="Propagating the sampling decision via header is critical for trace completeness. If each service independently decided to sample, you would get partial traces -- some spans captured, some not -- making the trace useless. The root service decides once; all downstream services respect that decision via the sampled flag." style="display:none"></div>
+          <div data-question="Tail-based sampling requires buffering all spans before making a sampling decision. What is the key implementation challenge?" data-options='["Tail-based sampling requires a relational database to store all spans temporarily", "All spans for a trace must be buffered until the trace is complete. For long-running traces, this requires significant memory. Additionally, the trace must be routed to the same collector instance (consistent hashing by traceId), otherwise span assembly requires expensive cross-instance coordination.", "Tail-based sampling cannot handle error traces, only slow traces", "Buffering spans requires a distributed lock per active trace"]' data-correct="1" data-explanation="Memory and routing are the two challenges. Memory: a 1-minute trace with 100 spans at 500 bytes each = 50KB held per trace. At 100K concurrent traces: 5GB RAM minimum. Routing: consistent hashing of traceId to collector instance ensures all spans go to the same buffer, enabling in-memory assembly." style="display:none"></div>
+          <div data-question="What is the span parent_span_id field used for in trace visualization?" data-options='["parent_span_id identifies which process or machine created the span", "parent_span_id reconstructs the call tree: each span except the root has a parent_span. The UI builds a Gantt chart by starting with the root span (parent=null), then attaching child spans as branches. Depth shows the call hierarchy: frontend to API gateway to auth service to database query.", "parent_span_id is used for billing and attribution purposes across teams", "parent_span_id links spans across different trace IDs for distributed transactions"]' data-correct="1" data-explanation="The tree structure of a trace is encoded entirely in parent_span_id. Given all spans for a trace_id, you can reconstruct the complete call graph. Root span = the incoming request. Child spans = downstream calls. Grandchild spans = calls made by downstream services. Visual timeline overlaps show parallelism." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="api-gateway.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: API Gateway &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="analytics-pipeline.html" class="btn btn--outline">&larr; Analytics Pipeline</a>
+        <a href="api-gateway.html" class="btn btn--primary">Next: API Gateway &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

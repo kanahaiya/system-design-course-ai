@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Distributed Log Aggregation (ELK Stack) &mdash; MAANG System Design RESHADED walkthrough.">
+  <title>Design Distributed Log Aggregation (ELK Stack) &mdash; MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-logs" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-logs" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span><span>Tier 3</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Observability</span>
+        </div>
+        <h1 class="module-header__title">Design Distributed Log Aggregation (ELK Stack)</h1>
+        <p class="module-header__desc">Log aggregation has a paradox: the time you most need logs (during an outage) is when the system is most stressed. The solution: decouple log generation from processing via Kafka, and use lightweight local agents that will not block application threads.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item">&#x1F3E2; Elasticsearch, Splunk, Datadog Logs</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+        </div>
+      </header>
+      <section class="content-section" id="requirements"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><h3>Functional Requirements</h3><ul>
+            <li>Collect logs from distributed services (structured JSON logs preferred)</li>
+            <li>Full-text search: find all logs with a specific error message or trace ID</li>
+            <li>Tail logs in real-time for a specific service</li>
+            <li>Retention: searchable for 30 days, archived for 1 year</li>
+            <li>Alerting: notify on error rate spike or specific error patterns</li></ul><h3>Non-Functional Requirements</h3><ul>
+            <li><strong>Scale:</strong> 1M log lines/sec from 10K services</li>
+            <li><strong>Latency:</strong> Logs searchable within 30 seconds of generation</li>
+            <li><strong>Durability:</strong> Never lose logs even during Elasticsearch downtime</li>
+            <li><strong>Zero impact:</strong> Log shipping must not block application threads</li></ul></div></section>
+      <section class="content-section" id="estimation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><ul>
+            <li>1M logs/sec &times; avg 500 bytes = 500MB/sec = 43TB/day raw</li>
+            <li>Elasticsearch indexing overhead (~2x raw): 86TB/day &rarr; 2.6PB/month without tiering</li>
+            <li>With hot/warm/cold: SSD (7 days) &rarr; HDD (30 days) &rarr; S3 (1 year) &rarr; delete</li>
+            <li>Compressed S3 archive: 43TB/day &times; 0.1 (gzip) &times; 365 = 1.6PB/year</li></ul></div></section>
+      <section class="content-section" id="schema"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Log entries (Elasticsearch index per day)
+// Index: logs-{service}-{YYYY-MM-DD}
+log_entry:
+    "@timestamp"  ISO8601 datetime
+    level         enum: DEBUG INFO WARN ERROR FATAL
+    service       string: "auth-service"
+    trace_id      string: for correlation with distributed traces
+    span_id       string
+    message       text (full-text indexed)
+    exception     text (stack trace)
+    fields        object: {userId, requestId, ...}
+
+// Hot storage: SSD-backed Elasticsearch (last 7 days, fast search)
+// Warm storage: HDD-backed Elasticsearch (7-30 days, slower search)
+// Cold storage: S3 Parquet (30-365 days, batch queries only)</code></pre></div></section>
+      <section class="content-section" id="hld"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body"><ul>
+            <li><strong>Log agents (Fluentd/Filebeat):</strong> Sidecar or DaemonSet in each pod. Tails log files (stdout/stderr). Parses and enriches (add service name, Kubernetes labels). Batches to Kafka. Async &mdash; never blocks application.</li>
+            <li><strong>Kafka buffer:</strong> Absorbs log bursts during spikes. Decouples agent from Logstash. If Logstash is slow, Kafka queues the backlog without losing data. Retention: 7 days.</li>
+            <li><strong>Logstash / Kafka consumer:</strong> Parses log format (regex/grok for unstructured, direct JSON for structured). Enriches (GeoIP, user lookup). Writes to Elasticsearch index.</li>
+            <li><strong>Elasticsearch cluster:</strong> Hot nodes (SSD, last 7 days). Warm nodes (HDD, 7-30 days). Index Lifecycle Management (ILM) auto-migrates from hot to warm to cold.</li>
+            <li><strong>Kibana:</strong> Query UI, saved searches, dashboards, alerting on log patterns.</li></ul></div></section>
+      <section class="content-section" id="apis"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Log ingestion (internal -- called by log agents, not directly by applications)
+POST /api/v1/logs/_bulk
+Body: [{ "@timestamp": "...", level: "ERROR", service: "auth", message: "...", trace_id: "..." }]
+
+// Log search API (Kibana / developer tools)
+POST /api/v1/logs/_search
+Body: { query: { match: { message: "NullPointerException" } }, sort: [{ "@timestamp": "desc" }] }
+
+// Real-time log tail
+GET /api/v1/logs/tail?service=auth-service&level=ERROR  (Server-Sent Events)
+
+// Alert rule management
+POST /api/v1/alerts/rules  { condition: "error_rate > 10 per minute", notify: "pagerduty" }</code></pre></div></section>
+      <section class="content-section" id="deepdive"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body">
+          <p><strong>Why Kafka between agents and Elasticsearch?</strong></p>
+          <ul>
+            <li>Elasticsearch has variable throughput -- slow during shard rebalancing or GC pauses. Without Kafka, a slow Elasticsearch would back-pressure to agents, which would back-pressure to applications, blocking log writes and potentially impacting application performance.</li>
+            <li>Kafka provides durable buffering: if Elasticsearch is down for 4 hours, logs queue in Kafka. When Elasticsearch recovers, it replays from the Kafka offset.</li>
+            <li>Multiple consumers: Kafka enables consuming the same log stream for different purposes -- Elasticsearch for search, ClickHouse for metrics, S3 for archival.</li>
+          </ul>
+          <p><strong>Structured logging (JSON):</strong></p>
+          <p>JSON logs: <code>{"level":"ERROR","msg":"DB timeout","trace_id":"abc123","latency_ms":5001}</code></p>
+          <p>Benefits: no parsing needed in Logstash, fields are directly indexed, easy to search by structured fields. Switch from string-based log parsing to direct JSON ingestion reduces Logstash CPU by ~60%.</p>
+          <p><strong>Log sampling for high-volume services:</strong> A high-throughput service might emit 1M DEBUG logs/sec. Sample DEBUG/INFO at 1%; always store WARN/ERROR/FATAL. Reduces storage 10-100x while preserving the actionable logs.</p></div></section>
+      <section class="content-section" id="evaluate"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2><div class="content-section__body"><ul>
+            <li><strong>Log loss risk:</strong> Agents buffer logs locally on disk before sending to Kafka (persistent queue). If the pod dies, the local buffer is lost. For critical logs: use application-level async logging to Kafka directly (no agent intermediary).</li>
+            <li><strong>Elasticsearch mapping explosion:</strong> Dynamic field mapping: every new JSON field becomes a new Elasticsearch field. 10M distinct field names = mapping explosion leading to OOM. Mitigation: explicit index mapping, reject unknown fields, or use Elasticsearch dynamic mapping limits.</li></ul></div></section>
+      <section class="content-section" id="deliver"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2><div class="content-section__body"><p>Log aggregation = App to log agent to Kafka to Logstash to Elasticsearch to Kibana. Kafka is the critical buffer. Hot/warm/cold tiering reduces cost 10-50x. Structured JSON logs eliminate Logstash parsing overhead. Always sample DEBUG/INFO; never sample ERROR/FATAL.</p></div></section>
+      <section class="content-section" id="tradeoffs"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2><div class="content-section__body"><table class="tradeoff-table">
+            <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th></tr></thead>
+            <tbody>
+              <tr><td>Log format</td><td>Structured JSON: no parsing, direct field indexing, searchable fields</td><td>Unstructured text: human-readable, requires grok parsing, slower</td></tr>
+              <tr><td>Kafka usage</td><td>With Kafka: durable buffer, survives ES downtime</td><td>Direct to ES: simpler, log loss during ES issues</td></tr>
+              <tr><td>Sampling</td><td>Sample DEBUG 1%, INFO 10%, always keep ERROR</td><td>No sampling: 100% capture, 100x storage cost</td></tr>
+              <tr><td>Retention</td><td>Tiered (SSD/HDD/S3): 10-50x cost reduction</td><td>All on SSD: fast queries, very expensive</td></tr>
+            </tbody>
+          </table></div></section>
+      <section class="content-section" id="implementation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2><div class="content-section__body"><pre><code class="language-java">/**
+ * LogIngestionPipeline -- parses incoming log batches and publishes to Kafka asynchronously.
+ * Never blocks the calling thread; failures are logged internally.
+ */
+public class LogIngestionPipeline {
+
+    private static final String LOG_TOPIC = "app-logs";
+
+    private final KafkaProducer&lt;String, String&gt; kafkaProducer;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public LogIngestionPipeline(KafkaProducer&lt;String, String&gt; kafkaProducer) {
+        this.kafkaProducer = kafkaProducer;
+    }
+
+    /**
+     * Ingests a raw log line, parses it to structured JSON, and publishes to Kafka.
+     * Runs on a virtual thread -- never blocks the application.
+     */
+    public void ingestLog(String rawLogLine, String serviceName) {
+        Thread.ofVirtual().start(() -&gt; {
+            try {
+                StructuredLogEntry entry = parseLogLine(rawLogLine, serviceName);
+                if (shouldSample(entry.getLevel())) {
+                    String serialized = objectMapper.writeValueAsString(entry);
+                    kafkaProducer.send(
+                        new ProducerRecord&lt;&gt;(LOG_TOPIC, serviceName, serialized),
+                        (metadata, sendException) -&gt; {
+                            if (sendException != null) {
+                                System.err.println("[LogIngestionPipeline] Kafka send failed: "
+                                                   + sendException.getMessage());
+                            }
+                        }
+                    );
+                }
+            } catch (Exception parseException) {
+                System.err.println("[LogIngestionPipeline] Parse error: " + parseException.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Sampling policy: always store WARN/ERROR/FATAL; sample DEBUG/INFO.
+     * Reduces storage 10-100x while preserving actionable logs.
+     */
+    private boolean shouldSample(String logLevel) {
+        return switch (logLevel.toUpperCase()) {
+            case "WARN", "ERROR", "FATAL" -&gt; true;       // Always keep
+            case "INFO"  -&gt; Math.random() &lt; 0.10;        // 10% of INFO
+            case "DEBUG" -&gt; Math.random() &lt; 0.01;        // 1% of DEBUG
+            default      -&gt; true;
+        };
+    }
+
+    private StructuredLogEntry parseLogLine(String rawLogLine, String serviceName) {
+        try {
+            StructuredLogEntry entry = objectMapper.readValue(rawLogLine, StructuredLogEntry.class);
+            if (entry.getService() == null) { entry.setService(serviceName); }
+            return entry;
+        } catch (JsonProcessingException parseException) {
+            // Fallback: unstructured log -- wrap in structured format
+            return new StructuredLogEntry(
+                Instant.now().toString(), "INFO", serviceName, rawLogLine, null, null
+            );
+        }
+    }
+}</code></pre></div></section>
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-logs-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 4</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+          <div data-question="Why is Kafka placed between log agents and Elasticsearch in the ELK pipeline?" data-options='["Kafka provides encryption for log data in transit to Elasticsearch", "Elasticsearch has variable throughput -- slow during shard rebalancing or GC pauses. Without Kafka, a slow Elasticsearch would back-pressure to agents, which would back-pressure to applications, blocking log writes. Kafka absorbs log bursts durably -- if Elasticsearch is down, logs queue in Kafka until it recovers.", "Kafka provides log parsing and enrichment that Logstash cannot do", "Kafka is required because Elasticsearch does not support direct batch writes"]' data-correct="1" data-explanation="This is the classic buffer-against-slow-consumer pattern. Log pipelines must never block the application. Kafka durable high-throughput queue decouples the fast producers (agents) from the variable-speed consumer (Elasticsearch). Log loss tolerance is zero -- Kafka 7-day retention ensures logs survive extended Elasticsearch outages." style="display:none"></div>
+          <div data-question="What is hot/warm/cold tiering for log storage, and why is it used?" data-options='["Hot/warm/cold refers to the temperature at which log data is physically stored", "Recent logs (hot: last 7 days, SSD) are searched frequently during active debugging. Older logs (warm: 7-30 days, HDD) are searched occasionally. Archive (cold: 30+ days, S3) is rarely accessed but required for compliance. Tiering reduces cost: SSD is 10x more expensive than HDD, which is 100x more expensive than S3.", "Tiering is only necessary for log volumes over 1PB", "Hot/warm/cold tiering requires completely separate Elasticsearch clusters"]' data-correct="1" data-explanation="Cost breakdown is the driver: SSD ($0.20/GB) vs HDD ($0.04/GB) vs S3 ($0.003/GB). 43TB/day x 30 days = 1.3PB. On pure SSD: $260K/month. On tiered storage (7 days SSD + 23 days HDD + archive): ~$70K/month. Elasticsearch ILM automates migration between tiers based on index age." style="display:none"></div>
+          <div data-question="Why is structured logging (JSON) preferred over traditional string-formatted log lines?" data-options='["JSON log files are smaller than equivalent plain-text log files", "Structured logs (JSON) provide ready-made fields directly indexed in Elasticsearch without parsing. Searching for all logs with trace_id=abc123 is a direct field lookup. Unstructured logs require regex parsing (grok patterns) -- CPU-intensive, error-prone, and breaks when log format changes.", "JSON logs are required by Kubernetes log collection infrastructure", "Structured logging automatically prevents log injection security attacks"]' data-correct="1" data-explanation="Structured fields are first-class searchable attributes. In Kibana: trace_id:abc123 on a structured log is an index lookup (O(1)). On unstructured: it is a full-text regex scan (O(N)). The operational benefit during incidents: trace_id in logs, traces, and metrics all use the same ID -- you can pivot seamlessly between what happened (logs) and where is it slow (traces)." style="display:none"></div>
+          <div data-question="Why is log sampling recommended for DEBUG/INFO levels in high-throughput services?" data-options='["Debug logs should never be emitted in production under any circumstances", "High-throughput services may emit 1M+ DEBUG logs/second. Storing all of them is expensive and rarely useful -- most debug logs are routine. Sampling DEBUG/INFO at 1-10% reduces storage cost 10-100x while preserving WARN/ERROR/FATAL logs which are the actionable signals.", "Log sampling permanently loses information that can never be recovered", "Log sampling is only needed for services with more than 10K requests/sec"]' data-correct="1" data-explanation="The cost math: 1M/sec DEBUG logs x 500 bytes x 86400s x 30 days = 1.3PB/month. At 1% sampling: 13TB/month. For most debugging, the 1% sample is sufficient to identify patterns. For specific investigations, you can add a request flag (X-Enable-Debug-Logging: true) to force 100% sampling for that request path only." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite"><div class="quiz__result-score"></div><div class="quiz__result-label"></div><div style="margin-top:var(--space-4)"><button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button></div></div>
+        </div>
+      </section>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)"><a href="multi-tenant-saas.html" class="btn btn--outline">&larr; Multi-Tenant SaaS</a><span>Course Complete! &#127881;</span></div>
+    </main>
+  </div>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Hotel Booking System — RESHADED walkthrough covering double-booking prevention, optimistic locking, inventory management, and payment hold patterns for MAANG interviews.">
+  <title>Design Hotel Booking System — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-hotel" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=hotel" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Inventory/Concurrency</span>
+        </div>
+        <h1 class="module-header__title">Design Hotel Booking System</h1>
+        <p class="module-header__desc">The hard problem: two users simultaneously book the last available room. Without proper concurrency control, both succeed — double booking. Optimistic locking with a version field is the standard production approach.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Booking.com, Airbnb, Hotels.com</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏨</span> Inventory concurrency</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Search hotels by location, dates, guests — show availability and pricing</li>
+            <li>Book a room: reserve specific room type for date range</li>
+            <li>View and cancel bookings</li>
+            <li>Hotel management: add rooms, manage pricing, update availability</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>No double-booking:</strong> A room can only be booked once per date range — the primary correctness requirement</li>
+            <li><strong>Scale:</strong> 500M users, 1M bookings/day, 10M search queries/day</li>
+            <li><strong>Latency:</strong> Search results &lt;1s; booking confirmation &lt;3s</li>
+            <li><strong>Read/write ratio:</strong> 100:1 — search dominates; booking is the rare write</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li>1M bookings/day = ~12 TPS average; spikes during sales → 500 TPS</li>
+            <li>10M searches/day = ~115 search QPS; CDN/cache absorbs most repeated queries</li>
+            <li>Room inventory: 500K hotels × avg 100 rooms × 365 days = 18B availability records/year → ElasticSearch for search, PostgreSQL for booking</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// PostgreSQL — booking (ACID required for no double-booking)
+hotels: hotel_id, name, location, star_rating, amenities
+rooms: room_id, hotel_id, room_type, capacity, price_per_night
+
+// Key: version field enables optimistic locking
+room_inventory:
+    room_id         UUID,
+    date            DATE,
+    total_count     INT,  -- total rooms of this type available
+    booked_count    INT,  -- currently booked
+    version         BIGINT DEFAULT 0,  -- incremented on every update
+    PRIMARY KEY (room_id, date)
+
+bookings:
+    booking_id   UUID PRIMARY KEY,
+    user_id      UUID,
+    room_id      UUID,
+    check_in     DATE,
+    check_out    DATE,
+    status       ENUM(pending, confirmed, cancelled),
+    total_price  DECIMAL(10,2),
+    created_at   TIMESTAMP</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Search Service:</strong> ElasticSearch indexed with hotel location, amenities, room types. Availability pre-computed and cached. Read-heavy, eventual consistency acceptable.</li>
+            <li><strong>Booking Service:</strong> Strong consistency required. PostgreSQL with optimistic locking. Checks availability, creates booking, decrements inventory in one transaction.</li>
+            <li><strong>Pricing Service:</strong> Dynamic pricing based on demand, season, competitor rates. Caches prices in Redis (TTL 5 min).</li>
+            <li><strong>Payment Service:</strong> Authorization hold on card during booking window. Capture on check-in. Release hold on cancellation.</li>
+            <li><strong>Notification Service:</strong> Email/SMS confirmation via event-driven (Kafka consumer).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">GET  /v1/hotels/search?location={}&checkIn={}&checkOut={}&guests={}
+GET  /v1/hotels/{hotelId}/rooms?checkIn={}&checkOut={}   // availability for specific hotel
+POST /v1/bookings
+  Body: { roomId, checkIn, checkOut, paymentMethodId }
+  Returns: { bookingId, status, confirmationNumber }
+GET  /v1/bookings/{bookingId}
+POST /v1/bookings/{bookingId}/cancel</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Preventing Double-Booking<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Three approaches, one winner:</strong></p>
+          <p><strong>Option A — Pessimistic locking (SELECT FOR UPDATE):</strong></p>
+          <pre><code class="language-java">BEGIN;
+SELECT * FROM room_inventory WHERE room_id=? AND date BETWEEN ? AND ? FOR UPDATE;
+-- holds row lock until transaction commits
+UPDATE room_inventory SET booked_count=booked_count+1 WHERE ...;
+INSERT INTO bookings ...;
+COMMIT;</code></pre>
+          <p>Problem: row-level lock blocks all concurrent bookings for that room. Under contention, threads queue up — poor throughput.</p>
+          <p><strong>Option B — Optimistic locking (version field + CAS):</strong></p>
+          <pre><code class="language-java">// Read current state including version
+SELECT booked_count, total_count, version FROM room_inventory WHERE ...;
+// Only update if version hasn't changed (no concurrent modification)
+UPDATE room_inventory SET booked_count=booked_count+1, version=version+1
+WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
+// If 0 rows updated: version changed → retry</code></pre>
+          <p>Winner for low contention (most rooms). No lock held; retry on conflict. For hot rooms during a sale (high contention), retry loops become expensive.</p>
+          <p><strong>Option C — Redis atomic decrement:</strong> Store available_count in Redis. DECR → if result &lt; 0, INCR back and reject. Fast but requires Redis→DB sync.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Hot room scenario (Black Friday):</strong> 1,000 concurrent requests for 1 room. Optimistic locking → 999 retries, 1 succeeds. Under extreme contention, consider Redis-based request queue to serialize access.</li>
+            <li><strong>Date range booking:</strong> Must check availability for every night in the range atomically. Optimistic lock all rows in the range; if any row update fails, rollback the whole booking.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p>We designed a hotel booking system with zero double-booking tolerance. Key decisions: optimistic locking with version field for low-contention booking atomicity, ElasticSearch for availability search, Redis for pricing cache, and a payment authorization-hold pattern for risk management.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <tbody>
+                <tr><td>Double-booking prevention</td><td>Optimistic locking (version CAS)</td><td>Pessimistic locking (SELECT FOR UPDATE)</td><td>Most bookings have low contention. Optimistic avoids holding locks, scales better. Pessimistic only better when contention is consistently high.</td></tr>
+                <tr><td>Search storage</td><td>ElasticSearch</td><td>PostgreSQL full-text</td><td>Geo-search, faceted filtering, full-text search on amenities — ElasticSearch excels. PostgreSQL FTS is weaker for geo-spatial queries.</td></tr>
+                <tr><td>Payment timing</td><td>Authorize on booking, capture on check-in</td><td>Charge immediately</td><td>Authorization holds funds without charging. If booking is cancelled before check-in, the hold releases automatically — no refund needed.</td></tr>
+                <tr><td>Availability data</td><td>Separate room_inventory table</td><td>Query bookings table to compute availability</td><td>Pre-materialized availability avoids expensive COUNT queries across bookings on every search.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * BookingService — prevents double-booking via optimistic locking.
+ * The version field acts as a compare-and-swap guard:
+ * only the first concurrent transaction to update wins; others retry.
+ */
+public class BookingService {
+
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    private final DataSource dataSource;
+
+    public BookingService(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    /**
+     * Creates a booking for a room over a date range.
+     * Uses optimistic locking to prevent double-booking under concurrent requests.
+     *
+     * @throws BookingConflictException if room unavailable or all retries exhausted
+     */
+    public Booking createBooking(UUID roomId, UUID userId, LocalDate checkIn, LocalDate checkOut) {
+        for (int attempt = 0; attempt &lt; MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return attemptBooking(roomId, userId, checkIn, checkOut);
+            } catch (OptimisticLockException lockException) {
+                if (attempt == MAX_RETRY_ATTEMPTS - 1) {
+                    throw new BookingConflictException("Room no longer available after " + MAX_RETRY_ATTEMPTS + " attempts");
+                }
+                // Brief pause before retry to reduce thundering herd
+                sleepBriefly(50 * (attempt + 1));
+            }
+        }
+        throw new BookingConflictException("Booking failed after retries");
+    }
+
+    private Booking attemptBooking(UUID roomId, UUID userId, LocalDate checkIn, LocalDate checkOut) {
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                // Step 1: Read current inventory with version for all nights in date range
+                List&lt;InventoryRow&gt; inventoryRows = readInventoryWithVersion(connection, roomId, checkIn, checkOut);
+                validateAvailability(inventoryRows);
+
+                // Step 2: Optimistic update — only succeeds if version unchanged
+                int updatedRowCount = updateInventoryWithVersionCheck(connection, inventoryRows);
+                if (updatedRowCount != inventoryRows.size()) {
+                    connection.rollback();
+                    throw new OptimisticLockException("Concurrent modification detected");
+                }
+
+                // Step 3: Create booking record
+                Booking booking = insertBooking(connection, roomId, userId, checkIn, checkOut);
+                connection.commit();
+                return booking;
+
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
+        } catch (SQLException sqlException) {
+            throw new RuntimeException("[BookingService.attemptBooking] DB error", sqlException);
+        }
+    }
+
+    private int updateInventoryWithVersionCheck(Connection connection, List&lt;InventoryRow&gt; inventoryRows)
+            throws SQLException {
+        int totalUpdated = 0;
+        String updateSql = "UPDATE room_inventory SET booked_count = booked_count + 1, version = version + 1 " +
+                           "WHERE room_id = ? AND date = ? AND version = ? AND booked_count &lt; total_count";
+
+        try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
+            for (InventoryRow row : inventoryRows) {
+                statement.setObject(1, row.getRoomId());
+                statement.setDate(2, Date.valueOf(row.getDate()));
+                statement.setLong(3, row.getVersion()); // CAS: only update if version matches
+                totalUpdated += statement.executeUpdate();
+            }
+        }
+        return totalUpdated; // If &lt; inventoryRows.size(), a version mismatch occurred
+    }
+
+    private void validateAvailability(List&lt;InventoryRow&gt; inventoryRows) {
+        for (InventoryRow row : inventoryRows) {
+            if (row.getBookedCount() &gt;= row.getTotalCount()) {
+                throw new RoomUnavailableException("Room fully booked on " + row.getDate());
+            }
+        }
+    }
+
+    private void sleepBriefly(long milliseconds) {
+        try {
+            Thread.sleep(milliseconds);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // InventoryRow, Booking, BookingConflictException, OptimisticLockException,
+    // RoomUnavailableException are value objects / domain exceptions (not shown for brevity)
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-hotel-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Two users simultaneously try to book the last available room. With optimistic locking, what happens?" data-options='["Both bookings succeed because optimistic locking allows concurrent writes","Both bookings read the same version, both attempt UPDATE WHERE version=X. Only one UPDATE matches (version still X); the other gets 0 rows updated, detects the conflict, and retries — by which time booked_count >= total_count and the retry is rejected.","The database locks both rows until both transactions complete","The second request is queued and waits for the first to finish"]' data-correct="1" data-explanation="Optimistic locking uses the version number as a compare-and-swap: 'UPDATE … WHERE version = X' succeeds only if version is still X. Concurrent transactions race; one wins, one gets 0 updated rows and handles the conflict. No lock is held between read and write — this is why it scales better than pessimistic locking under low contention." style="display:none"></div>
+          <div data-question="Why is a pre-materialized room_inventory table preferred over computing availability by counting existing bookings?" data-options='["Counting bookings is not possible in SQL","Pre-materialized availability avoids an expensive COUNT/JOIN query across bookings on every search request. At 115 QPS, recomputing from bookings table would cause full table scans under load.","Pre-materialized tables provide stronger consistency than computed values","The bookings table doesn't store room type information"]' data-correct="1" data-explanation="Availability is read 100× more than written. Pre-materializing the booked_count means availability reads are a simple index lookup (room_id, date). Computing from bookings requires scanning potentially millions of rows per query. Materialization is a classic read-optimization pattern." style="display:none"></div>
+          <div data-question="Why authorize a credit card on booking rather than charging immediately?" data-options='["Authorization is required by Visa/Mastercard for online transactions","Authorization holds funds without charging. If the guest cancels, the hold releases automatically with no refund needed. This avoids charging-then-refunding friction and eliminates chargeback risk for cancellations.","Immediate charging is technically impossible through payment APIs","Authorization allows the hotel to set a higher price than initially shown"]' data-correct="1" data-explanation="The authorize-then-capture pattern is standard for travel and hospitality. Authorize = reserve funds (no money moves). Capture = charge (on check-in). Release = let the hold expire (on cancellation). This prevents: holding customer money for cancelled bookings, refund processing delays, and chargeback disputes for no-shows." style="display:none"></div>
+          <div data-question="Under a high-contention scenario (1,000 users trying to book the last room), what are the downsides of optimistic locking?" data-options='["Optimistic locking cannot handle more than 10 concurrent users","Under high contention, most transactions read an available room, then find the version has changed on update — causing cascading retries. With 1,000 concurrent requests, 999 will retry multiple times, creating significant DB load. Pessimistic locking or a Redis-based queue serializes access more efficiently in this scenario.","Optimistic locking requires more memory than pessimistic locking","The version number can overflow under high contention"]' data-correct="1" data-explanation="Optimistic locking shines at low contention (most bookings). At high contention, the retry-and-recheck loop amplifies DB load — each retry requires a read + attempted write. For extreme cases (flash sales), a Redis-based request queue (serialize first-come-first-served) or pessimistic locking is more appropriate." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="stock-exchange.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Stock Exchange →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="code-judge.html" class="btn btn--outline">← Code Judge</a>
+        <a href="stock-exchange.html" class="btn btn--primary">Next: Stock Exchange →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Dropbox cloud file storage: 500M users, 1B files, 10PB storage, chunked uploads for large files, delta sync across devices, S3 backend with content-addressed deduplication.">
+  <title>Design Dropbox / Cloud File Storage — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/dropbox/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-dropbox" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=dropbox" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design Dropbox / Cloud File Storage</h1>
+        <p class="module-header__desc">Design a cloud file storage service for 500M users with 10PB storage, resumable chunked uploads for files up to 5GB, delta sync across devices within 30 seconds, S3 backend, and content-addressed deduplication.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Dropbox, Google Drive, OneDrive, Box, iCloud</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Upload files up to 5GB from any device</li>
+          <li>Download files on any linked device</li>
+          <li>Sync changes across all a user's devices within 30 seconds</li>
+          <li>Share files and folders with other users (view/edit permissions)</li>
+          <li>File versioning (keep last 30 versions)</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Scale:</strong> 500M users, 1B files total, 10PB storage</li>
+          <li><strong>Upload resilience:</strong> resume interrupted uploads from last successful chunk</li>
+          <li><strong>Sync latency:</strong> &lt; 30s from file change to visible on other devices</li>
+          <li><strong>Availability:</strong> 99.99% for sync service, 99.9% for upload/download</li>
+          <li><strong>Deduplication:</strong> identical files (even across users) stored only once</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>The chunking question is always asked:</strong> How do you upload a 5GB file reliably over a slow or interrupted connection? Answer: split into 4MB chunks, hash each chunk, upload chunks in parallel, track which chunks succeeded, resume by uploading only missing chunks.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Total storage</div>
+            <div class="estimation-card__value">10 PB</div>
+            <div class="estimation-card__note">1B files × avg 10MB</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Upload bandwidth/day</div>
+            <div class="estimation-card__value">1 TB/day</div>
+            <div class="estimation-card__note">1M uploads × avg 1MB</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Sync events/day</div>
+            <div class="estimation-card__value">1M</div>
+            <div class="estimation-card__note">500M × 2 syncs ÷ 1000 (not all active)</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Metadata DB size</div>
+            <div class="estimation-card__value">~2 TB</div>
+            <div class="estimation-card__note">1B files × ~2KB metadata each</div>
+          </div>
+        </div>
+        <p>With deduplication, actual S3 storage is lower — studies show ~30% of files are identical across users (common documents, OS files). 10PB × 0.7 = 7PB effective. At 3x replication (S3 default): 21PB raw storage. At $0.023/GB this is ~$483K/month — a real cost consideration.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- MySQL: file metadata and directory structure
+CREATE TABLE files (
+    file_id      BIGINT PRIMARY KEY AUTO_INCREMENT,
+    owner_id     BIGINT NOT NULL,
+    name         VARCHAR(255) NOT NULL,
+    parent_id    BIGINT,                     -- NULL = root
+    size_bytes   BIGINT NOT NULL,
+    content_hash CHAR(64) NOT NULL,          -- SHA-256 of full file content
+    storage_key  VARCHAR(512),               -- S3 key if small file
+    version      INT DEFAULT 1,
+    created_at   TIMESTAMP,
+    updated_at   TIMESTAMP,
+    is_deleted   BOOLEAN DEFAULT FALSE,
+    INDEX idx_owner_parent (owner_id, parent_id),
+    INDEX idx_content_hash (content_hash)     -- dedup lookup
+);
+
+CREATE TABLE file_chunks (
+    chunk_id    BIGINT PRIMARY KEY AUTO_INCREMENT,
+    file_id     BIGINT NOT NULL,
+    chunk_index INT NOT NULL,                 -- 0-based sequence
+    chunk_hash  CHAR(64) NOT NULL,            -- SHA-256 of this chunk
+    storage_url VARCHAR(512) NOT NULL,        -- S3 URL for this chunk
+    UNIQUE KEY uq_file_chunk (file_id, chunk_index)
+);
+
+-- Sync events log (Cassandra, append-only, partition by user_id)
+CREATE TABLE sync_events (
+    user_id     BIGINT,
+    event_id    BIGINT,          -- monotonically increasing
+    file_id     BIGINT,
+    event_type  TEXT,            -- 'CREATED', 'MODIFIED', 'DELETED', 'MOVED'
+    device_id   TEXT,
+    occurred_at TIMESTAMP,
+    PRIMARY KEY (user_id, event_id)
+);
+
+-- Content-addressable store dedup index
+-- Key: content_hash (SHA-256)
+-- Value: s3_key, ref_count
+-- If content_hash already exists on upload: reuse S3 key (dedup!)</code></pre>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">Client chunks file</div>
+            <div class="hld-arrow">→ 4MB chunks</div>
+            <div class="hld-box">Upload Service</div>
+            <div class="hld-arrow">parallel PUT</div>
+            <div class="hld-box hld-box--storage">S3 (one key per chunk)</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Upload Service</div>
+            <div class="hld-arrow">commit metadata</div>
+            <div class="hld-box hld-box--storage">MySQL (files + chunks)</div>
+            <div class="hld-arrow">emit event</div>
+            <div class="hld-box">Kafka: file-updated</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Sync Service</div>
+            <div class="hld-arrow">consumes Kafka</div>
+            <div class="hld-box">Notifies other devices</div>
+            <div class="hld-arrow">GET /sync?last_event_id=N</div>
+            <div class="hld-box hld-box--client">Other Devices</div>
+          </div>
+        </div>
+        <p><strong>Upload flow:</strong> Client splits file into 4MB chunks → hashes each chunk → asks API which chunks are already stored (dedup check) → uploads only missing chunks to S3 → calls /files to commit the file record pointing to chunk S3 keys.</p>
+        <p><strong>Sync flow:</strong> Other devices of the same user long-poll <code>GET /sync?last_event_id=N</code>. The Sync Service returns all events since N from the Cassandra event log. The client downloads only the changed chunks (delta sync).</p>
+        <p><strong>Download flow:</strong> Client calls <code>GET /files/{fileId}</code> → gets list of chunk S3 URLs → downloads chunks in parallel → reassembles file. For small files (&lt; 1MB), the file is stored as a single S3 object (no chunking overhead).</p>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Initiate chunked upload
+POST /api/v1/uploads/initiate
+Body: { "fileName": "video.mp4", "fileSizeBytes": 5368709120,
+        "chunkSizeBytes": 4194304, "contentHash": "sha256:abc123..." }
+Response: { "uploadId": "up_xyz", "chunksRequired": [0, 1, 2, ..., 1279],
+            "chunksAlreadyPresent": [45, 67, 89] }  // dedup: skip these
+
+// Upload a single chunk
+PUT /api/v1/uploads/{uploadId}/chunks/{chunkIndex}
+Body: binary chunk data (exactly 4MB, except possibly last chunk)
+Headers: Content-MD5: {chunk_md5}  (integrity check)
+Response: { "chunkIndex": 0, "status": "RECEIVED" }
+
+// Commit upload (after all chunks uploaded)
+POST /api/v1/uploads/{uploadId}/commit
+Body: { "parentFolderId": 456 }
+Response: { "fileId": 789, "version": 1, "url": "/files/789" }
+
+// Get sync events since last_event_id (long-poll)
+GET /api/v1/sync?userId={id}&lastEventId={n}&timeout=30
+Response: { "events": [
+    { "eventId": 101, "fileId": 789, "type": "MODIFIED",
+      "changedChunks": [2, 5], "newVersion": 3 }
+], "latestEventId": 101 }
+
+// Download file (returns chunk URLs)
+GET /api/v1/files/{fileId}?version=latest
+Response: { "fileId": 789, "name": "video.mp4", "sizeBytes": 5368709120,
+            "chunkUrls": ["https://s3/chunk-0", "https://s3/chunk-1", ...] }</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Chunking for Large File Uploads</h2>
+        <p><strong>Why 4MB chunks?</strong> Smaller chunks (e.g., 256KB) = more S3 API calls, more overhead. Larger chunks (e.g., 16MB) = long retries on slow connections, less granular resume. 4MB balances throughput and retry granularity.</p>
+        <p><strong>Resume on interruption:</strong> Client calls <code>GET /uploads/{uploadId}/status</code> → gets list of received chunks → resumes uploading only missing chunks. No need to restart from byte 0.</p>
+        <p><strong>Delta sync:</strong> When a file is modified, only changed chunks are re-uploaded. A 1GB file where 1 page changes: 1 chunk (4MB) is uploaded instead of 1GB. Client computes chunk hashes locally and compares with the server's known chunk hashes for the previous version.</p>
+        <p><strong>Content-addressed storage (dedup):</strong> SHA-256 hash of chunk content → if another user's file has the same chunk hash, reuse the same S3 object. The S3 key is the chunk hash. Reference counting tracks how many files use each chunk; GC deletes chunks with ref_count = 0.</p>
+        <div class="callout callout--warning">
+          <strong>Security consideration:</strong> Hash-based dedup means an attacker who knows a file's hash could potentially confirm its existence without uploading it. For sensitive files, use HMACs instead of plain SHA-256: <code>HMAC(user_secret, content)</code> — unique per user, preventing cross-user hash collisions from being exploited.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>Concurrent edits on the same file from two devices:</strong> Device A and B both edit the same file offline. On reconnect, both try to upload. Second upload creates a conflict copy (e.g., "report (conflicted copy 2025-01-01).docx"). User manually resolves.</li>
+          <li><strong>Large folder sync (100K files):</strong> Instead of long-polling one event at a time, paginate: return up to 1000 events per sync request. Client processes in batches.</li>
+          <li><strong>Sync notification latency:</strong> Long-polling with 30s timeout means worst-case 30s delay. For near-real-time, use WebSockets or SSE (Server-Sent Events) for instant push on file change.</li>
+          <li><strong>Chunk GC:</strong> When a file is deleted or versioned, its chunks may still be referenced by other files (dedup). GC only deletes S3 objects when ref_count drops to 0. Run GC as a nightly batch job scanning the chunks table.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>Dropbox's architecture cleanly separates the <strong>data plane</strong> (chunks in S3 — high throughput, globally distributed) from the <strong>metadata plane</strong> (MySQL for file structure, Cassandra for sync events — low latency, strongly consistent). This separation is the correct pattern for any large-scale file storage system.</p>
+        <p>The chunking strategy solves three problems at once: (1) resumable uploads for unreliable connections; (2) parallel uploads for better throughput on fast connections; (3) delta sync that uploads only changed chunks, reducing bandwidth for large files by 99%+ in the common case of small edits.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Chunk size</td>
+                <td>4MB chunks</td>
+                <td>16MB chunks</td>
+                <td>4MB</td>
+                <td>16MB chunks are better for fast, stable connections but painful on slow/mobile: a single failure retries 16MB. 4MB balances retry cost with S3 API overhead (~1280 API calls for 5GB).</td>
+              </tr>
+              <tr>
+                <td>Sync mechanism</td>
+                <td>Polling (GET /sync every N seconds)</td>
+                <td>Long-polling (hold connection 30s)</td>
+                <td>Long-polling (upgrade to WebSocket later)</td>
+                <td>Regular polling at 5s intervals = 12 requests/minute/device with mostly empty responses. Long-polling reduces API calls by 10x. WebSocket is best for real-time but harder to scale.</td>
+              </tr>
+              <tr>
+                <td>Encryption</td>
+                <td>Server-side encryption (S3 manages keys)</td>
+                <td>Client-side encryption (user manages keys)</td>
+                <td>Server-side by default; client-side optional</td>
+                <td>Server-side: simpler UX, enables thumbnail generation, search. Client-side: better privacy but Dropbox can't generate previews. Offer client-side as opt-in for power users.</td>
+              </tr>
+              <tr>
+                <td>Deduplication scope</td>
+                <td>Per-user (same file = one copy per user)</td>
+                <td>Global (same file = one copy for all users)</td>
+                <td>Global with HMAC keys</td>
+                <td>Global dedup saves the most storage (30% of files are common). Use HMAC(user_key, chunk_hash) as the lookup key — prevents cross-user hash oracle attacks while still enabling dedup.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * FileChunker
+ * Splits a large file into fixed-size chunks, computes SHA-256 per chunk,
+ * tracks upload state in a local SQLite DB for resume capability.
+ */
+public class FileChunker {
+
+    private static final int CHUNK_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
+    private static final String HASH_ALGORITHM = "SHA-256";
+    private static final int MAX_PARALLEL_UPLOADS = 4;
+
+    private final UploadApiClient uploadApiClient;
+    private final ChunkUploadStateRepository stateRepository; // local SQLite
+
+    public FileChunker(UploadApiClient uploadApiClient,
+                       ChunkUploadStateRepository stateRepository) {
+        this.uploadApiClient = uploadApiClient;
+        this.stateRepository = stateRepository;
+    }
+
+    /**
+     * Uploads a file using chunked upload with resume capability.
+     * Computes SHA-256 per chunk for deduplication and integrity.
+     * Uploads pending chunks in parallel (up to MAX_PARALLEL_UPLOADS).
+     *
+     * @param localFile  the file to upload
+     * @param parentFolderId  the destination folder on the server
+     * @return the resulting file_id on the server after commit
+     */
+    public long uploadFile(File localFile, long parentFolderId) throws IOException {
+        List&lt;ChunkDescriptor&gt; allChunks = computeChunkDescriptors(localFile);
+        String fileContentHash = computeFileHash(localFile);
+
+        // Initiate or resume upload
+        UploadSession uploadSession = initializeOrResumeUpload(
+            localFile.getName(), localFile.length(), fileContentHash, allChunks
+        );
+
+        // Upload only chunks that the server doesn't have yet
+        List&lt;ChunkDescriptor&gt; missingChunks = allChunks.stream()
+            .filter(chunk -> uploadSession.missingChunkIndexes().contains(chunk.chunkIndex()))
+            .toList();
+
+        uploadChunksInParallel(localFile, missingChunks, uploadSession.uploadId());
+
+        // Commit: tell server the upload is complete
+        return uploadApiClient.commitUpload(uploadSession.uploadId(), parentFolderId);
+    }
+
+    /**
+     * Splits the file into 4MB chunk descriptors (no actual reading yet — just metadata).
+     * Actual chunk bytes are read during upload.
+     */
+    private List&lt;ChunkDescriptor&gt; computeChunkDescriptors(File localFile) throws IOException {
+        List&lt;ChunkDescriptor&gt; chunks = new ArrayList&lt;&gt;();
+        long fileLength = localFile.length();
+        int totalChunks = (int) Math.ceil((double) fileLength / CHUNK_SIZE_BYTES);
+
+        try (RandomAccessFile randomAccessFile = new RandomAccessFile(localFile, "r")) {
+            for (int chunkIndex = 0; chunkIndex &lt; totalChunks; chunkIndex++) {
+                long chunkStartByte = (long) chunkIndex * CHUNK_SIZE_BYTES;
+                int chunkLength = (int) Math.min(CHUNK_SIZE_BYTES, fileLength - chunkStartByte);
+                byte[] chunkBytes = new byte[chunkLength];
+                randomAccessFile.seek(chunkStartByte);
+                randomAccessFile.readFully(chunkBytes);
+                String chunkHash = computeSha256Hex(chunkBytes);
+                chunks.add(new ChunkDescriptor(chunkIndex, chunkStartByte, chunkLength, chunkHash));
+            }
+        }
+
+        return chunks;
+    }
+
+    private void uploadChunksInParallel(File localFile, List&lt;ChunkDescriptor&gt; missingChunks,
+                                         String uploadId) throws IOException {
+        ExecutorService uploadExecutor = Executors.newFixedThreadPool(MAX_PARALLEL_UPLOADS);
+        List&lt;CompletableFuture&lt;Void&gt;&gt; uploadFutures = new ArrayList&lt;&gt;();
+
+        for (ChunkDescriptor chunk : missingChunks) {
+            CompletableFuture&lt;Void&gt; uploadFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    byte[] chunkBytes = readChunkBytes(localFile, chunk);
+                    uploadApiClient.uploadChunk(uploadId, chunk.chunkIndex(), chunkBytes);
+                    stateRepository.markChunkUploaded(uploadId, chunk.chunkIndex());
+                } catch (IOException chunkUploadException) {
+                    throw new RuntimeException(
+                        "Failed to upload chunk " + chunk.chunkIndex(), chunkUploadException
+                    );
+                }
+            }, uploadExecutor);
+            uploadFutures.add(uploadFuture);
+        }
+
+        // Wait for all chunks to complete (or fail fast on first exception)
+        CompletableFuture.allOf(uploadFutures.toArray(new CompletableFuture[0])).join();
+        uploadExecutor.shutdown();
+    }
+
+    private UploadSession initializeOrResumeUpload(String fileName, long fileSizeBytes,
+            String fileHash, List&lt;ChunkDescriptor&gt; allChunks) {
+        List&lt;String&gt; chunkHashes = allChunks.stream()
+            .map(ChunkDescriptor::chunkHash)
+            .toList();
+
+        // Server responds with which chunk indexes are missing (not yet uploaded or deduped)
+        return uploadApiClient.initiateUpload(fileName, fileSizeBytes, fileHash, chunkHashes);
+    }
+
+    private byte[] readChunkBytes(File file, ChunkDescriptor chunk) throws IOException {
+        byte[] chunkBytes = new byte[chunk.chunkLengthBytes()];
+        try (RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r")) {
+            randomAccessFile.seek(chunk.chunkStartByte());
+            randomAccessFile.readFully(chunkBytes);
+        }
+        return chunkBytes;
+    }
+
+    private String computeSha256Hex(byte[] data) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance(HASH_ALGORITHM);
+            byte[] hashBytes = digest.digest(data);
+            StringBuilder hexString = new StringBuilder();
+            for (byte hashByte : hashBytes) {
+                String hex = Integer.toHexString(0xff & hashByte);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException algorithmException) {
+            throw new RuntimeException("SHA-256 not available", algorithmException);
+        }
+    }
+
+    private String computeFileHash(File file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance(HASH_ALGORITHM);
+            try (FileInputStream fileInputStream = new FileInputStream(file)) {
+                byte[] buffer = new byte[CHUNK_SIZE_BYTES];
+                int bytesRead;
+                while ((bytesRead = fileInputStream.read(buffer)) != -1) {
+                    digest.update(buffer, 0, bytesRead);
+                }
+            }
+            byte[] hashBytes = digest.digest();
+            StringBuilder hexString = new StringBuilder();
+            for (byte hashByte : hashBytes) {
+                String hex = Integer.toHexString(0xff & hashByte);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException algorithmException) {
+            throw new RuntimeException("SHA-256 not available", algorithmException);
+        }
+    }
+
+    public record ChunkDescriptor(int chunkIndex, long chunkStartByte,
+                                   int chunkLengthBytes, String chunkHash) {}
+    public record UploadSession(String uploadId, Set&lt;Integer&gt; missingChunkIndexes) {}
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-dropbox-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A 5GB upload fails halfway through. How does chunking enable resuming the upload?" data-options='["The client retries the entire upload from byte 0","The client asks the server which chunk indexes were successfully received; only missing chunks are re-uploaded","The server automatically continues the upload from the last byte","Chunking does not help — the upload must restart from the beginning"]' data-correct="1" data-explanation="Each chunk is uploaded independently with its own SHA-256 hash. On resume, the client queries the server for received chunk indexes and uploads only the missing ones. A 5GB file interrupted at 50% re-uploads ~2.5GB instead of 5GB." style="display:none"></div>
+          <div data-question="Two users upload identical 100MB files. How does content-addressed deduplication work?" data-options='["The system stores two separate S3 copies since they belong to different users","SHA-256 of the content is the same for both; the second upload finds the existing S3 key and just creates a new metadata record pointing to the same chunks","Users cannot upload duplicate files — the system rejects the second upload","Content-addressed dedup requires user permission to enable"]' data-correct="1" data-explanation="Content-addressable storage: each chunk's S3 key is derived from its SHA-256 hash. When user B uploads the same file, the hash matches existing chunks — the server returns those chunk URLs immediately without requiring re-upload. Only a metadata record is created." style="display:none"></div>
+          <div data-question="What is 'delta sync' in Dropbox, and why is it important for large files?" data-options='["Delta sync is Dropbox's name for their sync protocol","When a large file is modified, only the changed 4MB chunks are re-uploaded rather than the entire file, reducing sync bandwidth from GBs to MBs for small edits","Delta sync compresses files before uploading to reduce bandwidth","Delta sync runs in the background without blocking the user"]' data-correct="1" data-explanation="A 1GB report where 1 paragraph changes: with delta sync, only the 1-2 modified 4MB chunks are uploaded (8MB). Without delta sync, the entire 1GB file is re-uploaded. For large files with small changes, delta sync reduces bandwidth by 99%+." style="display:none"></div>
+          <div data-question="Why use long-polling instead of regular polling for the sync endpoint?" data-options='["Long-polling is required by the HTTP/2 spec","Regular polling at 5-second intervals sends 12 empty responses per minute per device; long-polling holds the connection open until a change occurs or 30 seconds elapse, reducing wasted requests by 10x","Long-polling has lower latency than regular polling for large files","Regular polling cannot handle binary data"]' data-correct="1" data-explanation="Regular polling at 5s: 12 requests/min, mostly returning 'no changes.' Long-polling: the server holds the request open for up to 30s, responds immediately on file change. Same change latency, ~10x fewer API calls. Upgrade to WebSockets for true real-time." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../../index.html#problems" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">All Problems →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <a href="news-feed.html" class="btn btn--outline">← Prev: News Feed</a>
+        <a href="../../index.html#problems" class="btn btn--outline">All Problems →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

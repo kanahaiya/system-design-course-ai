@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master caching patterns (cache-aside, write-through, write-back), LRU/LFU eviction, Redis data structures, CDN caching, and cache stampede prevention for MAANG interviews.">
+  <title>Caching Strategies — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/03-caching/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#patterns" class="module-toc__link">Cache Patterns</a></li>
+          <li><a href="#eviction" class="module-toc__link">Eviction Policies</a></li>
+          <li><a href="#redis" class="module-toc__link">Redis Data Structures</a></li>
+          <li><a href="#cdn" class="module-toc__link">CDN Caching</a></li>
+          <li><a href="#stampede" class="module-toc__link">Cache Stampede</a></li>
+          <li><a href="#code" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-off Table</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-03" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 03</span>
+        </nav>
+        <div class="module-header__number">Module 03</div>
+        <h1 class="module-header__title">Caching Strategies</h1>
+        <p class="module-header__desc">
+          Caching is the single highest-leverage technique for scaling read-heavy systems.
+          Master the four write patterns, know when each eviction policy applies,
+          and understand how to prevent the thundering herd from taking down your database.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 35 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Intermediate</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> Very High Frequency</div>
+        </div>
+      </header>
+
+      <!-- Section: Cache Patterns -->
+      <section class="content-section" id="patterns" aria-labelledby="patterns-title">
+        <h2 class="content-section__title" id="patterns-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗃️</span>
+          Cache Write Patterns
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 220" class="content-section__diagram" role="img" aria-label="Cache write pattern comparison: cache-aside, write-through, write-back">
+            <!-- Cache-aside -->
+            <text x="70" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#6366f1">Cache-Aside (Lazy)</text>
+            <rect x="10" y="20" width="60" height="25" rx="4" fill="#6366f1"/>
+            <text x="40" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
+            <rect x="90" y="20" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="117" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
+            <rect x="10" y="70" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="37" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="70" y1="45" x2="90" y2="32" stroke="#6366f1" stroke-width="1.2"/>
+            <text x="80" y="42" font-family="Inter,sans-serif" font-size="7" fill="#6366f1">1. read</text>
+            <line x1="117" y1="45" x2="80" y2="68" stroke="#e11d48" stroke-width="1.2" stroke-dasharray="4,2"/>
+            <text x="83" y="60" font-family="Inter,sans-serif" font-size="7" fill="#e11d48">MISS</text>
+            <line x1="37" y1="70" x2="37" y2="52" stroke="#64748b" stroke-width="1.2"/>
+            <text x="8" y="62" font-family="Inter,sans-serif" font-size="7" fill="#64748b">2.DB read</text>
+            <text x="40" y="110" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">App manages cache.</text>
+            <text x="40" y="120" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Stale on write.</text>
+            <!-- Write-through -->
+            <text x="250" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#16a34a">Write-Through</text>
+            <rect x="195" y="20" width="55" height="25" rx="4" fill="#16a34a"/>
+            <text x="222" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
+            <rect x="260" y="20" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#16a34a" stroke-width="1.5"/>
+            <text x="287" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
+            <rect x="260" y="70" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="287" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="250" y1="45" x2="270" y2="20" stroke="#16a34a" stroke-width="1.2"/>
+            <text x="258" y="38" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">1.write</text>
+            <line x1="287" y1="45" x2="287" y2="70" stroke="#16a34a" stroke-width="1.2"/>
+            <text x="291" y="60" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">2.write</text>
+            <text x="250" y="110" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Always consistent.</text>
+            <text x="250" y="120" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Higher write latency.</text>
+            <!-- Write-back -->
+            <text x="430" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#f59e0b">Write-Back</text>
+            <rect x="380" y="20" width="55" height="25" rx="4" fill="#f59e0b"/>
+            <text x="407" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
+            <rect x="380" y="70" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="407" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
+            <rect x="380" y="120" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="407" y="136" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="407" y1="45" x2="407" y2="70" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="411" y="62" font-family="Inter,sans-serif" font-size="7" fill="#f59e0b">1.write</text>
+            <line x1="407" y1="95" x2="407" y2="120" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4,2"/>
+            <text x="411" y="112" font-family="Inter,sans-serif" font-size="7" fill="#64748b">async</text>
+            <text x="407" y="165" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Fastest writes.</text>
+            <text x="407" y="175" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Risk of data loss.</text>
+          </svg>
+
+          <h3>Cache-Aside (Lazy Loading)</h3>
+          <p>
+            Application manages the cache explicitly. On read: check cache → if miss, read from DB → populate cache → return.
+            On write: write to DB, then <em>invalidate</em> (not update) the cache key.
+            <strong>Pros:</strong> resilient — cache failure doesn't break reads. Only requested data is cached.
+            <strong>Cons:</strong> cache miss penalty (extra DB read). Stale data window between write and invalidation.
+            <strong>Used by:</strong> most applications. Memcached + MySQL at Facebook historically.
+          </p>
+          <h3>Write-Through</h3>
+          <p>
+            Every write goes to cache AND database synchronously before acknowledging to the client.
+            Cache is always consistent with DB.
+            <strong>Pros:</strong> no stale reads after writes. No thundering herd on fresh keys.
+            <strong>Cons:</strong> every write pays double latency. Caches fill with data that may never be read.
+            <strong>Used by:</strong> write-through Redis in front of PostgreSQL for user profile data.
+          </p>
+          <h3>Write-Back (Write-Behind)</h3>
+          <p>
+            Write to cache only; asynchronously flush dirty cache entries to DB in batches.
+            <strong>Pros:</strong> lowest write latency. Batches reduce DB write pressure (great for counters).
+            <strong>Cons:</strong> data loss risk if cache node fails before flushing. Complex dirty-tracking.
+            <strong>Used by:</strong> gaming leaderboards, view counters, like counts — where occasional loss is acceptable.
+          </p>
+          <h3>Write-Around</h3>
+          <p>
+            Writes bypass the cache and go directly to DB. Cache is populated only on read miss.
+            Prevents cache pollution for write-once read-rarely data (file uploads, logs).
+            Highest cache miss rate on first read.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Eviction Policies -->
+      <section class="content-section" id="eviction" aria-labelledby="eviction-title">
+        <h2 class="content-section__title" id="eviction-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗑️</span>
+          Eviction Policies
+        </h2>
+        <div class="content-section__body">
+          <h3>LRU — Least Recently Used</h3>
+          <p>
+            Evicts the item that has not been accessed for the longest time.
+            Works on temporal locality assumption: if you haven't used it recently, you probably won't need it.
+            Implementation: doubly linked list + hash map. O(1) get and put.
+            <strong>Weakness:</strong> a sequential scan (one-time bulk read) pollutes the cache by evicting hot items.
+            Solution: Redis uses approximated LRU (samples N random keys, evicts the stalest) for O(1) with lower memory overhead.
+          </p>
+          <h3>LFU — Least Frequently Used</h3>
+          <p>
+            Evicts the item with the fewest total accesses. Better than LRU for workloads with stable hot items
+            (e.g., a viral video that gets millions of repeated views). Harder to implement efficiently.
+            <strong>Weakness:</strong> newly added popular items get evicted before accumulating enough frequency counts.
+            Solution: decay mechanisms reduce frequency counts over time (aging). Redis 4.0+ supports LFU.
+          </p>
+          <h3>TTL-based Expiration</h3>
+          <p>
+            Every key has a time-to-live. After TTL, the key is treated as a miss regardless of eviction policy.
+            TTL is the primary consistency tool for cache-aside: set TTL to your maximum acceptable staleness window.
+            Combine with active invalidation on writes for the best consistency/performance balance.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Redis Data Structures -->
+      <section class="content-section" id="redis" aria-labelledby="redis-title">
+        <h2 class="content-section__title" id="redis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔴</span>
+          Redis Data Structures for System Design
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Redis is not just a key-value store. Choosing the right data structure eliminates application logic
+            and reduces round trips.
+          </p>
+          <ul>
+            <li><strong>String</strong> — Simple cache, counters (INCR is atomic). Rate limiters, session tokens, distributed locks (SET NX EX).</li>
+            <li><strong>Hash</strong> — Store objects with fields (user profile: <code>HSET user:42 name "Alice" age 30</code>). Partial updates without serializing the whole object. Memory-efficient for small hashes.</li>
+            <li><strong>Sorted Set (ZSET)</strong> — Leaderboards, priority queues, rate limiting with sliding window. Each member has a score; range queries by score are O(log N). <code>ZADD leaderboard 9800 "user:42"</code> → <code>ZRANGE leaderboard 0 9 REV WITHSCORES</code> for top-10.</li>
+            <li><strong>List</strong> — Message queues (LPUSH + BRPOP), activity feeds, recent items. LRANGE for pagination. LTRIM for bounded lists.</li>
+            <li><strong>Set</strong> — Unique visitors, tags, "has user seen this?" (SADD + SISMEMBER). Set operations (SUNION, SINTER) for social graph intersection (mutual friends).</li>
+            <li><strong>HyperLogLog</strong> — Probabilistic unique count with 0.81% error, fixed 12 KB memory. <code>PFADD</code> + <code>PFCOUNT</code>. Use for DAU/MAU counting at scale.</li>
+            <li><strong>Pub/Sub</strong> — Real-time notifications, live dashboards. At-most-once delivery — not durable. Use Kafka for durability.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: CDN -->
+      <section class="content-section" id="cdn" aria-labelledby="cdn-title">
+        <h2 class="content-section__title" id="cdn-title">
+          <span class="content-section__title-icon" aria-hidden="true">🌐</span>
+          CDN Caching
+        </h2>
+        <div class="content-section__body">
+          <p>
+            CDNs (Cloudflare, CloudFront, Fastly) cache content at edge nodes geographically close to users.
+            The latency win is dramatic: serving from an edge node 20ms from the user vs. an origin server
+            150ms away is a 7.5× improvement.
+          </p>
+          <h3>Cache-Control Headers (the contract between app and CDN)</h3>
+          <ul>
+            <li><code>Cache-Control: public, max-age=31536000, immutable</code> — Static assets with content-hashed URLs. Cache forever; never revalidate.</li>
+            <li><code>Cache-Control: public, max-age=300, stale-while-revalidate=60</code> — API responses. Serve for 5 minutes; if stale, serve old content while refreshing in background.</li>
+            <li><code>Cache-Control: private, no-store</code> — User-specific data (bank statement). Never cache at CDN layer.</li>
+            <li><code>Surrogate-Key / Cache-Tag</code> — Tag CDN objects by logical group. Purge all objects tagged <code>product:42</code> on price update. Used by Cloudflare Cache Tags, Fastly surrogate keys.</li>
+          </ul>
+          <h3>CDN Strategy by Content Type</h3>
+          <ul>
+            <li><strong>Static assets (JS, CSS, images)</strong> — Immutable with hashed filenames. TTL = 1 year. Zero origin hits after warm-up.</li>
+            <li><strong>API responses</strong> — Short TTL (1–60s) with stale-while-revalidate. Balance freshness vs. origin traffic.</li>
+            <li><strong>User-specific HTML</strong> — Never cache at CDN unless using Edge Side Includes (ESI) to inject dynamic fragments.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Cache Stampede -->
+      <section class="content-section" id="stampede" aria-labelledby="stampede-title">
+        <h2 class="content-section__title" id="stampede-title">
+          <span class="content-section__title-icon" aria-hidden="true">🦬</span>
+          Cache Stampede (Thundering Herd)
+        </h2>
+        <div class="content-section__body">
+          <p>
+            A cache stampede occurs when a popular cache entry expires and thousands of concurrent requests
+            all miss the cache simultaneously, all attempt to rebuild the cache from the database,
+            and the database is overwhelmed. This is a real production failure mode.
+          </p>
+          <h3>Prevention Strategies</h3>
+          <ul>
+            <li>
+              <strong>Mutex / distributed lock</strong>: When a miss occurs, one request acquires a lock and rebuilds the cache.
+              Other requests wait (blocking) or serve stale content (non-blocking). Use Redis <code>SET NX EX</code> as a distributed mutex.
+              Non-blocking is preferred: serve stale while one request refreshes.
+            </li>
+            <li>
+              <strong>Probabilistic early expiration (PER)</strong>: Before the TTL expires, each cache read has a small probability of triggering a refresh. The probability increases as expiration approaches. Eliminates the synchronized miss at TTL=0.
+              Formula: <code>refresh if (currentTime - createdAt) &gt; TTL - β × ln(random())</code>
+            </li>
+            <li>
+              <strong>TTL jitter</strong>: Add random jitter (±10%) to TTLs when populating the cache.
+              Prevents synchronized mass expiration of related keys at the same second.
+              Simple, effective, should always be used.
+            </li>
+            <li>
+              <strong>Background refresh</strong>: A separate worker thread refreshes cache entries before they expire.
+              Requires knowing which keys to refresh (use a separate TTL tracking set in Redis).
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Java Implementation -->
+      <section class="content-section" id="code" aria-labelledby="code-title">
+        <h2 class="content-section__title" id="code-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation: Thread-Safe LRU Cache
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Production-quality LRU cache using <code>LinkedHashMap</code>'s access-order mode.
+            Thread safety via <code>ReentrantReadWriteLock</code> — read-heavy workloads benefit from
+            concurrent reads while writes are exclusive. Includes stampede prevention via a per-key mutex.
+          </p>
+          <pre><code class="language-java">import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
+
+/**
+ * Thread-safe LRU cache with stampede prevention.
+ * Uses LinkedHashMap access-order mode as the O(1) LRU core.
+ * Stampede prevention: per-key ConcurrentHashMap mutex ensures only
+ * one thread computes a missing value; others wait or return stale.
+ *
+ * @param <K> cache key type
+ * @param <V> cache value type
+ */
+public class LruCache&lt;K, V&gt; {
+
+    private final int maximumCapacity;
+    private final ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock.ReadLock readLock = readWriteLock.readLock();
+    private final ReentrantReadWriteLock.WriteLock writeLock = readWriteLock.writeLock();
+
+    // Per-key semaphore map: prevents stampede by serializing cache misses per key
+    private final ConcurrentHashMap&lt;K, Semaphore&gt; keyLocks = new ConcurrentHashMap&lt;&gt;();
+
+    // LinkedHashMap with access-order=true: get() moves entry to the end (most recently used)
+    private final LinkedHashMap&lt;K, V&gt; cacheStore;
+
+    public LruCache(int maximumCapacity) {
+        this.maximumCapacity = maximumCapacity;
+        // accessOrder=true means iteration order is from LRU to MRU
+        this.cacheStore = new LinkedHashMap&lt;K, V&gt;(maximumCapacity, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry&lt;K, V&gt; eldestEntry) {
+                // Called on every put(); returns true to evict the LRU entry
+                return size() &gt; maximumCapacity;
+            }
+        };
+    }
+
+    /**
+     * Returns cached value for key, or null if not present.
+     * Accessing a key promotes it to most-recently-used position.
+     *
+     * @param key the cache key
+     * @return the cached value, or null on miss
+     */
+    public V get(K key) {
+        readLock.lock();
+        try {
+            // LinkedHashMap.get() with accessOrder=true reorders internally — needs write lock
+            // We use write lock for get() because access-order mutation is not thread-safe
+        } finally {
+            readLock.unlock();
+        }
+        // Use write lock because get() in access-order mode mutates the map structure
+        writeLock.lock();
+        try {
+            return cacheStore.get(key);
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Inserts or updates a key-value pair in the cache.
+     * If at capacity, the least recently used entry is evicted.
+     *
+     * @param key   the cache key
+     * @param value the value to cache
+     */
+    public void put(K key, V value) {
+        writeLock.lock();
+        try {
+            cacheStore.put(key, value);
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Cache-aside get with stampede prevention.
+     * If key is missing: acquires a per-key mutex, calls the loader once,
+     * populates the cache, releases the mutex. Concurrent threads for the
+     * same key wait on the mutex and then get the populated value.
+     *
+     * @param key    the cache key
+     * @param loader supplies the value on cache miss (e.g., a DB call)
+     * @return the cached or freshly loaded value
+     */
+    public V getOrLoad(K key, Supplier&lt;V&gt; loader) {
+        V cachedValue = get(key);
+        if (cachedValue != null) {
+            return cachedValue;
+        }
+
+        // Cache miss: acquire per-key semaphore to serialize DB calls for the same key
+        Semaphore keyMutex = keyLocks.computeIfAbsent(key, ignored -&gt; new Semaphore(1));
+        try {
+            keyMutex.acquire();
+            // Double-check after acquiring — another thread may have populated it
+            V valueAfterLock = get(key);
+            if (valueAfterLock != null) {
+                return valueAfterLock;
+            }
+            // Only one thread reaches here per key: call the loader
+            V freshValue = loader.get();
+            if (freshValue != null) {
+                put(key, freshValue);
+            }
+            return freshValue;
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+            // Fallback: load without caching rather than fail entirely
+            return loader.get();
+        } finally {
+            keyMutex.release();
+            keyLocks.remove(key); // Clean up to prevent memory leak
+        }
+    }
+
+    public int size() {
+        readLock.lock();
+        try {
+            return cacheStore.size();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    // --- Demo ---
+    public static void main(String[] args) throws Exception {
+        LruCache&lt;String, String&gt; userProfileCache = new LruCache&lt;&gt;(3);
+
+        // Simulate DB loader
+        Supplier&lt;String&gt; dbLoader = () -&gt; {
+            System.out.println("  [DB HIT] Loading from database...");
+            return "UserProfileData-" + System.currentTimeMillis();
+        };
+
+        System.out.println("First access (cache miss):");
+        String profile1 = userProfileCache.getOrLoad("user:1", dbLoader);
+        System.out.println("  Got: " + profile1);
+
+        System.out.println("Second access (cache hit):");
+        String profile2 = userProfileCache.getOrLoad("user:1", dbLoader);
+        System.out.println("  Got: " + profile2);
+
+        System.out.println("Fill cache to capacity (3 items):");
+        userProfileCache.getOrLoad("user:2", dbLoader);
+        userProfileCache.getOrLoad("user:3", dbLoader);
+        System.out.println("Cache size: " + userProfileCache.size());
+
+        System.out.println("Access user:4 → evicts LRU entry (user:1):");
+        userProfileCache.getOrLoad("user:4", dbLoader);
+        System.out.println("user:1 in cache: " + (userProfileCache.get("user:1") != null));
+        System.out.println("user:4 in cache: " + (userProfileCache.get("user:4") != null));
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Trade-off Table -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-off Table
+        </h2>
+        <div class="content-section__body">
+          <table class="content-table" aria-label="Cache pattern trade-offs">
+            <thead>
+              <tr><th>Pattern</th><th>Consistency</th><th>Write Latency</th><th>Complexity</th><th>Best For</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cache-Aside</td><td>Eventual (stale within TTL)</td><td>DB only (fast)</td><td>Low</td><td>Most read-heavy apps</td></tr>
+              <tr><td>Write-Through</td><td>Strong</td><td>High (cache + DB)</td><td>Medium</td><td>User profiles, config data</td></tr>
+              <tr><td>Write-Back</td><td>Eventual (async flush)</td><td>Very low (cache only)</td><td>High</td><td>Counters, metrics, gaming</td></tr>
+              <tr><td>Write-Around</td><td>Eventual</td><td>DB only (fast)</td><td>Low</td><td>Write-once logs, uploads</td></tr>
+              <tr><td>LRU eviction</td><td>N/A</td><td>N/A</td><td>Low</td><td>Most workloads (temporal locality)</td></tr>
+              <tr><td>LFU eviction</td><td>N/A</td><td>N/A</td><td>Medium</td><td>Stable hot-item workloads</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="module-03-quiz" role="region" aria-label="Module 03 quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Caching Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="A product page cache key expires at midnight every day for all users. At midnight, your database gets slammed by thousands of simultaneous requests. What is this problem and what is the fastest fix?"
+               data-options='["Cache miss cascade — fix by increasing cache size","Cache stampede (thundering herd) — fix by adding TTL jitter (random ±10% to expiry time) to prevent synchronized expiration","Cache invalidation bug — fix by switching to write-through","Database overload — fix by adding more database replicas"]'
+               data-correct="1"
+               data-explanation="This is a classic cache stampede: synchronized TTL expiration causes all misses to hit the DB simultaneously. TTL jitter is the fastest fix — spread expiration times randomly so not all keys expire at the same second. The more robust fix is probabilistic early expiration or a per-key mutex to serialize DB rebuilds."
+               style="display:none"></div>
+          <div data-question="You are building a Twitter-like system. Users' follower counts must be accurate to within 5 minutes. What caching strategy and TTL is optimal?"
+               data-options='["Write-through with no TTL — follower counts must always be exact","Cache-aside with TTL=300s — on miss load from DB, cache for 5 minutes. On follow/unfollow, invalidate the cache key immediately for faster consistency","Write-back with 5-minute flush interval — minimize DB write load","LFU eviction with no TTL — popular users stay in cache forever"]'
+               data-correct="1"
+               data-explanation="Cache-aside + TTL=300s is correct. The 5-minute staleness requirement is naturally handled by TTL. Active invalidation on follow/unfollow events gives faster consistency for recent actions. Write-through doubles write latency. Write-back risks losing follower count data if the cache crashes. LFU without TTL gives no staleness bound."
+               style="display:none"></div>
+          <div data-question="Which Redis data structure is most efficient for a real-time leaderboard requiring top-10 players by score, with O(log N) insertion?"
+               data-options='["String — store a JSON array of all scores","Hash — HSET scores player1 9800 player2 9200","Sorted Set (ZSET) — ZADD leaderboard 9800 player1; ZRANGE leaderboard 0 9 REV for top-10","List — LPUSH leaderboard entries sorted manually by application"]'
+               data-correct="2"
+               data-explanation="Redis Sorted Sets (ZSET) are purpose-built for this. ZADD is O(log N), ZRANGE is O(log N + K) where K is the result count. The data structure maintains sorted order automatically. Strings require full deserialization. Hashes cannot range-scan by value. Lists need manual sorting in application code."
+               style="display:none"></div>
+          <div data-question="Your LRU cache (capacity=1000) is serving a sequential file scan reading 1 million unique records. After the scan, what is the cache hit rate for your normally hot data?"
+               data-options='["~80% — most hot data was already cached before the scan","~0% — the sequential scan has evicted all previously cached hot data since 1M unique keys exceed the 1000-entry capacity","~50% — half the scan data was evicted, half the hot data survived","Unchanged — LRU protects frequently accessed data from sequential scans"]'
+               data-correct="1"
+               data-explanation="This is LRU's famous weakness: a sequential scan (1M unique reads) will completely pollute a 1000-entry cache. All hot data gets evicted as each scan item displaces an existing entry. The fix: use a scan-resistant variant. MySQL InnoDB uses a 'young/old' sublist where scan blocks enter the old list and are evicted without reaching the young (hot) list."
+               style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../04-messaging/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../02-storage/index.html" class="module-nav__btn module-nav__btn--prev">← Module 02: Storage &amp; Databases</a>
+        <a href="../04-messaging/index.html" class="module-nav__btn module-nav__btn--next">Module 04: Messaging →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 03</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

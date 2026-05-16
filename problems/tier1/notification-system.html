@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Push Notification System — full RESHADED walkthrough covering Kafka fanout for 10M/min, APNs/FCM integration, deduplication, and retry with exponential backoff for MAANG interviews.">
+  <title>Design a Push Notification System — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/notification-system/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-notification" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=notification-system" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Event-driven</span>
+        </div>
+        <h1 class="module-header__title">Design a Push Notification System</h1>
+        <p class="module-header__desc">10 million notifications per minute on a breaking news event. The challenge is fanout at that scale, absorbing bursts with Kafka, and reliably calling third-party gateways (APNs, FCM) that have their own rate limits and failure modes.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Amazon, Netflix, Apple</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📱</span> 10M/min peak</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Send push notification via multiple channels: iOS (APNs), Android (FCM), email (SendGrid), SMS (Twilio)</li>
+            <li>Support three trigger types:
+              <ul>
+                <li><strong>Triggered</strong>: individual event (user got a like)</li>
+                <li><strong>Scheduled</strong>: send at specific time (daily digest)</li>
+                <li><strong>Broadcast</strong>: send to a user segment (all iOS users in US)</li>
+              </ul>
+            </li>
+            <li>Track delivery status per notification per user</li>
+            <li>Deduplicate — user should never receive the same notification twice</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Peak throughput:</strong> 10M notifications/minute (~167K/sec)</li>
+            <li><strong>Delivery latency:</strong> &lt; 5 seconds from trigger to device delivery</li>
+            <li><strong>Reliability:</strong> At-least-once delivery (guaranteed, not exactly-once)</li>
+            <li><strong>Deduplication:</strong> Handle retries gracefully — don't show duplicate pushes</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Peak QPS:</strong> 10M/min = <strong>167K notifications/second</strong></li>
+            <li><strong>Bandwidth:</strong> 167K × 1KB = <strong>167MB/second</strong> peak write throughput</li>
+            <li><strong>Kafka partitions needed:</strong> At 10K msgs/sec per partition = 167,000 / 10,000 = <strong>17 partitions minimum</strong> (use 64 for headroom)</li>
+            <li><strong>Device tokens storage:</strong> 2B users × 2 devices avg × 200 bytes per token = 800GB → partition in Cassandra</li>
+            <li><strong>Notification history storage:</strong> 10M/min × 60 × 24 = 14.4B notifications/day × 200 bytes = ~2.9TB/day (prune after 30 days)</li>
+          </ul>
+          <div class="callout callout--warning">
+            <strong>Critical to call out:</strong> 10M/min is a burst, not steady-state. Kafka is the buffer that absorbs the burst. Downstream workers can process at their natural rate without the upstream API being blocked.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// notifications table (Cassandra — partitioned by notification_id)
+CREATE TABLE notifications (
+    notification_id  BIGINT PRIMARY KEY,   -- Snowflake ID
+    user_id          BIGINT NOT NULL,
+    notification_type ENUM('PUSH','EMAIL','SMS'),
+    payload_json     TEXT NOT NULL,        -- channel-specific payload
+    status           ENUM('PENDING','SENT','DELIVERED','FAILED'),
+    created_at       TIMESTAMP NOT NULL,
+    sent_at          TIMESTAMP
+);
+
+// device_tokens table (Cassandra — partitioned by user_id)
+CREATE TABLE device_tokens (
+    user_id    BIGINT,
+    token_id   UUID,
+    token      VARCHAR(512) NOT NULL,      -- APNs/FCM device token
+    platform   ENUM('IOS','ANDROID'),
+    active     BOOLEAN DEFAULT TRUE,
+    updated_at TIMESTAMP,
+    PRIMARY KEY ((user_id), token_id)
+);
+
+// Redis: Deduplication set
+// Key:   dedup:{idempotency_key}   (e.g., "like:post_123:user_456")
+// Value: notification_id
+// TTL:   24 hours
+
+// Kafka topics:
+// notifications-push    (partitioned by user_id, 64 partitions)
+// notifications-email   (partitioned by user_id, 32 partitions)
+// notifications-sms     (partitioned by user_id, 16 partitions)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Triggered Notification Flow</h3>
+          <ol>
+            <li>Event source (social service, payment service, etc.) calls <strong>Notification API</strong></li>
+            <li>Notification API deduplicates (Redis check) → persist to Cassandra (PENDING) → publish to Kafka (channel-specific topic)</li>
+            <li><strong>Channel Worker</strong> (iOS/Android/Email/SMS) consumes from Kafka → calls third-party gateway (APNs/FCM/SendGrid/Twilio)</li>
+            <li>Gateway responds → Worker updates Cassandra status (SENT/FAILED)</li>
+            <li>On FAILED: retry with exponential backoff (up to 3 attempts)</li>
+          </ol>
+
+          <h3>Broadcast Notification Flow (e.g., breaking news to 100M users)</h3>
+          <ol>
+            <li>Admin triggers broadcast via Notification API with segment filter (e.g., "all active iOS users in US")</li>
+            <li><strong>Fanout Service</strong> queries device_tokens table in batches of 10,000 users</li>
+            <li>Each batch published to Kafka as individual messages → workers process in parallel</li>
+            <li>Total time: 100M / (64 partitions × 10K/sec per worker) ≈ <strong>156 seconds</strong> to deliver to all</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// POST /api/v1/notifications  (single triggered notification)
+{
+  "userId": 12345,
+  "channel": "PUSH",
+  "idempotencyKey": "like:post_789:user_12345",  // deduplication key
+  "payload": {
+    "title": "New like on your post",
+    "body": "Alice liked your photo",
+    "data": { "postId": "789", "action": "like" }
+  },
+  "scheduledAt": null  // null = send immediately
+}
+// Response 202 Accepted: { "notificationId": "...", "status": "PENDING" }
+
+// POST /api/v1/notifications/broadcast  (segment broadcast)
+{
+  "segment": { "platform": "IOS", "country": "US", "activeInDays": 30 },
+  "channel": "PUSH",
+  "payload": { "title": "Breaking News", "body": "..." }
+}
+// Response 202 Accepted: { "broadcastId": "...", "estimatedRecipients": 50000000 }
+
+// GET /api/v1/notifications/{notificationId}/status
+// Response: { "notificationId": "...", "status": "DELIVERED", "sentAt": "..." }</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Broadcast Fanout at 10M/min
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>You cannot loop through 100M device tokens synchronously in the API handler — it would take hours and block the request thread.</p>
+
+          <h3>Segment-Based Batch Fanout</h3>
+          <ol>
+            <li>The Fanout Service queries device_tokens in pages of 10,000</li>
+            <li>Each page is dispatched as a batch Kafka message containing 10,000 (userId, token) pairs</li>
+            <li>10,000 page workers consume pages from Kafka and call the respective gateway APIs in parallel using async HTTP</li>
+            <li>At 10,000 tokens per batch and 10,000 concurrent batches processed = 100M tokens in ~10 seconds at peak (with enough workers)</li>
+          </ol>
+
+          <h3>Third-Party Gateway Constraints</h3>
+          <ul>
+            <li><strong>APNs:</strong> Batch up to 1,000 device tokens per HTTP/2 request. Rate limited to ~500K/min per certificate.</li>
+            <li><strong>FCM:</strong> Up to 500 tokens per batch request. Rate limit per project.</li>
+            <li>Workers respect gateway rate limits using a token bucket per gateway. If rate limited (429), back off and retry — never drop.</li>
+          </ul>
+
+          <h3>Invalid Token Cleanup</h3>
+          <p>APNs and FCM return error codes for invalid/unregistered tokens. Workers process these errors and mark tokens as <code>active=false</code> in the device_tokens table — prevents wasting gateway calls on dead tokens.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Worker crash mid-batch:</strong> Kafka consumer group ensures the batch is re-consumed by another worker. Messages are not lost (Kafka retains until consumer ACK). Idempotency key prevents duplicate delivery to user.</li>
+            <li><strong>Gateway rate limit hit:</strong> Workers implement exponential backoff. Kafka offset not committed until successful — retried automatically.</li>
+            <li><strong>Deduplication:</strong> Redis check on idempotencyKey before publish. TTL = 24 hours. If Redis is down, dedup fails open (allow the notification) — better to send twice than not at all.</li>
+            <li><strong>Scheduled notifications:</strong> Store in a scheduled_notifications table with scheduled_at timestamp. A cron job (running every minute) fetches due notifications and publishes them to Kafka.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"The Notification API accepts events, deduplicates via Redis, persists to Cassandra, and publishes to channel-specific Kafka topics. Channel workers consume and call gateway APIs with retry and exponential backoff. Broadcasts use a Fanout Service that pages through device tokens in batches of 10K and dispatches parallel Kafka messages, achieving 100M notifications in under 3 minutes with 64 Kafka partitions. Idempotency keys guarantee at-most-once delivery at the user level despite at-least-once Kafka semantics."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Message Durability</td>
+                <td>At-least-once (Kafka default)</td>
+                <td>Exactly-once (Kafka transactions)</td>
+                <td><strong>At-least-once + idempotency key</strong> — exactly-once adds 3× overhead; dedup handles duplicates</td>
+              </tr>
+              <tr>
+                <td>Topic Structure</td>
+                <td>Single topic, consumers filter by channel</td>
+                <td>Per-channel topics (push/email/SMS)</td>
+                <td><strong>Per-channel topics</strong> — independent scaling, iOS vs SMS workers differ dramatically</td>
+              </tr>
+              <tr>
+                <td>Broadcast Fanout</td>
+                <td>Synchronous DB scan + send</td>
+                <td>Async batch Kafka fanout</td>
+                <td><strong>Async batch</strong> — synchronous would block for minutes; async scales to 100M in &lt;3 min</td>
+              </tr>
+              <tr>
+                <td>Gateway Retry</td>
+                <td>Fixed 3 retries, 1s apart</td>
+                <td>Exponential backoff (1s, 2s, 4s, 8s)</td>
+                <td><strong>Exponential backoff</strong> — gateway rate limits recover over time; fixed retry thundering-herds</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * NotificationFanoutService — pages through device tokens and dispatches
+ * broadcast notifications to Kafka in parallel batches.
+ */
+public class NotificationFanoutService {
+    private static final int BATCH_SIZE = 10_000;
+    private static final String PUSH_TOPIC = "notifications-push";
+
+    private final DeviceTokenRepository deviceTokenRepository;
+    private final KafkaProducer<String, NotificationBatch> kafkaProducer;
+
+    public NotificationFanoutService(DeviceTokenRepository deviceTokenRepository,
+                                     KafkaProducer<String, NotificationBatch> kafkaProducer) {
+        this.deviceTokenRepository = deviceTokenRepository;
+        this.kafkaProducer = kafkaProducer;
+    }
+
+    /**
+     * Fans out a broadcast notification to all users matching the segment.
+     * Pages through device_tokens in batches and publishes each batch to Kafka.
+     * The API call returns immediately — fanout continues asynchronously.
+     *
+     * @param broadcastRequest The broadcast request with segment filter and payload
+     * @return The broadcastId for status tracking
+     */
+    public String fanoutBroadcast(BroadcastRequest broadcastRequest) {
+        String broadcastId = UUID.randomUUID().toString();
+
+        // Run fanout asynchronously — do not block the API request thread
+        CompletableFuture.runAsync(() ->
+                executeFanout(broadcastId, broadcastRequest));
+
+        return broadcastId;
+    }
+
+    private void executeFanout(String broadcastId, BroadcastRequest broadcastRequest) {
+        String lastSeenUserId = null;
+        int totalDispatched = 0;
+
+        while (true) {
+            List<DeviceToken> tokenBatch = deviceTokenRepository.findActiveTokensBySegment(
+                    broadcastRequest.getSegment(), lastSeenUserId, BATCH_SIZE);
+
+            if (tokenBatch.isEmpty()) {
+                break; // All tokens processed
+            }
+
+            publishBatchToKafka(broadcastId, tokenBatch, broadcastRequest.getPayload());
+            totalDispatched += tokenBatch.size();
+            lastSeenUserId = tokenBatch.get(tokenBatch.size() - 1).getUserIdAsString();
+
+            if (tokenBatch.size() < BATCH_SIZE) {
+                break; // Last page
+            }
+        }
+
+        System.out.println("[NotificationFanoutService] Broadcast " + broadcastId
+                + " dispatched to " + totalDispatched + " devices");
+    }
+
+    private void publishBatchToKafka(String broadcastId,
+                                     List<DeviceToken> tokenBatch,
+                                     NotificationPayload payload) {
+        NotificationBatch batch = new NotificationBatch(broadcastId, tokenBatch, payload);
+        // Partition by first token's userId so related users may land on same partition
+        String partitionKey = tokenBatch.get(0).getUserIdAsString();
+
+        ProducerRecord<String, NotificationBatch> kafkaRecord =
+                new ProducerRecord<>(PUSH_TOPIC, partitionKey, batch);
+
+        kafkaProducer.send(kafkaRecord, (recordMetadata, exception) -> {
+            if (exception != null) {
+                System.err.println("[NotificationFanoutService] Kafka publish failed: "
+                        + exception.getMessage());
+                // In production: retry with backoff or send to dead-letter queue
+            }
+        });
+    }
+}
+
+/**
+ * PushNotificationWorker — Kafka consumer that sends batches to APNs/FCM.
+ * Implements exponential backoff retry on gateway failures.
+ */
+public class PushNotificationWorker {
+    private static final int MAX_RETRY_ATTEMPTS = 4;
+    private static final long BASE_BACKOFF_MS = 1_000L;
+    private static final int APNS_BATCH_SIZE = 1_000;
+    private static final int FCM_BATCH_SIZE = 500;
+
+    private final ApnsClient apnsClient;
+    private final FcmClient fcmClient;
+    private final NotificationRepository notificationRepository;
+    private final DeviceTokenRepository deviceTokenRepository;
+
+    public PushNotificationWorker(ApnsClient apnsClient,
+                                  FcmClient fcmClient,
+                                  NotificationRepository notificationRepository,
+                                  DeviceTokenRepository deviceTokenRepository) {
+        this.apnsClient = apnsClient;
+        this.fcmClient = fcmClient;
+        this.notificationRepository = notificationRepository;
+        this.deviceTokenRepository = deviceTokenRepository;
+    }
+
+    /**
+     * Processes a batch of notifications from Kafka.
+     * Groups by platform, sends to appropriate gateway, handles errors.
+     *
+     * @param batch The batch of (userId, deviceToken, payload) from Kafka
+     */
+    public void processBatch(NotificationBatch batch) {
+        Map<String, List<DeviceToken>> tokensByPlatform = batch.getTokens().stream()
+                .collect(Collectors.groupingBy(token -> token.getPlatform().name()));
+
+        List<DeviceToken> iosTokens = tokensByPlatform.getOrDefault("IOS", List.of());
+        List<DeviceToken> androidTokens = tokensByPlatform.getOrDefault("ANDROID", List.of());
+
+        sendToApnsInBatches(iosTokens, batch.getPayload(), batch.getBroadcastId());
+        sendToFcmInBatches(androidTokens, batch.getPayload(), batch.getBroadcastId());
+    }
+
+    private void sendToApnsInBatches(List<DeviceToken> tokens,
+                                     NotificationPayload payload,
+                                     String broadcastId) {
+        for (int startIndex = 0; startIndex < tokens.size(); startIndex += APNS_BATCH_SIZE) {
+            int endIndex = Math.min(startIndex + APNS_BATCH_SIZE, tokens.size());
+            List<DeviceToken> apnsBatch = tokens.subList(startIndex, endIndex);
+            sendToApnsWithRetry(apnsBatch, payload, broadcastId, 0);
+        }
+    }
+
+    private void sendToApnsWithRetry(List<DeviceToken> tokens,
+                                     NotificationPayload payload,
+                                     String broadcastId,
+                                     int attemptNumber) {
+        try {
+            ApnsResponse apnsResponse = apnsClient.sendBatch(
+                    tokens.stream().map(DeviceToken::getToken).collect(Collectors.toList()),
+                    payload);
+
+            handleApnsResponse(apnsResponse, tokens);
+
+        } catch (ApnsRateLimitException rateLimitException) {
+            if (attemptNumber < MAX_RETRY_ATTEMPTS) {
+                long backoffMs = BASE_BACKOFF_MS * (long) Math.pow(2, attemptNumber);
+                System.out.println("[PushNotificationWorker] APNs rate limited, retrying in "
+                        + backoffMs + "ms (attempt " + (attemptNumber + 1) + ")");
+                sleepQuietly(backoffMs);
+                sendToApnsWithRetry(tokens, payload, broadcastId, attemptNumber + 1);
+            } else {
+                System.err.println("[PushNotificationWorker] APNs retry exhausted for broadcastId: "
+                        + broadcastId);
+                markTokensAsFailed(tokens);
+            }
+        } catch (ApnsException apnsException) {
+            System.err.println("[PushNotificationWorker] APNs error: " + apnsException.getMessage());
+            markTokensAsFailed(tokens);
+        }
+    }
+
+    private void handleApnsResponse(ApnsResponse response, List<DeviceToken> tokens) {
+        for (ApnsTokenResult result : response.getResults()) {
+            if (result.isSuccess()) {
+                notificationRepository.updateStatus(result.getNotificationId(),
+                        NotificationStatus.SENT);
+            } else if (result.getErrorCode().equals("BadDeviceToken")
+                    || result.getErrorCode().equals("Unregistered")) {
+                // Device token is invalid — deactivate it to avoid future waste
+                deviceTokenRepository.deactivateToken(result.getDeviceToken());
+            }
+        }
+    }
+
+    private void sendToFcmInBatches(List<DeviceToken> tokens,
+                                    NotificationPayload payload,
+                                    String broadcastId) {
+        for (int startIndex = 0; startIndex < tokens.size(); startIndex += FCM_BATCH_SIZE) {
+            int endIndex = Math.min(startIndex + FCM_BATCH_SIZE, tokens.size());
+            List<DeviceToken> fcmBatch = tokens.subList(startIndex, endIndex);
+            sendToFcmWithRetry(fcmBatch, payload, 0);
+        }
+    }
+
+    private void sendToFcmWithRetry(List<DeviceToken> tokens,
+                                    NotificationPayload payload,
+                                    int attemptNumber) {
+        try {
+            fcmClient.sendMulticast(
+                    tokens.stream().map(DeviceToken::getToken).collect(Collectors.toList()),
+                    payload);
+        } catch (FcmException fcmException) {
+            if (attemptNumber < MAX_RETRY_ATTEMPTS) {
+                long backoffMs = BASE_BACKOFF_MS * (long) Math.pow(2, attemptNumber);
+                sleepQuietly(backoffMs);
+                sendToFcmWithRetry(tokens, payload, attemptNumber + 1);
+            } else {
+                System.err.println("[PushNotificationWorker] FCM retry exhausted");
+                markTokensAsFailed(tokens);
+            }
+        }
+    }
+
+    private void markTokensAsFailed(List<DeviceToken> tokens) {
+        tokens.forEach(token ->
+                notificationRepository.updateStatusByToken(token.getToken(),
+                        NotificationStatus.FAILED));
+    }
+
+    private void sleepQuietly(long durationMs) {
+        try {
+            Thread.sleep(durationMs);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-notification-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why is Kafka essential in the notification system architecture? What problem does it solve?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Kafka provides lower latency than direct API calls to APNs/FCM</button></li>
+              <li><button class="quiz__option" data-correct="true">Kafka absorbs burst traffic (10M/min peaks) so the API layer doesn't need to scale to match peak load, and workers process at their natural rate</button></li>
+              <li><button class="quiz__option" data-correct="false">Kafka handles deduplication of notifications automatically</button></li>
+              <li><button class="quiz__option" data-correct="false">Kafka encrypts notification payloads in transit</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">The system uses at-least-once Kafka semantics. What prevents users from receiving the same notification twice?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Kafka's exactly-once transaction log prevents duplicates</button></li>
+              <li><button class="quiz__option" data-correct="false">APNs and FCM deduplicate on their end</button></li>
+              <li><button class="quiz__option" data-correct="true">An idempotency key (stored in Redis with 24hr TTL) is checked before publishing — duplicate events with the same key are rejected at the API layer</button></li>
+              <li><button class="quiz__option" data-correct="false">Cassandra's IF NOT EXISTS prevents duplicate inserts, and consumers skip already-processed records</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">Why is exponential backoff preferred over a fixed retry interval when APNs or FCM returns a rate limit error?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Exponential backoff consumes less CPU than fixed retries</button></li>
+              <li><button class="quiz__option" data-correct="true">Fixed retries can cause a thundering herd — all workers retry simultaneously. Exponential backoff spreads retries out, giving the gateway time to recover</button></li>
+              <li><button class="quiz__option" data-correct="false">APNs and FCM require exponential backoff in their API contracts</button></li>
+              <li><button class="quiz__option" data-correct="false">Exponential backoff reduces the number of total retry attempts</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">When APNs returns a "BadDeviceToken" error for a specific token, what should the system do?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Retry the notification with that token 3 times before giving up</button></li>
+              <li><button class="quiz__option" data-correct="false">Delete the user's account since their device is unregistered</button></li>
+              <li><button class="quiz__option" data-correct="true">Mark the device token as inactive in the database — future broadcasts won't waste APNs calls on it, and no retry is needed</button></li>
+              <li><button class="quiz__option" data-correct="false">Request a new token from APNs on behalf of the user</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="search-autocomplete.html" class="btn btn--outline">← Autocomplete</a>
+        <a href="../../index.html#problems" class="btn btn--primary">All Problems →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

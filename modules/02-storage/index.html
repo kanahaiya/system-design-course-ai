@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Master SQL vs NoSQL decisions, horizontal sharding strategies, replication patterns, and B-tree vs LSM-tree indexes for MAANG system design interviews.">
+  <title>Storage &amp; Databases — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/02-storage/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#sql-nosql" class="module-toc__link">SQL vs NoSQL</a></li>
+          <li><a href="#sharding" class="module-toc__link">Sharding Strategies</a></li>
+          <li><a href="#replication" class="module-toc__link">Replication Patterns</a></li>
+          <li><a href="#indexes" class="module-toc__link">B-tree vs LSM-tree</a></li>
+          <li><a href="#code" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-off Table</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-02" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 02</span>
+        </nav>
+        <div class="module-header__number">Module 02</div>
+        <h1 class="module-header__title">Storage &amp; Databases</h1>
+        <p class="module-header__desc">
+          Choose the right database, shard it correctly, replicate it safely.
+          The three decisions that determine whether your system survives 10× traffic growth
+          or collapses under it.
+        </p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 40 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Intermediate</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> High Frequency</div>
+        </div>
+      </header>
+
+      <!-- Section: SQL vs NoSQL -->
+      <section class="content-section" id="sql-nosql" aria-labelledby="sql-nosql-title">
+        <h2 class="content-section__title" id="sql-nosql-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          SQL vs NoSQL: Decision Framework
+        </h2>
+        <div class="content-section__body">
+          <p>
+            The question is never "which is better?" — it's "which fits this access pattern?"
+            Most large systems use <em>both</em>: PostgreSQL for transactional data, Cassandra for
+            time-series writes, Redis for caching, S3 for blobs.
+          </p>
+          <h3>Choose SQL (Relational) when:</h3>
+          <ul>
+            <li>Data has complex relationships requiring multi-table joins (e.g., e-commerce: orders, line items, products, users)</li>
+            <li>ACID transactions are required (payment processing, inventory management)</li>
+            <li>Schema is stable and well-understood upfront</li>
+            <li>Read patterns are diverse and ad-hoc (reporting, analytics on operational data)</li>
+            <li>Data volume is below ~10 TB and write throughput below ~10,000 writes/sec</li>
+          </ul>
+          <h3>Choose NoSQL when:</h3>
+          <ul>
+            <li><strong>Document (MongoDB, Firestore)</strong>: Hierarchical data accessed as a unit; schema flexibility needed; rapid product iteration</li>
+            <li><strong>Wide-column (Cassandra, HBase)</strong>: Write-heavy time-series data; known query patterns at design time; massive scale (petabytes)</li>
+            <li><strong>Key-value (DynamoDB, Redis)</strong>: Single-key lookups at extreme scale; session storage, user profiles, shopping carts</li>
+            <li><strong>Graph (Neo4j, Amazon Neptune)</strong>: Relationship-centric queries (social networks, recommendation engines, fraud detection)</li>
+          </ul>
+          <p>
+            <strong>Interview signal:</strong> Never choose NoSQL just for "scale." PostgreSQL with proper indexing,
+            connection pooling (PgBouncer), and read replicas handles millions of users.
+            Choose NoSQL when your <em>access pattern</em> demands it.
+          </p>
+
+          <!-- SVG: Decision flowchart -->
+          <svg viewBox="0 0 480 260" class="content-section__diagram" role="img" aria-label="SQL vs NoSQL decision flowchart">
+            <!-- Start -->
+            <rect x="180" y="10" width="120" height="35" rx="6" fill="#6366f1"/>
+            <text x="240" y="32" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="white" font-weight="600">New data store?</text>
+            <!-- ACID needed? -->
+            <rect x="155" y="65" width="170" height="35" rx="6" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+            <text x="240" y="87" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#1e293b">ACID transactions required?</text>
+            <line x1="240" y1="45" x2="240" y2="65" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arr1)"/>
+            <!-- YES branch → SQL -->
+            <rect x="60" y="125" width="110" height="35" rx="6" fill="#16a34a"/>
+            <text x="115" y="147" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="white" font-weight="600">SQL (PostgreSQL)</text>
+            <line x1="155" y1="82" x2="115" y2="125" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arr1)"/>
+            <text x="110" y="108" font-family="Inter,sans-serif" font-size="9" fill="#16a34a">YES</text>
+            <!-- NO → access pattern? -->
+            <rect x="310" y="65" width="150" height="35" rx="6" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+            <text x="385" y="83" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#1e293b">Primary access</text>
+            <text x="385" y="95" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#1e293b">pattern?</text>
+            <line x1="325" y1="82" x2="310" y2="82" stroke="#e11d48" stroke-width="1.5" marker-end="url(#arr1)"/>
+            <text x="318" y="78" font-family="Inter,sans-serif" font-size="9" fill="#e11d48">NO</text>
+            <!-- Pattern branches -->
+            <rect x="310" y="130" width="90" height="30" rx="6" fill="#0ea5e9"/>
+            <text x="355" y="149" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Key lookup →</text>
+            <text x="355" y="160" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="white">DynamoDB/Redis</text>
+            <rect x="410" y="130" width="60" height="30" rx="6" fill="#f59e0b"/>
+            <text x="440" y="149" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">Time-series →</text>
+            <text x="440" y="160" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="white">Cassandra</text>
+            <line x1="385" y1="100" x2="355" y2="130" stroke="#0ea5e9" stroke-width="1.2"/>
+            <line x1="385" y1="100" x2="440" y2="130" stroke="#f59e0b" stroke-width="1.2"/>
+          </svg>
+        </div>
+      </section>
+
+      <!-- Section: Sharding -->
+      <section class="content-section" id="sharding" aria-labelledby="sharding-title">
+        <h2 class="content-section__title" id="sharding-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔀</span>
+          Horizontal Sharding Strategies
+        </h2>
+        <div class="content-section__body">
+          <p>
+            Sharding (horizontal partitioning) splits data across multiple database nodes.
+            Each shard is an independent database holding a subset of rows. The shard key is the
+            most important design decision — it determines data distribution and which queries require
+            cross-shard scatter-gather.
+          </p>
+          <h3>1. Range Sharding</h3>
+          <p>
+            Partition by contiguous ranges of the shard key (e.g., userId 1–1M on shard 1,
+            1M–2M on shard 2). Simple to implement. Enables range scans within a shard.
+            <strong>Problem:</strong> hotspots if recent data is always in the same range
+            (e.g., sharding tweets by timestamp puts all new writes on one shard).
+          </p>
+          <h3>2. Hash Sharding</h3>
+          <p>
+            Apply a hash function to the shard key: <code>shardIndex = hash(key) % numShards</code>.
+            Distributes load evenly. Eliminates hotspots.
+            <strong>Problem:</strong> re-sharding requires rehashing and moving ~half the data.
+            Solution: consistent hashing reduces data movement to 1/N on shard addition.
+          </p>
+          <h3>3. Directory (Lookup) Sharding</h3>
+          <p>
+            A separate lookup table maps each key (or key range) to a shard. Maximum flexibility —
+            you can move individual users between shards without rehashing.
+            <strong>Problem:</strong> the lookup table is a single point of failure and bottleneck.
+            Must be replicated and cached aggressively.
+          </p>
+          <h3>Choosing a Shard Key</h3>
+          <ul>
+            <li><strong>High cardinality</strong> — enough distinct values to distribute evenly</li>
+            <li><strong>Low correlation with time</strong> — avoid auto-increment IDs that create write hotspots</li>
+            <li><strong>Aligns with query patterns</strong> — queries that need data from one shard are fast; cross-shard queries are slow</li>
+            <li><strong>Immutable</strong> — changing a shard key requires moving the row to a different shard</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Section: Replication -->
+      <section class="content-section" id="replication" aria-labelledby="replication-title">
+        <h2 class="content-section__title" id="replication-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔄</span>
+          Replication Patterns
+        </h2>
+        <div class="content-section__body">
+          <svg viewBox="0 0 480 180" class="content-section__diagram" role="img" aria-label="Leader-follower replication diagram">
+            <!-- Leader-follower -->
+            <text x="120" y="18" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#6366f1" font-weight="700">Leader-Follower</text>
+            <rect x="80" y="25" width="80" height="35" rx="6" fill="#6366f1"/>
+            <text x="120" y="47" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="white">Leader</text>
+            <rect x="20" y="90" width="70" height="30" rx="6" fill="#f1f5f9" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="55" y="109" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#1e293b">Follower 1</text>
+            <rect x="105" y="90" width="70" height="30" rx="6" fill="#f1f5f9" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="140" y="109" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#1e293b">Follower 2</text>
+            <line x1="100" y1="60" x2="55" y2="90" stroke="#6366f1" stroke-width="1.5"/>
+            <line x1="140" y1="60" x2="140" y2="90" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="120" y="145" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Writes → leader only</text>
+            <text x="120" y="157" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Reads → any node</text>
+            <!-- Multi-leader -->
+            <text x="310" y="18" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" fill="#e11d48" font-weight="700">Multi-Leader</text>
+            <rect x="260" y="25" width="70" height="30" rx="6" fill="#e11d48"/>
+            <text x="295" y="44" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="white">Leader A</text>
+            <rect x="350" y="25" width="70" height="30" rx="6" fill="#e11d48"/>
+            <text x="385" y="44" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="white">Leader B</text>
+            <line x1="330" y1="40" x2="350" y2="40" stroke="#e11d48" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <rect x="275" y="90" width="70" height="30" rx="6" fill="#f1f5f9" stroke="#e11d48" stroke-width="1.5"/>
+            <text x="310" y="109" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#1e293b">Follower</text>
+            <line x1="295" y1="55" x2="310" y2="90" stroke="#e11d48" stroke-width="1.2"/>
+            <line x1="385" y1="55" x2="310" y2="90" stroke="#e11d48" stroke-width="1.2"/>
+            <text x="310" y="145" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Writes to any leader</text>
+            <text x="310" y="157" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">Conflicts must be resolved</text>
+          </svg>
+          <h3>Leader-Follower (Single-Leader)</h3>
+          <p>
+            All writes go to the leader. The leader replicates to followers asynchronously (low latency,
+            possible data loss on crash) or synchronously (no data loss, but write latency blocked by
+            slowest follower). MySQL, PostgreSQL, MongoDB, Redis use this pattern.
+            On leader failure, a follower is promoted — this is where inconsistency windows occur.
+          </p>
+          <h3>Multi-Leader</h3>
+          <p>
+            Multiple nodes accept writes simultaneously, then replicate to each other.
+            Used for multi-datacenter deployments (each DC has a leader).
+            <strong>Problem:</strong> write conflicts are inevitable and hard to resolve.
+            Conflict resolution strategies: last-write-wins (risky), application-level resolution, CRDTs.
+            Example: CouchDB, Google Docs (operational transforms).
+          </p>
+          <h3>Leaderless (Dynamo-style)</h3>
+          <p>
+            Any node accepts writes. Reads and writes use quorum: if W + R &gt; N (total replicas),
+            at least one node in a read quorum overlaps with the latest write quorum.
+            Common: W=2, R=2, N=3. Cassandra, DynamoDB, Riak use this.
+            Enables highest availability — no single point of failure for writes.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: B-tree vs LSM-tree -->
+      <section class="content-section" id="indexes" aria-labelledby="indexes-title">
+        <h2 class="content-section__title" id="indexes-title">
+          <span class="content-section__title-icon" aria-hidden="true">🌲</span>
+          B-tree vs LSM-tree Indexes
+        </h2>
+        <div class="content-section__body">
+          <p>
+            The index structure determines whether your database is optimized for reads or writes.
+            This is a deep topic that differentiates strong candidates.
+          </p>
+          <h3>B-tree (PostgreSQL, MySQL InnoDB, most relational DBs)</h3>
+          <ul>
+            <li>Balanced tree structure; pages are fixed-size (typically 4–16 KB)</li>
+            <li>Updates are in-place: a write finds the right page and modifies it on disk</li>
+            <li><strong>Read performance:</strong> excellent — O(log N) lookups, great for range scans</li>
+            <li><strong>Write performance:</strong> good but involves random I/O (write amplification factor ~5–10×)</li>
+            <li><strong>Write amplification:</strong> one logical write may cause multiple disk page rewrites (COW, WAL, dirty page flush)</li>
+          </ul>
+          <h3>LSM-tree (Cassandra, LevelDB, RocksDB, HBase)</h3>
+          <ul>
+            <li>Log-Structured Merge-tree: writes always go to an in-memory memtable, then flushed to immutable SSTables on disk</li>
+            <li>SSTables are periodically compacted (merged) in the background</li>
+            <li><strong>Write performance:</strong> excellent — all writes are sequential (no random I/O)</li>
+            <li><strong>Read performance:</strong> worse — must check memtable + multiple SSTables (bloom filters mitigate this)</li>
+            <li><strong>Space amplification:</strong> duplicate keys exist across SSTables until compaction</li>
+            <li>Write amplification is lower than B-trees for write-heavy workloads</li>
+          </ul>
+          <p>
+            <strong>Rule of thumb:</strong> B-tree for read-heavy mixed workloads.
+            LSM-tree for write-heavy append-mostly workloads (logging, metrics, IoT).
+          </p>
+        </div>
+      </section>
+
+      <!-- Section: Java Implementation -->
+      <section class="content-section" id="code" aria-labelledby="code-title">
+        <h2 class="content-section__title" id="code-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation: Consistent Hash Ring + Replication Log
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.*;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.logging.Logger;
+
+/**
+ * Consistent hash ring for database sharding.
+ * Virtual nodes (vnodes) ensure even distribution even with heterogeneous hardware.
+ * Adding/removing a node only moves ~1/N of the keys to adjacent nodes.
+ */
+public class ConsistentHashRing {
+
+    private static final Logger LOG = Logger.getLogger(ConsistentHashRing.class.getName());
+    private static final int DEFAULT_VNODES_PER_NODE = 150; // Twitter uses ~1000
+
+    // Sorted map: hash position → physical node name
+    private final ConcurrentSkipListMap&lt;Long, String&gt; ring = new ConcurrentSkipListMap&lt;&gt;();
+    private final int vnodesPerNode;
+
+    public ConsistentHashRing(int vnodesPerNode) {
+        this.vnodesPerNode = vnodesPerNode;
+    }
+
+    public ConsistentHashRing() {
+        this(DEFAULT_VNODES_PER_NODE);
+    }
+
+    /**
+     * Adds a node to the ring with its virtual node positions.
+     * Virtual nodes prevent the "hot shard" problem when nodes have
+     * unequal data volumes after addition.
+     *
+     * @param nodeName physical node identifier (e.g., "db-shard-1")
+     */
+    public void addNode(String nodeName) {
+        for (int virtualNodeIndex = 0; virtualNodeIndex &lt; vnodesPerNode; virtualNodeIndex++) {
+            long hashPosition = hash(nodeName + "#vnode-" + virtualNodeIndex);
+            ring.put(hashPosition, nodeName);
+        }
+        LOG.info("Added node " + nodeName + " with " + vnodesPerNode + " virtual nodes.");
+    }
+
+    /**
+     * Removes a node and all its virtual positions.
+     * Keys that mapped to this node now map to the next node on the ring.
+     *
+     * @param nodeName physical node identifier to remove
+     */
+    public void removeNode(String nodeName) {
+        for (int virtualNodeIndex = 0; virtualNodeIndex &lt; vnodesPerNode; virtualNodeIndex++) {
+            long hashPosition = hash(nodeName + "#vnode-" + virtualNodeIndex);
+            ring.remove(hashPosition);
+        }
+        LOG.info("Removed node: " + nodeName);
+    }
+
+    /**
+     * Returns the list of nodes responsible for a given key.
+     * The primary node plus (replicationFactor - 1) clockwise neighbors.
+     * This is how Cassandra selects its replica set.
+     *
+     * @param key               the shard key (e.g., userId, orderId)
+     * @param replicationFactor number of replicas (typically 3)
+     * @return ordered list of node names: [primary, replica1, replica2, ...]
+     */
+    public List&lt;String&gt; getReplicaNodes(String key, int replicationFactor) {
+        if (ring.isEmpty()) {
+            return Collections.emptyList();
+        }
+        long keyHash = hash(key);
+        List&lt;String&gt; replicaNodes = new ArrayList&lt;&gt;();
+        Set&lt;String&gt; seenPhysicalNodes = new LinkedHashSet&lt;&gt;();
+
+        // Start at the key's position and walk clockwise
+        NavigableMap&lt;Long, String&gt; tailMap = ring.tailMap(keyHash);
+        Iterator&lt;Map.Entry&lt;Long, String&gt;&gt; ringIterator =
+            (tailMap.isEmpty() ? ring : tailMap).entrySet().iterator();
+
+        // Wrap around if needed
+        while (seenPhysicalNodes.size() &lt; replicationFactor) {
+            if (!ringIterator.hasNext()) {
+                ringIterator = ring.entrySet().iterator();
+            }
+            if (!ringIterator.hasNext()) break;
+            String physicalNode = ringIterator.next().getValue();
+            seenPhysicalNodes.add(physicalNode);
+        }
+        replicaNodes.addAll(seenPhysicalNodes);
+        return replicaNodes;
+    }
+
+    /**
+     * MD5 hash → long for ring position.
+     * Using MD5 only for distribution (not security).
+     */
+    private long hash(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] hashBytes = digest.digest(input.getBytes());
+            // Take first 8 bytes as a long
+            long hashValue = 0;
+            for (int byteIndex = 0; byteIndex &lt; 8; byteIndex++) {
+                hashValue = (hashValue &lt;&lt; 8) | (hashBytes[byteIndex] &amp; 0xFF);
+            }
+            return hashValue;
+        } catch (NoSuchAlgorithmException algorithmException) {
+            throw new IllegalStateException("MD5 not available", algorithmException);
+        }
+    }
+
+    // --- Replication log for leader-follower demo ---
+
+    /**
+     * Simplified write-ahead log entry for replication.
+     * In production: MySQL binlog, PostgreSQL WAL, MongoDB oplog.
+     */
+    public record ReplicationLogEntry(long sequenceNumber, String key, String value, long timestampMs) {}
+
+    /**
+     * Simulates a replication log (WAL/binlog).
+     * Followers apply entries in sequence-number order.
+     */
+    public static class ReplicationLog {
+        private final List&lt;ReplicationLogEntry&gt; logEntries = new ArrayList&lt;&gt;();
+        private long sequenceCounter = 0;
+
+        public ReplicationLogEntry append(String key, String value) {
+            ReplicationLogEntry entry = new ReplicationLogEntry(
+                ++sequenceCounter, key, value, System.currentTimeMillis()
+            );
+            logEntries.add(entry);
+            return entry;
+        }
+
+        /** Returns all entries after the given sequence number (for follower catch-up). */
+        public List&lt;ReplicationLogEntry&gt; getEntriesAfter(long lastAppliedSequence) {
+            return logEntries.stream()
+                .filter(entry -&gt; entry.sequenceNumber() &gt; lastAppliedSequence)
+                .toList();
+        }
+    }
+
+    public static void main(String[] args) {
+        ConsistentHashRing hashRing = new ConsistentHashRing(150);
+        hashRing.addNode("shard-1");
+        hashRing.addNode("shard-2");
+        hashRing.addNode("shard-3");
+
+        String[] testKeys = {"user:1001", "user:5042", "order:88291", "session:abc123"};
+        for (String testKey : testKeys) {
+            List&lt;String&gt; replicas = hashRing.getReplicaNodes(testKey, 2);
+            System.out.println(testKey + " → primary=" + replicas.get(0) + ", replica=" + replicas.get(1));
+        }
+
+        System.out.println("\nAdding shard-4 (only ~25% of keys should move)...");
+        hashRing.addNode("shard-4");
+        for (String testKey : testKeys) {
+            List&lt;String&gt; replicas = hashRing.getReplicaNodes(testKey, 2);
+            System.out.println(testKey + " → " + replicas.get(0));
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Trade-off Table -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-off Table
+        </h2>
+        <div class="content-section__body">
+          <table class="content-table" aria-label="Storage technology trade-offs">
+            <thead>
+              <tr><th>Dimension</th><th>SQL (PostgreSQL)</th><th>Wide-Column (Cassandra)</th><th>Key-Value (DynamoDB)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Write throughput</td><td>~10K writes/sec (single leader)</td><td>&gt;1M writes/sec (leaderless)</td><td>Virtually unlimited (auto-scaling)</td></tr>
+              <tr><td>Read flexibility</td><td>Arbitrary joins, aggregations</td><td>Denormalized tables per query pattern</td><td>Single-key or sparse secondary index</td></tr>
+              <tr><td>Consistency</td><td>ACID, strong by default</td><td>Tunable (ONE to QUORUM)</td><td>Eventual by default; strong optional</td></tr>
+              <tr><td>Operational complexity</td><td>Medium (replication, failover)</td><td>High (tuning, compaction, tombstones)</td><td>Low (fully managed)</td></tr>
+              <tr><td>Best for</td><td>Financial data, inventory, user records</td><td>Time-series, IoT, activity feeds</td><td>Sessions, caching layer, leaderboards</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="module-02-quiz" role="region" aria-label="Module 02 quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Storage Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Your system shards users by userId using hash(userId) % 4. You need to add a 5th shard. What is the primary operational concern with simple hash sharding?"
+               data-options='["The hash function may collide","~80% of existing data must be moved to new shard assignments — requires a full data migration","You cannot add shards without downtime","Range queries will stop working"]'
+               data-correct="1"
+               data-explanation="With modulo hashing (hash(key) % N), changing N from 4 to 5 remaps almost every key — roughly (N-1)/N = 80% of data moves. Consistent hashing solves this by only moving ~1/N of keys (20% in this case). This is why DynamoDB and Cassandra use consistent hashing internally."
+               style="display:none"></div>
+          <div data-question="In Cassandra with N=3 replicas, W=2 (write quorum), R=2 (read quorum). Is strong consistency guaranteed? Why?"
+               data-options='["Yes — any read quorum overlaps with any write quorum since W+R > N (2+2=4 > 3)","No — Cassandra is always eventually consistent regardless of quorum settings","Yes — but only if using the LOCAL_QUORUM consistency level","No — W+R must equal N exactly for strong consistency"]'
+               data-correct="0"
+               data-explanation="When W + R > N, any read quorum (R nodes) must overlap with any write quorum (W nodes) by at least one node. That overlapping node has the latest write, guaranteeing the read sees the freshest data. This is the quorum intersection property — the mathematical basis for Dynamo-style strong consistency."
+               style="display:none"></div>
+          <div data-question="Why does LSM-tree outperform B-tree for write-heavy workloads like time-series logging?"
+               data-options='["LSM-trees use less memory","LSM-trees convert random writes into sequential writes via the memtable → SSTable flush, eliminating random disk I/O which is 100× slower than sequential I/O","LSM-trees do not need compaction unlike B-trees","LSM-trees automatically partition data across shards"]'
+               data-correct="1"
+               data-explanation="B-trees do in-place updates which require random writes to disk pages (expensive, especially on HDDs). LSM-trees buffer all writes in memory (memtable), then flush them as sequential immutable SSTables. Sequential writes are ~100× faster than random writes on HDDs and ~10× on SSDs. The trade-off: reads are slower and require bloom filters + multiple SSTable checks."
+               style="display:none"></div>
+          <div data-question="You are designing a social feed system (Instagram-style). Users follow others and see their posts ordered by time. What sharding key and database type is most appropriate?"
+               data-options='["Shard by postId using range sharding; use PostgreSQL for strong consistency","Shard by userId (author) using consistent hashing; use Cassandra with a time-clustered partition key for efficient time-range fan-out reads","Use a single PostgreSQL instance with a posts table — social scale doesn't require sharding","Shard by timestamp; use DynamoDB with GSI on userId"]'
+               data-correct="1"
+               data-explanation="Instagram and Twitter shard by userId (the author). Cassandra's partition key = userId, clustering key = (timestamp DESC) enables efficient 'get all posts by user ordered by time' — the core feed query — in a single partition scan. Range sharding by postId creates hotspots. Timestamp sharding puts all recent writes on one shard."
+               style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../03-caching/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Module →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../01-fundamentals/index.html" class="module-nav__btn module-nav__btn--prev">← Module 01: Fundamentals</a>
+        <a href="../03-caching/index.html" class="module-nav__btn module-nav__btn--next">Module 03: Caching →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 02</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

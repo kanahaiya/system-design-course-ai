@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Uber ride-sharing system: match riders to drivers, real-time location updates, geospatial indexing with Redis GEORADIUS, fare estimation and trip tracking.">
+  <title>Design Uber / Ride Sharing — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/uber/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-uber" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=uber" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+        </div>
+        <h1 class="module-header__title">Design Uber / Ride Sharing</h1>
+        <p class="module-header__desc">Design a ride-sharing platform that matches riders to nearby drivers in real-time using geospatial indexing, with live location tracking, fare estimation, and trip management at 10M trips/day scale.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span>🏢</span> Uber, Lyft, DoorDash, Google Maps</div>
+          <div class="module-header__meta-item"><span>⏱️</span> 45 min</div>
+        </div>
+      </header>
+
+      <section id="requirements" class="module-section">
+        <h2>R — Requirements</h2>
+        <h3>Functional Requirements</h3>
+        <ul>
+          <li>Match riders to the nearest available driver within 3 seconds</li>
+          <li>Drivers continuously broadcast their location every 4 seconds</li>
+          <li>Fare estimation before confirming a ride</li>
+          <li>Real-time trip tracking for both rider and driver</li>
+          <li>Support vehicle types: economy, premium, XL</li>
+        </ul>
+        <h3>Non-Functional Requirements</h3>
+        <ul>
+          <li><strong>Scale:</strong> 10M trips/day, 1M active drivers globally</li>
+          <li><strong>Location write throughput:</strong> 1M drivers × 1 update/4s = 250,000 writes/second</li>
+          <li><strong>Match latency:</strong> &lt; 3 seconds from rider request to driver offer</li>
+          <li><strong>Availability:</strong> 99.9% (≈ 8.7 hours downtime/year tolerable)</li>
+          <li><strong>GPS accuracy:</strong> within 10 meters</li>
+        </ul>
+        <div class="callout callout--tip">
+          <strong>Interviewer signal:</strong> The 250K location writes/second is the hardest constraint. Everything else (trips, fare) is normal CRUD. Focus your design on making the geospatial writes fast and the proximity query cheap.
+        </div>
+      </section>
+
+      <section id="estimation" class="module-section">
+        <h2>E — Estimation</h2>
+        <div class="estimation-grid">
+          <div class="estimation-card">
+            <div class="estimation-card__label">Location writes/sec</div>
+            <div class="estimation-card__value">250K</div>
+            <div class="estimation-card__note">1M drivers ÷ 4s interval</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Trip creates/sec</div>
+            <div class="estimation-card__value">115 QPS</div>
+            <div class="estimation-card__note">10M/day ÷ 86,400</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Redis location data</div>
+            <div class="estimation-card__value">~100 MB</div>
+            <div class="estimation-card__note">1M drivers × 100 bytes</div>
+          </div>
+          <div class="estimation-card">
+            <div class="estimation-card__label">Trip DB storage/year</div>
+            <div class="estimation-card__value">~1 TB</div>
+            <div class="estimation-card__note">10M trips × 365 × ~300 bytes</div>
+          </div>
+        </div>
+        <p>The location data for 1M drivers fits easily in a single Redis instance (100MB). The bottleneck is write throughput at 250K/s — we need Redis pipeline writes and a cluster with multiple shards.</p>
+      </section>
+
+      <section id="schema" class="module-section">
+        <h2>S — Schema</h2>
+        <pre><code class="language-java">-- MySQL: persistent data
+CREATE TABLE drivers (
+    driver_id    BIGINT PRIMARY KEY,
+    name         VARCHAR(100),
+    vehicle_type ENUM('ECONOMY','PREMIUM','XL'),
+    status       ENUM('OFFLINE','AVAILABLE','ON_TRIP') DEFAULT 'OFFLINE',
+    last_updated TIMESTAMP
+);
+
+CREATE TABLE trips (
+    trip_id     BIGINT PRIMARY KEY AUTO_INCREMENT,
+    rider_id    BIGINT NOT NULL,
+    driver_id   BIGINT,
+    status      ENUM('REQUESTED','MATCHING','ACTIVE','COMPLETED','CANCELLED'),
+    origin_lat  DECIMAL(9,6),
+    origin_lng  DECIMAL(9,6),
+    dest_lat    DECIMAL(9,6),
+    dest_lng    DECIMAL(9,6),
+    fare_cents  INT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_rider (rider_id),
+    INDEX idx_driver (driver_id)
+);
+
+-- Redis: live location index (NOT stored in MySQL)
+-- GEOADD driver_locations &lt;lng&gt; &lt;lat&gt; &lt;driver_id&gt;
+-- GEORADIUS driver_locations &lt;lng&gt; &lt;lat&gt; 5 km ASC COUNT 10</code></pre>
+        <div class="callout callout--info">
+          <strong>Why Redis for location?</strong> MySQL spatial indexes work for millions of static records but cannot handle 250K writes/second. Redis GEORADIUS runs O(N+log(M)) where M is the sorted set size — fast enough for real-time proximity queries.
+        </div>
+      </section>
+
+      <section id="hld" class="module-section">
+        <h2>H — High-level Design</h2>
+        <div class="hld-diagram">
+          <div class="hld-flow">
+            <div class="hld-box hld-box--client">Driver App</div>
+            <div class="hld-arrow">→ location every 4s</div>
+            <div class="hld-box">Location Service</div>
+            <div class="hld-arrow">GEOADD</div>
+            <div class="hld-box hld-box--storage">Redis Geo Cluster</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box hld-box--client">Rider App</div>
+            <div class="hld-arrow">→ request ride</div>
+            <div class="hld-box">Matching Service</div>
+            <div class="hld-arrow">GEORADIUS</div>
+            <div class="hld-box hld-box--storage">Redis Geo Cluster</div>
+          </div>
+          <div class="hld-flow" style="margin-top:var(--space-3)">
+            <div class="hld-box">Matching Service</div>
+            <div class="hld-arrow">→ offer trip</div>
+            <div class="hld-box">Driver App (WebSocket)</div>
+            <div class="hld-arrow">→ accept</div>
+            <div class="hld-box">Trip Service → MySQL</div>
+          </div>
+        </div>
+        <ol>
+          <li><strong>Driver App</strong> sends GPS coordinates every 4s to the Location Service via WebSocket or HTTP/2</li>
+          <li><strong>Location Service</strong> writes to Redis: <code>GEOADD driver_locations {lng} {lat} {driver_id}</code> and updates driver status in MySQL asynchronously</li>
+          <li><strong>Rider requests a trip</strong> → Matching Service calls <code>GEORADIUS driver_locations {lng} {lat} 5 km ASC COUNT 10</code> filtered by vehicle type and AVAILABLE status</li>
+          <li><strong>Matching Service</strong> sends trip offer to first available driver via notification. If rejected or no response in 10s, tries next driver</li>
+          <li><strong>Trip Service</strong> creates trip record in MySQL, marks driver ON_TRIP in Redis</li>
+          <li><strong>Both apps</strong> receive real-time updates via WebSocket through a Notification/Push Service</li>
+        </ol>
+      </section>
+
+      <section id="apis" class="module-section">
+        <h2>A — APIs</h2>
+        <pre><code class="language-java">// Driver location update (called every 4 seconds)
+POST /api/v1/drivers/{driverId}/location
+Body: { "lat": 37.7749, "lng": -122.4194, "heading": 270, "speed": 35 }
+Response: 204 No Content
+
+// Rider requests a ride
+POST /api/v1/trips
+Body: { "riderId": 123, "originLat": 37.77, "originLng": -122.41,
+        "destLat": 37.33, "destLng": -121.88, "vehicleType": "ECONOMY" }
+Response: { "tripId": 789, "estimatedFareCents": 1850,
+            "estimatedPickupSecs": 180, "status": "MATCHING" }
+
+// Get trip status (long-poll or WebSocket)
+GET /api/v1/trips/{tripId}
+Response: { "tripId": 789, "status": "ACTIVE", "driverLat": 37.775,
+            "driverLng": -122.419, "etaSeconds": 45 }
+
+// Driver accepts/rejects offer
+POST /api/v1/trips/{tripId}/respond
+Body: { "driverId": 456, "action": "ACCEPT" | "REJECT" }</code></pre>
+      </section>
+
+      <section id="deepdive" class="module-section">
+        <h2>D — Deep Dive: Geospatial Indexing</h2>
+        <p>Geohash divides the Earth into a grid of rectangular cells. Each cell is identified by a base-32 string — longer string = smaller cell = higher precision. A 6-character geohash covers roughly 1.2km × 0.6km.</p>
+        <p><strong>Nearby search algorithm:</strong> Take the driver's geohash prefix → find all 8 adjacent cells → query Redis for all drivers in those 9 cells. This is O(1) lookups rather than a full coordinate scan.</p>
+        <p>Redis implements this natively via a sorted set where the score is the geohash encoded as a 52-bit integer. <code>GEORADIUS</code> computes which geohash buckets to check and returns results sorted by distance.</p>
+        <div class="callout callout--warning">
+          <strong>Edge case — geohash boundary problem:</strong> A driver 100m away on the other side of a geohash boundary has a completely different prefix. Always query the 8 surrounding cells, not just the current cell. Redis GEORADIUS handles this automatically.
+        </div>
+      </section>
+
+      <section id="evaluate" class="module-section">
+        <h2>E — Evaluate</h2>
+        <ul>
+          <li><strong>250K writes/sec:</strong> Redis single instance handles ~100K ops/sec. Use Redis Cluster with 4-8 shards, each handling ~60K ops/sec with headroom. Shard key = geohash prefix (geographic partitioning).</li>
+          <li><strong>Match latency &lt;3s:</strong> GEORADIUS on Redis is sub-millisecond. The bottleneck is network round-trips and driver notification. Use WebSocket persistent connections to eliminate reconnect overhead.</li>
+          <li><strong>Driver goes offline mid-trip:</strong> Trip Service has a watchdog that monitors heartbeats. If driver location stops updating for 30s, escalate to support and notify rider.</li>
+          <li><strong>Hot spots (airport, stadium):</strong> Many drivers in one geohash cell. GEORADIUS COUNT 10 limits results — add random jitter to avoid always picking the same top driver.</li>
+        </ul>
+      </section>
+
+      <section id="deliver" class="module-section">
+        <h2>D — Deliver</h2>
+        <p>The final architecture centers on <strong>Redis Geo Cluster</strong> as the real-time location backbone, with MySQL handling durable trip records. The two write paths (location updates vs trip creation) are fully decoupled.</p>
+        <p><strong>Scaling path:</strong> Start with a single Redis instance → add read replicas for GEORADIUS queries → cluster when write throughput exceeds 80K/s per shard. Matching Service is stateless and scales horizontally behind a load balancer.</p>
+      </section>
+
+      <section id="tradeoffs" class="module-section">
+        <h2>Trade-off Table</h2>
+        <div class="table-wrapper">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Geospatial index</td>
+                <td>Redis GEORADIUS (geohash)</td>
+                <td>Google S2 cells / quadtree</td>
+                <td>Redis</td>
+                <td>Built-in, battle-tested, handles 250K writes/sec with clustering. S2 better for complex polygon queries we don't need.</td>
+              </tr>
+              <tr>
+                <td>Driver location updates</td>
+                <td>WebSocket (persistent)</td>
+                <td>HTTP polling every 4s</td>
+                <td>WebSocket</td>
+                <td>250K writes/sec × HTTP overhead = too many connections. WebSocket reduces latency and connection overhead by 10x.</td>
+              </tr>
+              <tr>
+                <td>Matcher architecture</td>
+                <td>Centralized matching service</td>
+                <td>Distributed per-city matchers</td>
+                <td>Per-city</td>
+                <td>City-level sharding isolates failures and allows geo-local optimization. Centralized becomes a single point of failure at scale.</td>
+              </tr>
+              <tr>
+                <td>Trip storage</td>
+                <td>MySQL (relational)</td>
+                <td>Cassandra (wide-column)</td>
+                <td>MySQL</td>
+                <td>Trips have complex relationships (rider+driver+payment). 115 QPS is well within MySQL's range. Cassandra's benefit (write scale) not needed here.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementation" class="module-section">
+        <h2>Java Implementation</h2>
+        <pre><code class="language-java">/**
+ * GeospatialMatchingService
+ * Finds nearby available drivers using geohash-based spatial indexing.
+ * In production this delegates to Redis GEORADIUS; shown here with
+ * an in-process TreeMap for interview demonstration purposes.
+ */
+public class GeospatialMatchingService {
+
+    private static final double EARTH_RADIUS_KM = 6371.0;
+    private static final int GEOHASH_PRECISION = 6; // ~1.2km x 0.6km cells
+
+    // In production: Jedis/Lettuce Redis client
+    // Here: driver_id -> [lat, lng] for demo
+    private final Map&lt;Long, double[]&gt; driverLocations = new ConcurrentHashMap&lt;&gt;();
+    private final Map&lt;Long, DriverStatus&gt; driverStatus = new ConcurrentHashMap&lt;&gt;();
+
+    public enum DriverStatus { AVAILABLE, ON_TRIP, OFFLINE }
+
+    /**
+     * Updates driver location. Called 250K times/second in production.
+     * Thin wrapper around Redis GEOADD in real system.
+     *
+     * @param driverId  the driver's unique identifier
+     * @param latitude  GPS latitude
+     * @param longitude GPS longitude
+     */
+    public void updateDriverLocation(long driverId, double latitude, double longitude) {
+        driverLocations.put(driverId, new double[]{latitude, longitude});
+        // Redis equivalent: GEOADD driver_locations &lt;lng&gt; &lt;lat&gt; &lt;driverId&gt;
+    }
+
+    /**
+     * Finds up to maxResults available drivers within radiusKm of origin.
+     * Returns list sorted by distance ascending.
+     *
+     * @param originLat  rider's latitude
+     * @param originLng  rider's longitude
+     * @param radiusKm   search radius in kilometers
+     * @param maxResults cap on returned drivers (avoid sending 1000 offers)
+     * @return sorted list of (driverId, distanceKm) pairs
+     */
+    public List&lt;DriverMatch&gt; findNearbyDrivers(
+            double originLat, double originLng,
+            double radiusKm, int maxResults) {
+
+        List&lt;DriverMatch&gt; candidates = new ArrayList&lt;&gt;();
+
+        for (Map.Entry&lt;Long, double[]&gt; entry : driverLocations.entrySet()) {
+            long driverId = entry.getKey();
+            double[] coords = entry.getValue();
+
+            if (driverStatus.get(driverId) != DriverStatus.AVAILABLE) {
+                continue;
+            }
+
+            double distanceKm = haversineDistanceKm(
+                originLat, originLng, coords[0], coords[1]
+            );
+
+            if (distanceKm <= radiusKm) {
+                candidates.add(new DriverMatch(driverId, distanceKm));
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(match -> match.distanceKm));
+        return candidates.subList(0, Math.min(maxResults, candidates.size()));
+    }
+
+    /**
+     * Haversine formula — great-circle distance between two GPS points.
+     * More accurate than Euclidean for distances over ~1km.
+     */
+    private double haversineDistanceKm(
+            double lat1, double lng1, double lat2, double lng2) {
+
+        double deltaLat = Math.toRadians(lat2 - lat1);
+        double deltaLng = Math.toRadians(lng2 - lng1);
+        double sinDeltaLat = Math.sin(deltaLat / 2);
+        double sinDeltaLng = Math.sin(deltaLng / 2);
+
+        double haversineAngle = sinDeltaLat * sinDeltaLat
+            + Math.cos(Math.toRadians(lat1))
+            * Math.cos(Math.toRadians(lat2))
+            * sinDeltaLng * sinDeltaLng;
+
+        return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(haversineAngle));
+    }
+
+    public record DriverMatch(long driverId, double distanceKm) {}
+}
+
+/**
+ * TripMatchingOrchestrator
+ * Coordinates the full matching flow: find drivers → offer → accept/reject loop.
+ */
+public class TripMatchingOrchestrator {
+
+    private static final int MAX_OFFER_ATTEMPTS = 5;
+    private static final int OFFER_TIMEOUT_SECONDS = 10;
+    private static final double INITIAL_SEARCH_RADIUS_KM = 5.0;
+
+    private final GeospatialMatchingService geoService;
+    private final NotificationService notificationService;
+    private final TripRepository tripRepository;
+
+    public TripMatchingOrchestrator(
+            GeospatialMatchingService geoService,
+            NotificationService notificationService,
+            TripRepository tripRepository) {
+        this.geoService = geoService;
+        this.notificationService = notificationService;
+        this.tripRepository = tripRepository;
+    }
+
+    /**
+     * Attempts to match a trip request to an available driver.
+     * Expands search radius if initial radius yields no candidates.
+     *
+     * @param tripRequest the rider's trip request details
+     * @return matched driver ID, or empty if no driver accepted within timeout
+     */
+    public Optional&lt;Long&gt; matchTrip(TripRequest tripRequest) {
+        double searchRadiusKm = INITIAL_SEARCH_RADIUS_KM;
+
+        for (int attempt = 0; attempt &lt; MAX_OFFER_ATTEMPTS; attempt++) {
+            List&lt;GeospatialMatchingService.DriverMatch&gt; nearbyDrivers =
+                geoService.findNearbyDrivers(
+                    tripRequest.originLat(), tripRequest.originLng(),
+                    searchRadiusKm, 10
+                );
+
+            if (nearbyDrivers.isEmpty()) {
+                searchRadiusKm *= 1.5; // expand and retry
+                continue;
+            }
+
+            for (GeospatialMatchingService.DriverMatch candidate : nearbyDrivers) {
+                boolean accepted = notificationService.offerTripAndWait(
+                    candidate.driverId(), tripRequest, OFFER_TIMEOUT_SECONDS
+                );
+
+                if (accepted) {
+                    tripRepository.assignDriver(tripRequest.tripId(), candidate.driverId());
+                    return Optional.of(candidate.driverId());
+                }
+            }
+
+            searchRadiusKm *= 1.5;
+        }
+
+        return Optional.empty(); // no driver found — surface "no cars available" to rider
+    }
+
+    public record TripRequest(
+        long tripId, long riderId,
+        double originLat, double originLng,
+        double destLat, double destLng,
+        String vehicleType
+    ) {}
+}</code></pre>
+      </section>
+
+      <section id="quiz" class="module-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-uber-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+          <div data-question="Why does Uber store driver locations in Redis instead of MySQL?" data-options='["Redis has ACID transactions MySQL lacks","Redis GEORADIUS handles 250K writes/sec; MySQL spatial indexes cannot","Redis is cheaper to operate than MySQL","MySQL cannot store latitude/longitude values"]' data-correct="1" data-explanation="MySQL spatial indexes work for static data but cannot sustain 250K writes/second. Redis keeps the entire geo-sorted-set in memory and processes GEOADD in microseconds." style="display:none"></div>
+          <div data-question="A driver 200m away is on the other side of a geohash boundary. How does Redis GEORADIUS handle this?" data-options='["It misses the driver — a known geohash limitation","It automatically queries the current cell plus all 8 adjacent cells","It falls back to Euclidean distance","It requires the app to send 9 separate queries"]' data-correct="1" data-explanation="GEORADIUS internally expands the search to adjacent geohash cells, so boundary-adjacent drivers are never missed. This is why using GEORADIUS is preferred over manual geohash prefix queries." style="display:none"></div>
+          <div data-question="Uber has 1M active drivers. Why does the full location dataset fit in a single Redis instance?" data-options='["Redis compresses GPS coordinates automatically","1M drivers × ~100 bytes = ~100MB, well within Redis memory limits","Redis uses disk storage for geo data","Driver locations are partitioned across 10 Redis shards by default"]' data-correct="1" data-explanation="Each driver entry needs ~100 bytes (driver_id + encoded geo score). 1M × 100 bytes = 100MB — trivial for Redis which handles tens of GB in memory." style="display:none"></div>
+          <div data-question="What happens when the Matching Service finds no available drivers within 5km?" data-options='["Return error immediately to rider","Expand the search radius progressively and retry up to N attempts","Query a different Redis shard","Switch from GEORADIUS to a full table scan"]' data-correct="0" data-explanation="The correct strategy is progressive radius expansion (5km → 7.5km → 11km etc.) with a maximum attempt count. Returning an immediate error degrades UX unnecessarily when drivers exist just outside the initial radius." style="display:none"></div>
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="web-crawler.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-pagination" aria-label="Problem navigation">
+        <div></div>
+        <a href="web-crawler.html" class="btn btn--outline">Next: Web Crawler →</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Tier 1 Problems</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

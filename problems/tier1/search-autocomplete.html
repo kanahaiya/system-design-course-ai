@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Search Autocomplete Typeahead — full RESHADED walkthrough covering trie data structure, top-K pre-computation, Kafka aggregation pipeline, and Redis prefix cache for MAANG interviews.">
+  <title>Design Search Autocomplete — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier1/search-autocomplete/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-search-autocomplete" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=search-autocomplete" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 1</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--green">Tier 1 — Must Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Trie + Pipeline</span>
+        </div>
+        <h1 class="module-header__title">Design Search Autocomplete / Typeahead</h1>
+        <p class="module-header__desc">Every keystroke fires a request. The interview is about two things: the trie data structure with pre-computed top-K at each node, and the background aggregation pipeline that keeps suggestion popularity fresh.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Amazon, Meta</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⌨️</span> 5,800 QPS</div>
+        </div>
+      </header>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>As the user types each character, return top 5 matching suggestions</li>
+            <li>Suggestions sorted by search frequency (most searched first)</li>
+            <li>Support prefix matching (type "app" → "apple", "application", "app store")</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Latency:</strong> &lt; 100ms response per keystroke (including network round-trip)</li>
+            <li><strong>Scale:</strong> 10M DAU × 10 searches/day × ~5 keystrokes/search = 500M autocomplete requests/day ≈ 5,800 QPS</li>
+            <li><strong>Freshness:</strong> Suggestions can be up to 1 hour stale (eventual consistency OK)</li>
+            <li><strong>Availability:</strong> 99.9% — degrade gracefully (empty suggestions better than 500 error)</li>
+          </ul>
+          <div class="callout callout--tip">
+            <strong>Key clarification to make:</strong> "Should suggestions reflect trends in near real-time (last hour), or can we rebuild daily?" This determines whether you need a streaming aggregation pipeline vs a nightly batch job.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Autocomplete QPS:</strong> 10M × 10 × 5 / 86,400 ≈ <strong>5,800 QPS</strong></li>
+            <li><strong>Unique queries:</strong> ~500M distinct search terms (long tail) → only top 1M are commonly searched</li>
+            <li><strong>Trie size:</strong> 1M × avg 15 chars per query = 15M trie nodes × ~50 bytes each = ~750MB — fits in Redis</li>
+            <li><strong>Top-K storage per node:</strong> 5 suggestions × 30 bytes = 150 bytes per prefix node → 15M × 150 = 2.25GB — borderline, needs partitioning</li>
+            <li><strong>Client-side debounce:</strong> Users typically type 5 chars/sec. With 300ms debounce, effective QPS drops to ~1,200 — well within capacity</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// search_counts table (Cassandra — append-heavy, batch-aggregated)
+CREATE TABLE search_counts (
+    query      TEXT PRIMARY KEY,
+    count      BIGINT,
+    updated_at TIMESTAMP
+);
+
+// Redis: Trie pre-computed top-K (rebuilt hourly by background job)
+// Key:   autocomplete:{prefix}
+// Type:  List (ordered by frequency, max 5 elements)
+// Value: ["apple:8500", "application:6200", "app store:4100", "applet:900", "applesauce:200"]
+// TTL:   2 hours (background job refreshes before expiry)
+
+// Redis: Trie partition mapping (for horizontal scale)
+// Key:   trie_shard:{first_char}   →   shard_host
+// e.g.:  trie_shard:a → redis-shard-01.internal
+//        trie_shard:b → redis-shard-02.internal</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Query Path (Real-time, per keystroke)</h3>
+          <ol>
+            <li>User types "app" (after 300ms debounce)</li>
+            <li>Client → Autocomplete Service → Redis lookup: <code>GET autocomplete:app</code></li>
+            <li>Return top 5 suggestions (pre-computed — O(1) Redis lookup)</li>
+            <li>Total latency: ~5ms Redis + ~10ms network = well under 100ms</li>
+          </ol>
+
+          <h3>Update Path (Background, hourly)</h3>
+          <ol>
+            <li>Every search query → logged to <strong>Kafka</strong> (topic: search-events)</li>
+            <li><strong>Aggregator Service</strong> (Flink/Spark Streaming) counts queries over rolling 1-hour window</li>
+            <li>Updated counts written to <strong>Cassandra</strong> (search_counts table)</li>
+            <li>Every hour, <strong>Trie Builder</strong> reads top queries from Cassandra → rebuilds trie → writes pre-computed top-5 per prefix to Redis</li>
+          </ol>
+
+          <div class="callout callout--info">
+            <strong>Why separate query and update paths?</strong> The query path is latency-critical and can serve stale data (1hr is fine). The update path is throughput-critical and can run slower (batch rebuild). Mixing them would slow down queries.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// GET /api/v1/autocomplete?q={prefix}&limit=5
+// Response 200 (fast path — Redis hit):
+{
+  "prefix": "app",
+  "suggestions": [
+    { "query": "apple", "score": 8500 },
+    { "query": "application", "score": 6200 },
+    { "query": "app store", "score": 4100 },
+    { "query": "applet", "score": 900 },
+    { "query": "applesauce", "score": 200 }
+  ],
+  "responseTimeMs": 4
+}
+
+// Response 200 (degraded — Redis miss, trie traversal fallback):
+{
+  "prefix": "app",
+  "suggestions": [...],
+  "responseTimeMs": 45,
+  "stale": true
+}
+
+// Response 200 (fully degraded — return empty, not 500):
+{ "prefix": "app", "suggestions": [], "responseTimeMs": 1 }</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive: Trie with Pre-computed Top-K
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>A naive trie lookup for "app" would traverse to the "app" node, then DFS all descendants to find the top 5 by frequency. For a trie with millions of nodes, this DFS is O(n) and too slow for 100ms SLA.</p>
+
+          <h3>Optimization: Store Top-K at Each Node</h3>
+          <p>During trie build, each node stores the top 5 results for that prefix — not just the strings below it. Building is O(n log K) (maintain a min-heap of size K while inserting). Querying is O(prefix_length) — just navigate to the prefix node and read the cached top-5.</p>
+
+          <h3>Scale: Partition Trie by First Character</h3>
+          <p>26 letter shards + digits + special chars = ~40 Redis shards. Each shard handles ~1/40 of the prefix space. Adding a shard adds capacity linearly — consistent hash ring for prefix routing by first character.</p>
+
+          <h3>Trie Update Strategy</h3>
+          <p>Instead of updating the live trie on every search (complex, hot path), maintain a secondary trie. Every hour, the Trie Builder writes the new trie to Redis with keys prefixed <code>autocomplete_v2:</code>. Atomically swap the active version. Zero-downtime update.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Redis cache miss (prefix not in cache):</strong> Fall back to in-memory trie traversal on autocomplete service instances. Slower (20–50ms) but functional. Cache miss rate should be &lt;1% after warm-up.</li>
+            <li><strong>Trending queries (sudden spike):</strong> The 1-hour update cycle means a new trend takes up to 1 hour to appear in suggestions. Acceptable per requirements. For real-time trends, add a separate trending endpoint.</li>
+            <li><strong>Cold start (Redis empty):</strong> Autocomplete service loads trie from Cassandra on startup. Falls back to in-memory serving until Redis is warm.</li>
+            <li><strong>Special characters/Unicode:</strong> Normalize to lowercase ASCII before insertion and lookup. This covers the 95% case. Unicode support requires a more complex key encoding.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>"The query path is a single O(1) Redis lookup per prefix — we pre-compute top-5 suggestions at each trie node during an hourly background rebuild. The update path uses Kafka → Flink aggregation → Cassandra count store → Trie Builder → Redis. The trie is partitioned by first character across Redis shards. Client-side debounce (300ms) reduces QPS by 5×. Suggestions are eventually consistent — up to 1 hour stale, which meets requirements."</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Key Trade-offs
+        </h2>
+        <div class="tradeoff-table__container">
+          <table class="tradeoff-table">
+            <thead>
+              <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Suggestion Store</td>
+                <td>Trie in Redis (pre-computed top-K)</td>
+                <td>ElasticSearch (full-text search)</td>
+                <td><strong>Trie for simple prefix</strong> — 5ms vs 30ms; ES for fuzzy/typo-tolerant</td>
+              </tr>
+              <tr>
+                <td>Top-K per node</td>
+                <td>Pre-computed at build time</td>
+                <td>DFS traversal at query time</td>
+                <td><strong>Pre-computed</strong> — O(1) query vs O(subtree_size) DFS; 100ms SLA demands it</td>
+              </tr>
+              <tr>
+                <td>Freshness</td>
+                <td>Hourly batch rebuild</td>
+                <td>Real-time stream update (per query)</td>
+                <td><strong>Hourly batch</strong> — simpler; real-time trie updates require distributed locks</td>
+              </tr>
+              <tr>
+                <td>Client behavior</td>
+                <td>Fire request on every keypress</td>
+                <td>Debounce 300ms before request</td>
+                <td><strong>Debounce</strong> — reduces QPS 5×; latency still feels instant to user</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TrieNode — represents one character in the prefix trie.
+ * Each node caches the top-K suggestions for its prefix for O(1) lookup.
+ */
+public class TrieNode {
+    private static final int TOP_K_SIZE = 5;
+
+    private final Map<Character, TrieNode> childrenByChar = new HashMap<>();
+    private boolean isCompleteWord = false;
+    private long wordFrequency = 0;
+
+    // Pre-computed top-K suggestions for this prefix, sorted by frequency descending
+    private final List<String> topKSuggestions = new ArrayList<>(TOP_K_SIZE);
+    private final List<Long> topKFrequencies = new ArrayList<>(TOP_K_SIZE);
+
+    public TrieNode getOrCreateChild(char character) {
+        return childrenByChar.computeIfAbsent(character, key -> new TrieNode());
+    }
+
+    public TrieNode getChild(char character) {
+        return childrenByChar.get(character);
+    }
+
+    public boolean hasChild(char character) {
+        return childrenByChar.containsKey(character);
+    }
+
+    public void markAsCompleteWord(long frequency) {
+        this.isCompleteWord = true;
+        this.wordFrequency = frequency;
+    }
+
+    /**
+     * Updates this node's top-K list with a candidate suggestion.
+     * Called bottom-up during trie construction after all children are built.
+     *
+     * @param suggestion The query string
+     * @param frequency  Its search frequency count
+     */
+    public void updateTopK(String suggestion, long frequency) {
+        // Find insertion point (descending order by frequency)
+        int insertPosition = topKSuggestions.size();
+        for (int index = 0; index < topKSuggestions.size(); index++) {
+            if (frequency > topKFrequencies.get(index)) {
+                insertPosition = index;
+                break;
+            }
+        }
+
+        if (insertPosition >= TOP_K_SIZE) {
+            return; // This suggestion doesn't make the top-K
+        }
+
+        topKSuggestions.add(insertPosition, suggestion);
+        topKFrequencies.add(insertPosition, frequency);
+
+        // Keep list at max TOP_K_SIZE
+        if (topKSuggestions.size() > TOP_K_SIZE) {
+            topKSuggestions.remove(TOP_K_SIZE);
+            topKFrequencies.remove(TOP_K_SIZE);
+        }
+    }
+
+    public List<String> getTopKSuggestions() {
+        return Collections.unmodifiableList(topKSuggestions);
+    }
+
+    public boolean isCompleteWord() { return isCompleteWord; }
+    public long getWordFrequency() { return wordFrequency; }
+}
+
+/**
+ * AutocompleteTrie — builds and queries a prefix trie with pre-computed top-K at each node.
+ */
+public class AutocompleteTrie {
+    private final TrieNode rootNode = new TrieNode();
+
+    /**
+     * Builds the trie from a list of (query, frequency) pairs.
+     * After insertion, calls buildTopK() to propagate top-K bottom-up.
+     *
+     * @param queryFrequencyPairs List of query strings with their search counts
+     */
+    public void buildFromFrequencies(List<QueryFrequency> queryFrequencyPairs) {
+        for (QueryFrequency queryFrequency : queryFrequencyPairs) {
+            insertQuery(queryFrequency.getQuery().toLowerCase(), queryFrequency.getFrequency());
+        }
+        buildTopKBottomUp(rootNode);
+    }
+
+    private void insertQuery(String query, long frequency) {
+        TrieNode currentNode = rootNode;
+        for (char character : query.toCharArray()) {
+            currentNode = currentNode.getOrCreateChild(character);
+        }
+        currentNode.markAsCompleteWord(frequency);
+    }
+
+    /**
+     * Propagates top-K suggestions bottom-up after all words are inserted.
+     * Each parent node merges its children's top-K lists into its own.
+     * This is the key optimization: O(K log K) per node instead of O(subtree_size) at query time.
+     *
+     * @param node The node to process (recursive, DFS post-order)
+     * @return The top-K suggestions collected from this subtree
+     */
+    private List<QueryFrequency> buildTopKBottomUp(TrieNode node) {
+        List<QueryFrequency> subtreeSuggestions = new ArrayList<>();
+
+        // Recurse into children first (post-order traversal)
+        for (Map.Entry<Character, TrieNode> childEntry : getChildEntries(node)) {
+            List<QueryFrequency> childSuggestions = buildTopKBottomUp(childEntry.getValue());
+            subtreeSuggestions.addAll(childSuggestions);
+        }
+
+        // Add this node's word if it's a complete word
+        if (node.isCompleteWord()) {
+            subtreeSuggestions.add(new QueryFrequency(
+                    getCurrentPrefix(node), node.getWordFrequency()));
+        }
+
+        // Sort by frequency descending and keep top-K
+        subtreeSuggestions.sort((a, b) -> Long.compare(b.getFrequency(), a.getFrequency()));
+        List<QueryFrequency> topK = subtreeSuggestions.stream()
+                .limit(5)
+                .collect(Collectors.toList());
+
+        // Store in this node
+        for (QueryFrequency suggestion : topK) {
+            node.updateTopK(suggestion.getQuery(), suggestion.getFrequency());
+        }
+
+        return topK;
+    }
+
+    /**
+     * Returns top-5 suggestions for a given prefix.
+     * O(prefix_length) — just navigate to the prefix node and return cached top-K.
+     *
+     * @param prefix The search prefix to look up
+     * @return List of suggestion strings, sorted by frequency, max 5
+     */
+    public List<String> getSuggestions(String prefix) {
+        TrieNode currentNode = rootNode;
+        for (char character : prefix.toLowerCase().toCharArray()) {
+            if (!currentNode.hasChild(character)) {
+                return Collections.emptyList(); // No matching prefix in trie
+            }
+            currentNode = currentNode.getChild(character);
+        }
+        return currentNode.getTopKSuggestions();
+    }
+
+    private List<Map.Entry<Character, TrieNode>> getChildEntries(TrieNode node) {
+        // Access via reflection-like approach in production; simplified here
+        return new ArrayList<>(); // Placeholder — real impl accesses node.childrenByChar.entrySet()
+    }
+
+    private String getCurrentPrefix(TrieNode node) {
+        // In production, track prefix during traversal; simplified here
+        return ""; // Placeholder
+    }
+}
+
+/**
+ * AutocompleteService — serves autocomplete requests from Redis cache.
+ * Falls back to in-memory trie on cache miss.
+ */
+public class AutocompleteService {
+    private static final String CACHE_KEY_PREFIX = "autocomplete:";
+    private static final int MAX_SUGGESTIONS = 5;
+
+    private final RedisClient redisClient;
+    private final AutocompleteTrie inMemoryTrie; // Fallback trie loaded from Cassandra at startup
+
+    public AutocompleteService(RedisClient redisClient, AutocompleteTrie inMemoryTrie) {
+        this.redisClient = redisClient;
+        this.inMemoryTrie = inMemoryTrie;
+    }
+
+    /**
+     * Returns top suggestions for a prefix.
+     * Fast path: Redis O(1) lookup. Fallback: in-memory trie traversal.
+     *
+     * @param prefix The user's current search prefix
+     * @return Up to MAX_SUGGESTIONS query strings sorted by popularity
+     */
+    public List<String> getSuggestions(String prefix) {
+        if (prefix == null || prefix.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        String normalizedPrefix = prefix.toLowerCase().trim();
+        String cacheKey = CACHE_KEY_PREFIX + normalizedPrefix;
+
+        try {
+            List<String> cachedSuggestions = redisClient.lrange(cacheKey, 0, MAX_SUGGESTIONS - 1);
+            if (!cachedSuggestions.isEmpty()) {
+                return cachedSuggestions;
+            }
+        } catch (RedisException redisException) {
+            System.err.println("[AutocompleteService] Redis unavailable, using trie fallback: "
+                    + redisException.getMessage());
+        }
+
+        // Fallback to in-memory trie
+        return inMemoryTrie.getSuggestions(normalizedPrefix);
+    }
+}
+
+/** Simple value holder for a query + frequency pair. */
+public final class QueryFrequency {
+    private final String query;
+    private final long frequency;
+
+    public QueryFrequency(String query, long frequency) {
+        this.query = query;
+        this.frequency = frequency;
+    }
+
+    public String getQuery() { return query; }
+    public long getFrequency() { return frequency; }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-search-autocomplete-quiz">
+          <div class="quiz__question" data-question-index="0">
+            <p class="quiz__question-text">Why is it important to store top-K suggestions at each trie node rather than computing them at query time?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Storing at each node reduces the total memory used by the trie</button></li>
+              <li><button class="quiz__option" data-correct="true">Computing at query time requires a DFS of the entire subtree — O(subtree_size). Pre-computing makes it O(1) at query time, which is necessary for 100ms SLA</button></li>
+              <li><button class="quiz__option" data-correct="false">The trie cannot traverse children without pre-computed results</button></li>
+              <li><button class="quiz__option" data-correct="false">It simplifies the trie rebuild algorithm</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="1">
+            <p class="quiz__question-text">The background trie rebuild runs every hour. A new trending query won't appear in suggestions for up to 1 hour. Is this acceptable, and why?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">No — autocomplete must always show the latest trending results</button></li>
+              <li><button class="quiz__option" data-correct="true">Yes — the requirements explicitly state suggestions can be 1 hour stale. Real-time trie updates are far more complex and not worth the cost for this accuracy level</button></li>
+              <li><button class="quiz__option" data-correct="false">No — Kafka provides real-time updates, so 1 hour delay is a design flaw</button></li>
+              <li><button class="quiz__option" data-correct="false">Yes — users typically search for the same things they searched yesterday anyway</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="2">
+            <p class="quiz__question-text">Client-side debouncing of 300ms reduces effective QPS from 5,800 to about 1,200. What is the user experience impact?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Suggestions appear 300ms slower, noticeably degrading the experience</button></li>
+              <li><button class="quiz__option" data-correct="true">Negligible — suggestions appear 300ms after typing pauses, which users do not notice since they're still typing</button></li>
+              <li><button class="quiz__option" data-correct="false">The 300ms delay causes suggestions to appear out of order</button></li>
+              <li><button class="quiz__option" data-correct="false">Users will see suggestions for partially typed words, causing confusion</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+
+          <div class="quiz__question" data-question-index="3">
+            <p class="quiz__question-text">When should you choose ElasticSearch over a custom trie for autocomplete?</p>
+            <ul class="quiz__options" role="list">
+              <li><button class="quiz__option" data-correct="false">Always — ElasticSearch is purpose-built and always outperforms a custom trie</button></li>
+              <li><button class="quiz__option" data-correct="false">When the dataset is small (under 1 million queries)</button></li>
+              <li><button class="quiz__option" data-correct="true">When you need typo tolerance, fuzzy matching, or multi-field search — a trie only supports exact prefix matching</button></li>
+              <li><button class="quiz__option" data-correct="false">When latency requirements are above 500ms</button></li>
+            </ul>
+            <p class="quiz__explanation" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="distributed-cache.html" class="btn btn--outline">← Distributed Cache</a>
+        <a href="notification-system.html" class="btn btn--primary">Next: Notifications →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>
