@@ -176,6 +176,66 @@ CREATE TABLE pastes (
             <div class="hld-box hld-box--storage">Redis → S3 on miss</div>
           </div>
         </div>
+        <svg viewBox="0 0 760 280" role="img" aria-label="Pastebin architecture: POST creates Base62 ID, stores content in Object Storage, metadata in DB; GET lookups DB then Object Storage; CDN caches popular pastes" style="width:100%;max-width:760px;display:block;margin:0 auto var(--space-4)">
+          <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker></defs>
+
+          <!-- Client -->
+          <rect x="10" y="120" width="80" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="50" y="145" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+
+          <!-- API Server (highlighted) -->
+          <rect x="140" y="110" width="110" height="60" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+          <text x="195" y="133" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">API Server</text>
+          <text x="195" y="148" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">gen Base62 ID</text>
+          <text x="195" y="162" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">route POST/GET</text>
+          <line x1="90" y1="140" x2="138" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- POST path label -->
+          <text x="50" y="108" fill="#818cf8" font-family="Inter,sans-serif" font-size="11" font-weight="600">POST (create):</text>
+
+          <!-- Object Storage (S3) -->
+          <rect x="310" y="55" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="365" y="73" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Object Store</text>
+          <text x="365" y="87" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">S3 / content</text>
+          <line x1="250" y1="128" x2="308" y2="80" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="270" y="104" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">upload content</text>
+
+          <!-- MySQL DB -->
+          <rect x="310" y="140" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="365" y="158" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">MySQL</text>
+          <text x="365" y="172" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">metadata</text>
+          <line x1="250" y1="148" x2="308" y2="158" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="275" y="155" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">INSERT row</text>
+
+          <!-- Redis Cache -->
+          <rect x="310" y="220" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="365" y="238" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Redis Cache</text>
+          <text x="365" y="252" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">TTL warm-up</text>
+          <line x1="250" y1="158" x2="308" y2="230" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="260" y="205" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">SET cache</text>
+
+          <!-- GET path -->
+          <text x="490" y="25" fill="#818cf8" font-family="Inter,sans-serif" font-size="11" font-weight="600">GET (read):</text>
+          <!-- CDN -->
+          <rect x="490" y="35" width="100" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="540" y="53" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">CDN Edge</text>
+          <text x="540" y="67" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">popular pastes</text>
+          <line x1="420" y1="75" x2="488" y2="55" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- CDN miss → Redis -->
+          <line x1="540" y1="75" x2="425" y2="222" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow)"/>
+          <text x="510" y="158" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">CDN miss</text>
+          <text x="510" y="170" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">→ Redis check</text>
+
+          <!-- Redis miss → MySQL + S3 -->
+          <rect x="610" y="130" width="120" height="50" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="670" y="150" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">MySQL → S3</text>
+          <text x="670" y="165" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">cache miss path</text>
+          <line x1="420" y1="240" x2="608" y2="163" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow)"/>
+          <text x="530" y="205" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">Redis miss →</text>
+        </svg>
+        <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Pastebin — POST generates Base62 ID, uploads to S3, writes metadata to MySQL, warms Redis; GET hits CDN → Redis → MySQL+S3 on miss</p>
+
         <p><strong>Write path:</strong> Generate 8-char base-62 ID → upload content to S3 at key <code>pastes/{id}</code> → INSERT metadata row in MySQL → SET Redis cache with TTL → return short URL to client.</p>
         <p><strong>Read path:</strong> Check Redis for <code>paste:{id}</code> → cache hit: return content + increment view_count async → cache miss: read metadata from MySQL → fetch content from S3 → populate cache → return to client.</p>
         <p><strong>Expiry cleanup:</strong> A background cron job runs hourly and runs <code>DELETE FROM pastes WHERE expires_at &lt; NOW()</code>, then deletes corresponding S3 objects and Redis keys.</p>

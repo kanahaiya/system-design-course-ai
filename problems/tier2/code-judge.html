@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design an Online Code Judge like LeetCode — RESHADED walkthrough covering code sandboxing, async execution queue, test case isolation, and plagiarism detection for MAANG interviews.">
+  <meta name="description" content="Design an Online Code Judge like LeetCode — RESHADED walkthrough covering Docker sandboxing, gVisor, Kafka execution queue, container pools, and anti-cheat for L6 interviews.">
   <title>Design Online Code Judge — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -66,7 +66,7 @@
           <span class="tag">Security-critical</span>
         </div>
         <h1 class="module-header__title">Design Online Code Judge (LeetCode)</h1>
-        <p class="module-header__desc">The central challenge is security: you're executing arbitrary user code on your servers. A malicious submission could delete your database, exfiltrate secrets, or fork-bomb the host. Sandboxing is non-negotiable — Docker containers with hard resource limits.</p>
+        <p class="module-header__desc">The central challenge is security: you're executing arbitrary user code on your servers. A malicious submission could delete your database, exfiltrate secrets, or fork-bomb the host. Sandboxing is non-negotiable. LeetCode serves 10M users with 100K submissions during a contest — requiring 100K containers in &lt;60 seconds.</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> LeetCode, HackerRank, Google</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
@@ -79,18 +79,23 @@
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Submit code in multiple languages (Java, Python, C++, Go)</li>
+            <li>Submit code in multiple languages (Java, Python, C++, Go, JavaScript)</li>
             <li>Run code against hidden test cases; return pass/fail per test</li>
-            <li>Show: runtime (ms), memory usage (MB), output diff on failure</li>
-            <li>Support custom test cases (run against user-provided input)</li>
-            <li>Problem management: create/edit problems with test cases</li>
+            <li>Show: runtime (ms), memory usage (MB), output diff on failure, compile errors</li>
+            <li>Support custom test runs (user provides their own input)</li>
+            <li>Problem management: create/edit problems with test cases, public and hidden</li>
+            <li>Contests: time-limited, ranked submissions, live leaderboard</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Security:</strong> Submitted code must be fully isolated — no network, no filesystem, CPU/memory limited</li>
-            <li><strong>Scale:</strong> 100K submissions/day = ~1,200/min peak; 5s max execution time</li>
-            <li><strong>Fairness:</strong> Same code should produce consistent runtime measurements</li>
+            <li><strong>Security:</strong> Submitted code must be fully isolated — no network, no filesystem, CPU/memory/PID limited</li>
+            <li><strong>Scale:</strong> 100K submissions/day normal; 100K submissions in 60 seconds during contests</li>
+            <li><strong>Fairness:</strong> Same code must produce consistent runtime measurements ±5%</li>
+            <li><strong>Latency:</strong> Result delivered within 5–10 seconds of submission (p95)</li>
           </ul>
+          <div class="callout callout--tip">
+            <strong>L6 depth signal:</strong> Proactively mention gVisor as a stronger sandboxing alternative: "Docker containers share the host kernel — a kernel exploit could break out. gVisor (Google's user-space kernel) intercepts all system calls and runs them in a separate user-space process, adding an extra isolation layer at ~20% performance overhead."
+          </div>
         </div>
       </section>
 
@@ -98,10 +103,12 @@
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li>100K submissions/day; each runs 50 test cases avg → 5M executions/day</li>
-            <li>Avg execution: 500ms → 5M × 0.5s = 2.5M execution-seconds/day → need ~30 executor cores running continuously</li>
-            <li>Container startup overhead: 200ms; reuse containers via warm pool to amortize</li>
-            <li>Code storage: 100K submissions × avg 2KB = 200MB/day; S3 for long-term</li>
+            <li>100K submissions/day normal; each runs avg 50 test cases → 5M container executions/day</li>
+            <li>Avg execution: 500ms → 5M × 0.5s = 2.5M execution-seconds/day → need ~30 executor cores continuously busy</li>
+            <li>Contest peak: 100K submissions in 60 seconds = 1,667 submissions/sec → need ~8,335 concurrent containers (at 500ms execution time) → ~100 executor machines at 100 containers each</li>
+            <li>Container startup overhead (cold): 200ms; pre-warmed pool reduces to &lt;10ms</li>
+            <li>Code storage: 100K submissions × avg 2KB code = 200MB/day → S3, negligible</li>
+            <li>Test case storage: 1M problems × 100 test cases × avg 10KB = ~1TB → S3 with aggressive caching on executor nodes</li>
           </ul>
         </div>
       </section>
@@ -110,35 +117,129 @@
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <pre><code class="language-java">// Problems (PostgreSQL)
-problems: problem_id, title, description, difficulty (easy/medium/hard),
-          time_limit_ms, memory_limit_mb, created_at
+problems:
+    problem_id       UUID PRIMARY KEY,
+    title            VARCHAR(255),
+    description      TEXT,          -- Markdown content
+    difficulty       ENUM(easy, medium, hard),
+    time_limit_ms    INT DEFAULT 2000,
+    memory_limit_mb  INT DEFAULT 256,
+    supported_langs  VARCHAR[],     -- ['java', 'python', 'cpp', 'go']
+    created_at       TIMESTAMP
 
-// Test cases (stored in S3, metadata in DB)
-test_cases: test_case_id, problem_id, is_hidden, input_s3_key, expected_output_s3_key
+// Test cases — metadata in DB, input/expected_output in S3
+test_cases:
+    test_case_id           UUID PRIMARY KEY,
+    problem_id             UUID NOT NULL,
+    is_hidden              BOOLEAN NOT NULL,  -- false = shown in UI; true = secret
+    input_s3_key           VARCHAR(500),      -- e.g., "problems/{id}/tc/{n}.in"
+    expected_output_s3_key VARCHAR(500),
+    ordinal                INT                -- test case ordering
 
-// Submissions (PostgreSQL)
+// Submissions (PostgreSQL — queried for history, result polling)
 submissions:
-    submission_id  UUID PRIMARY KEY,
-    problem_id     UUID,
-    user_id        UUID,
-    language       VARCHAR(20),  -- java, python, cpp, go
-    code_s3_key    VARCHAR(500),
-    status         ENUM(queued, running, accepted, wrong_answer, time_limit, memory_limit, compile_error, runtime_error),
-    runtime_ms     INT,
-    memory_mb      INT,
-    created_at     TIMESTAMP</code></pre>
+    submission_id    UUID PRIMARY KEY,
+    problem_id       UUID,
+    user_id          UUID,
+    contest_id       UUID,            -- null if not in contest
+    language         VARCHAR(20),     -- java, python, cpp, go, js
+    code_s3_key      VARCHAR(500),    -- code never stored in DB (size, security)
+    status           VARCHAR(30),
+    -- QUEUED | RUNNING | ACCEPTED | WRONG_ANSWER | TIME_LIMIT_EXCEEDED
+    -- MEMORY_LIMIT_EXCEEDED | RUNTIME_ERROR | COMPILE_ERROR | INTERNAL_ERROR
+    runtime_ms       INT,
+    memory_mb        INT,
+    test_results     JSONB,           -- [{tc_id, passed, actual_output, expected}]
+    compile_output   TEXT,            -- compiler stderr for COMPILE_ERROR
+    created_at       TIMESTAMP,
+    completed_at     TIMESTAMP
+
+// Judge workers: registered in Redis (ephemeral, TTL 30s with heartbeat)
+// Key: "worker:{workerId}" → Value: {language, capacity, busy_count}</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+
+          <svg viewBox="0 0 740 320" role="img" aria-label="Code judge submission pipeline: API → S3 store code → Kafka → Worker Pool → Docker container → compare output → DB result → WebSocket push" style="width:100%;max-width:740px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-cj" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Row 1: submission path -->
+            <rect x="10" y="30" width="80" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="50" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+            <text x="50" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Browser</text>
+
+            <rect x="130" y="30" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="180" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Submission</text>
+            <text x="180" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">API Server</text>
+
+            <rect x="275" y="30" width="80" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="315" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">S3</text>
+            <text x="315" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">store code</text>
+
+            <rect x="400" y="30" width="80" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="440" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Kafka</text>
+            <text x="440" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">job queue</text>
+
+            <rect x="530" y="30" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="580" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Worker Pool</text>
+            <text x="580" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">consumes jobs</text>
+
+            <line x1="90" y1="52" x2="128" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="230" y1="52" x2="273" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="355" y1="52" x2="398" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="480" y1="52" x2="528" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+
+            <!-- Row 2: execution -->
+            <rect x="400" y="150" width="80" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="440" y="168" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Docker</text>
+            <text x="440" y="184" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">run code</text>
+
+            <rect x="530" y="150" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="580" y="168" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Compare</text>
+            <text x="580" y="184" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">vs expected</text>
+
+            <rect x="270" y="150" width="80" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="310" y="168" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">DB Write</text>
+            <text x="310" y="184" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">update status</text>
+
+            <rect x="130" y="150" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="180" y="168" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">WebSocket</text>
+            <text x="180" y="184" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">push result</text>
+
+            <rect x="10" y="150" width="80" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="50" y="168" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+            <text x="50" y="184" fill="#4ade80" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">sees result</text>
+
+            <!-- Arrows row 2 -->
+            <line x1="580" y1="74" x2="440" y2="148" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="480" y1="172" x2="530" y2="172" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="530" y1="172" x2="480" y2="172" stroke="#6366f1" stroke-width="0"/>
+            <line x1="628" y1="172" x2="630" y2="172" stroke="#6366f1" stroke-width="1.5"/>
+            <!-- result flows back left -->
+            <path d="M630 172 Q660 172 660 140 Q660 108 630 108 L130 108 Q110 108 110 130 L110 148" stroke="#6366f1" stroke-width="1.5" fill="none" marker-end="url(#arrow-cj)"/>
+            <line x1="350" y1="172" x2="230" y2="172" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+            <line x1="130" y1="172" x2="92" y2="172" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-cj)"/>
+
+            <!-- Container pool -->
+            <rect x="380" y="240" width="200" height="50" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+            <text x="480" y="260" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Pre-warmed Container Pool</text>
+            <text x="480" y="278" fill="#6366f1" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">java×20 python×20 cpp×10 go×10</text>
+            <line x1="440" y1="194" x2="450" y2="238" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-cj)"/>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Submission pipeline — code stored in S3, job queued in Kafka, worker pulls and executes in Docker, result pushed via WebSocket</p>
+
           <ul>
-            <li><strong>Submission API:</strong> Validates and stores code in S3. Creates submission row (status=queued). Publishes job to Kafka. Returns submission_id immediately (async).</li>
-            <li><strong>Job Queue (Kafka):</strong> Submission jobs buffered. Executor workers consume from Kafka.</li>
-            <li><strong>Executor Pool:</strong> Isolated VMs (or Kubernetes pods) with Docker daemon. Each worker pulls a job, spins up a container, executes code, compares output, updates DB, produces result to Kafka.</li>
-            <li><strong>Result Service:</strong> Client polls GET /submissions/{id} for status, or uses WebSocket for real-time result push.</li>
-            <li><strong>Container Pool:</strong> Pre-warm containers per language to avoid cold-start latency. Reuse containers between submissions (reset state between runs).</li>
+            <li><strong>Submission API:</strong> Validates language, problem exists. Stores code in S3 (not DB — security + size). Creates submission row (status=QUEUED). Publishes to Kafka. Returns submission_id immediately. Never blocks on execution.</li>
+            <li><strong>Kafka Job Queue:</strong> Buffers submission jobs. Multiple partitions = multiple concurrent consumer groups. If contest spike: queue absorbs burst; workers drain at their own rate.</li>
+            <li><strong>Executor Pool (Worker Farm):</strong> Kubernetes Pods with Docker daemon. Each worker pulls a job, gets code from S3, downloads test cases from S3 (cached on disk), executes in container, compares output, writes result to DB.</li>
+            <li><strong>Container Pool (Pre-warmed):</strong> Maintain a pool of pre-started containers per language. Container reuse eliminates 200ms cold start. Pool size tuned to expected concurrency per language.</li>
+            <li><strong>Result Delivery:</strong> WebSocket (real-time push when result is ready) + REST polling (GET /submissions/{id}) as fallback for clients that can't maintain WebSocket.</li>
           </ul>
         </div>
       </section>
@@ -148,35 +249,224 @@ submissions:
         <div class="content-section__body">
           <pre><code class="language-java">POST /v1/submissions
   Body: { problemId, language, code }
-  Returns: { submissionId, status: "queued" }   // immediate async response
+  Returns: { submissionId, status: "QUEUED" }   // immediate, async
 
 GET  /v1/submissions/{submissionId}
-  Returns: { status, runtimeMs, memoryMb, testResults: [{passed, input, output, expected}] }
+  Returns: {
+    status, runtimeMs, memoryMb,
+    testResults: [{ testCaseId, passed, actualOutput, expectedOutput, runtimeMs }],
+    compileOutput: "..." // only for COMPILE_ERROR
+  }
 
-POST /v1/submissions/run          // run against custom input (no test cases)
+POST /v1/submissions/run       // run against custom input (no test cases)
   Body: { language, code, stdin }
-  Returns: { stdout, stderr, runtimeMs }
+  Returns: { stdout, stderr, runtimeMs, status }   // synchronous, &lt;5s
 
 GET  /v1/problems/{problemId}
-GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
+  Returns: { title, description, difficulty, timeLimitMs, memoryLimitMb,
+             sampleTestCases: [...], supportedLanguages: [...] }
+
+GET  /v1/problems/{problemId}/submissions?userId={}&limit=20&status=ACCEPTED
+     // user's submission history for a problem
+
+WebSocket /v1/submissions/{submissionId}/result
+     // server pushes result when execution completes
+     // fallback: poll GET above every 2 seconds</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Secure Code Execution<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Sandboxing and Security<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Never run untrusted code on the host OS.</strong> Use Docker containers with strict constraints:</p>
+
+          <h3>Why You Can't Run User Code on Bare Metal</h3>
+          <p>Malicious code can:</p>
           <ul>
-            <li><strong>CPU limit:</strong> <code>--cpus=1</code> — prevents fork bombs from consuming all cores</li>
-            <li><strong>Memory limit:</strong> <code>--memory=256m --memory-swap=256m</code> — kills OOM attempts</li>
-            <li><strong>Network disabled:</strong> <code>--network=none</code> — prevents data exfiltration</li>
-            <li><strong>Read-only filesystem:</strong> <code>--read-only</code> with a tmpfs for /tmp</li>
-            <li><strong>No privilege escalation:</strong> <code>--security-opt=no-new-privileges</code></li>
-            <li><strong>Timeout:</strong> Kill container after time_limit_ms + 1s buffer via <code>docker run --timeout</code></li>
-            <li><strong>No root:</strong> Run as non-root user inside container</li>
+            <li>Read <code>/etc/passwd</code>, environment variables, AWS metadata endpoint (steal credentials)</li>
+            <li>Fork-bomb: <code>import os; os.fork()</code> in a loop → exhaust host process table → crash host</li>
+            <li>Consume all CPU/RAM → starve other executions → fairness violation</li>
+            <li>Open network connections → exfiltrate test case answers from your DB</li>
+            <li>Write to disk → fill host filesystem → crash other services</li>
           </ul>
-          <p><strong>Language-specific containers:</strong> One Docker image per language (openjdk:17-slim, python:3.11-slim, gcc:12). Images are pre-pulled and cached on executor nodes.</p>
-          <p><strong>Compile step:</strong> For compiled languages (Java, C++), compile first in a separate container run, check for compile errors, then run the binary in a second container run for each test case.</p>
+
+          <h3>Docker Sandboxing Configuration</h3>
+          <pre><code class="language-java">// The complete Docker run command for a Java submission:
+docker run
+  --rm                                 // auto-remove container on exit
+  --network=none                       // no network access (critical)
+  --cpus=1                             // one CPU core max
+  --memory=256m                        // hard memory limit (RAM)
+  --memory-swap=256m                   // = --memory → disables swap (prevents bypass)
+  --pids-limit=100                     // prevents fork bombs (max 100 processes)
+  --read-only                          // read-only root filesystem
+  --tmpfs=/tmp:size=64m,noexec         // writable /tmp, no executable files
+  --security-opt=no-new-privileges     // prevent privilege escalation
+  --security-opt=seccomp=judge.json    // custom seccomp profile (whitelist syscalls)
+  --user=1000:1000                     // run as non-root user
+  --cap-drop=ALL                       // drop all Linux capabilities
+  -v /judge/submissions/{id}:/code:ro  // mount code read-only
+  --stop-timeout=6                     // SIGTERM at 5s, SIGKILL at 6s
+  openjdk:17-slim
+  java -cp /code Main                  // execute compiled bytecode
+
+// seccomp profile (judge.json): whitelist only necessary syscalls
+// Blocks: ptrace (debugging), mount, clone (with dangerous flags), etc.
+// Allows: read, write, open, close, exit, brk (memory), futex (threading), etc.</code></pre>
+
+          <h3>Docker vs gVisor — Security Depth</h3>
+          <pre><code class="language-java">// Docker: containers share the HOST LINUX KERNEL
+// A kernel vulnerability in the host can be exploited from within a container
+// Example: CVE-2019-5736 (runc vulnerability) allowed container breakout
+
+// gVisor (by Google): user-space kernel for containers
+// Every syscall from container code is intercepted by gVisor's Sentry process
+// Sentry runs in user space, makes LIMITED syscalls to the actual host kernel
+// Attack surface: host kernel sees only ~20 syscalls from Sentry (vs 300+ directly)
+// Cost: ~20% performance overhead (syscall interception in user space)
+
+// In production judge systems:
+// - Normal submissions: Docker + seccomp (fast, secure enough for most code)
+// - Contest with prize money: gVisor (higher security, worth the overhead)
+// - Unrecognized attack patterns: automatic escalation to gVisor-isolated nodes
+
+// Runtime example for Python "hello world":
+// Docker:  ~80ms total (container startup 30ms + Python startup 40ms + execution 10ms)
+// gVisor:  ~200ms total (extra user-space kernel overhead)
+// Pre-warmed Docker: ~15ms (container already running, just execute)</code></pre>
+
+          <h3>Execution Pipeline — Compiled vs Interpreted Languages</h3>
+          <pre><code class="language-java">// Compiled languages (Java, C++): two-phase execution
+// Phase 1: COMPILE
+//   docker run --network=none --read-only ... gcc:12 g++ -O2 /code/solution.cpp -o /tmp/solution
+//   If exit_code != 0: status = COMPILE_ERROR, return compiler stderr to user
+//   If success: compiled binary cached in /judge/binaries/{submissionId}/solution
+//
+// Phase 2: RUN (once per test case)
+//   docker run --network=none ... -v /judge/binaries/{id}:/bin:ro \
+//     alpine /bin/solution < test_case_N.in
+//   Capture stdout, compare with expected_output_N.txt
+
+// Interpreted languages (Python, JavaScript): single phase
+// No compilation step: docker run ... python3 /code/solution.py < input
+
+// Caching compiled output:
+// Key: hash(code + language + compiler_version)
+// If same code submitted again: skip compilation, reuse binary
+// Reduces compile time from ~2s to 0 for identical resubmissions</code></pre>
+
+          <h3>Test Case Management — Public vs Hidden</h3>
+          <pre><code class="language-java">// Test cases have two tiers:
+// 1. Public (is_hidden=false): shown in UI with actual input/output
+//    User can see "Input: [1,2,3]\nOutput: [3,2,1]"
+//    Used for "Run Code" feature to let users debug
+//
+// 2. Hidden (is_hidden=true): never revealed to user
+//    Judge runs these and only says ACCEPTED or WRONG_ANSWER
+//    Hidden test cases prevent hardcoding answers
+//    Typically 5-50 hidden tests per problem
+
+// Test case security:
+// - Hidden test cases stored in S3 with IAM policy: only judge workers can read
+// - Test case content never sent to the API server or client
+// - Output comparison happens inside worker process: user never sees expected output
+// - Workers are network-isolated from each other
+
+// Problem creator workflow:
+// 1. Creator uploads test cases via admin API
+// 2. System runs the reference solution (Creator's correct code) to generate expected outputs
+// 3. Test cases and expected outputs stored in S3
+// 4. Problem published: public test cases visible in UI, hidden ones silently available</code></pre>
+
+          <h3>Anti-Cheat — Code Similarity Detection</h3>
+          <pre><code class="language-java">// Two anti-cheat mechanisms:
+
+// 1. Code hashing: SHA-256 of normalized code
+//    Normalize: remove whitespace, comments, rename variables uniformly
+//    If hash matches a known correct submission from contest: flag for review
+//    If hash matches another user's submission in same contest: plagiarism alert
+
+// 2. AST comparison (deeper similarity):
+//    Parse code into Abstract Syntax Tree
+//    Two codes are "similar" if their ASTs are structurally identical after:
+//    - Variable renaming
+//    - Loop variable substitution
+//    - Comment removal
+//    Similarity score &gt; 0.85: flag as likely plagiarism
+
+// Rate limiting (prevents gaming the system):
+// - 5 submissions per problem per user per minute
+// - 100 submissions per user per day during contests
+// - Custom input runs: 10 per minute per user
+
+// Contest fairness:
+// - Random test case ordering per user (prevents timing attacks)
+// - Submissions locked for review 30 minutes before contest end (prevents last-minute flooding)
+// - All contest results are provisional until 1 hour post-contest (for manual review)</code></pre>
+
+          <h3>Pre-warmed Container Pool</h3>
+          <pre><code class="language-java">/**
+ * Manages a pool of pre-started Docker containers per language.
+ * Containers are reset between uses (not restarted — reset is faster).
+ * On contest start: scale pool to match expected concurrency.
+ */
+public class ContainerPool {
+
+    private static final int DEFAULT_POOL_SIZE_PER_LANGUAGE = 20;
+    private static final Map&lt;String, String&gt; LANGUAGE_IMAGES = Map.of(
+        "java",   "openjdk:17-slim",
+        "python", "python:3.11-slim",
+        "cpp",    "gcc:12-slim",
+        "go",     "golang:1.21-alpine"
+    );
+
+    // Language → queue of warm container IDs
+    private final Map&lt;String, BlockingQueue&lt;String&gt;&gt; warmContainers = new ConcurrentHashMap&lt;&gt;();
+
+    /**
+     * Returns a warm container ID for the given language.
+     * If pool is empty, starts a new container (cold start fallback).
+     */
+    public String acquireContainer(String language) throws InterruptedException {
+        BlockingQueue&lt;String&gt; pool = warmContainers.getOrDefault(
+            language, new LinkedBlockingQueue&lt;&gt;());
+        String containerId = pool.poll(100, TimeUnit.MILLISECONDS);
+        if (containerId == null) {
+            containerId = startFreshContainer(language); // cold start fallback
+        }
+        return containerId;
+    }
+
+    /**
+     * Returns a container to the pool after resetting its state.
+     * Reset: remove output files, kill any lingering processes.
+     */
+    public void releaseContainer(String containerId, String language) {
+        resetContainerState(containerId); // docker exec {id} rm -rf /tmp/*
+        warmContainers.computeIfAbsent(language, l -> new LinkedBlockingQueue&lt;&gt;())
+                      .offer(containerId);
+    }
+
+    private String startFreshContainer(String language) {
+        String image = LANGUAGE_IMAGES.get(language);
+        ProcessBuilder processBuilder = new ProcessBuilder(
+            "docker", "run", "-d",          // -d: detached mode (keep running)
+            "--network=none", "--pids-limit=100",
+            "--memory=256m", "--memory-swap=256m",
+            "--read-only", "--tmpfs=/tmp:size=64m,noexec",
+            "--security-opt=no-new-privileges",
+            "--user=1000:1000",
+            image, "sleep", "infinity"      // keep alive, waiting for exec
+        );
+        // Returns container ID (stdout of docker run -d)
+        return runAndCaptureOutput(processBuilder).trim();
+    }
+
+    private void resetContainerState(String containerId) {
+        new ProcessBuilder("docker", "exec", containerId, "sh", "-c",
+            "rm -rf /tmp/* && kill -9 $(ps aux | grep -v 'sleep infinity' | awk '{print $1}') 2>/dev/null || true")
+            .start(); // fire and forget
+    }
+}</code></pre>
         </div>
       </section>
 
@@ -184,9 +474,10 @@ GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Runtime fairness:</strong> Container overhead varies. Measure wall-clock time inside the container using language-native timing, not externally. Run on dedicated hardware (no noisy neighbors).</li>
-            <li><strong>Test case isolation:</strong> Each test case runs in a fresh container state — stateful code between test cases is not allowed. Reset container or use new container per test case.</li>
-            <li><strong>Escape vulnerability:</strong> Container escapes are rare but possible. Use gVisor (user-space kernel) as an additional isolation layer for untrusted code.</li>
+            <li><strong>Runtime fairness:</strong> Container overhead varies by 10-15ms. Measure wall-clock time inside the container using language-native timing (not external). Dedicated executor nodes with no other workloads ("noisy neighbors") ensure consistent measurements. Same hardware per language.</li>
+            <li><strong>Test case isolation:</strong> Each test case runs sequentially in the same container but with state reset between cases (write to /tmp only, cleaned between cases). For complete isolation: one container per test case (slower, but eliminates any stateful side effects).</li>
+            <li><strong>Container escape (kernel exploit):</strong> Docker shares host kernel — a kernel CVE could allow escape. Mitigations: (1) Seccomp whitelist reduces exploit surface. (2) gVisor for high-value contests. (3) Separate physical hosts for judge workers (not shared with production services). (4) Regular kernel patching.</li>
+            <li><strong>Contest spike (100K submissions/60s):</strong> Kafka absorbs the burst. Auto-scale executor pods based on Kafka consumer lag (Kubernetes HPA on custom metrics). Pre-warm containers for all languages before contest start. Scale-out to 100+ nodes during contest.</li>
           </ul>
         </div>
       </section>
@@ -194,7 +485,7 @@ GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a code judge handling 100K submissions/day with full sandboxing. Key decisions: Docker containers with CPU/memory/network limits for security, Kafka job queue for async execution, pre-warmed container pool to minimize latency, per-language Docker images, and WebSocket for real-time result delivery.</p>
+          <p>We designed a code judge handling LeetCode's scale: 10M users, 100K contest submissions in 60 seconds. Key decisions: Docker containers with CPU/memory/PID/network/seccomp limits for security; gVisor for high-stakes contests; Kafka job queue for burst absorption and async decoupling; pre-warmed container pools eliminating 200ms cold start; per-language executor clusters for fairness; compiled language caching by code hash; and two-tier test cases (public for debugging, hidden for judging).</p>
         </div>
       </section>
 
@@ -205,10 +496,30 @@ GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
             <table>
               <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
               <tbody>
-                <tr><td>Isolation</td><td>Docker + resource limits</td><td>VM per submission</td><td>Docker: faster startup (200ms vs 5s for VM), lower overhead. VM stronger isolation. For MAANG interviews Docker is acceptable answer.</td></tr>
-                <tr><td>Execution model</td><td>Async queue (Kafka)</td><td>Synchronous HTTP</td><td>Execution can take up to 5s; synchronous HTTP would hold connections, limit concurrency, and fail on timeout. Queue handles bursts gracefully.</td></tr>
-                <tr><td>Result delivery</td><td>WebSocket push</td><td>Client polling</td><td>WebSocket delivers result immediately on completion (~1–5s); polling adds 1–2s average latency and wasteful requests</td></tr>
-                <tr><td>Container reuse</td><td>Pre-warm pool, reset between runs</td><td>New container per submission</td><td>Container startup adds 200ms. Pre-warm pool reduces this to near-zero. Reset (remove output files, kill stray processes) is fast.</td></tr>
+                <tr>
+                  <td>Sandboxing technology</td>
+                  <td>Docker + seccomp (normal) / gVisor (contests)</td>
+                  <td>VM per submission</td>
+                  <td>Docker: 200ms cold start vs 5s for VM, much lower overhead. gVisor: user-space kernel provides stronger isolation than Docker at ~20% performance overhead. VMs: strongest isolation but too slow and resource-heavy for 100K/min.</td>
+                </tr>
+                <tr>
+                  <td>Execution model</td>
+                  <td>Async queue (Kafka)</td>
+                  <td>Synchronous HTTP execution</td>
+                  <td>Execution takes 1–10s. Synchronous would hold connections — at 1,667/sec during contests, 10K+ concurrent connections on API server. Kafka decouples acceptance from execution; rate limiting built in via partition count.</td>
+                </tr>
+                <tr>
+                  <td>Result delivery</td>
+                  <td>WebSocket push</td>
+                  <td>Client polling every 2s</td>
+                  <td>WebSocket delivers result immediately on completion (~2-5s); polling adds 0-2s additional latency and generates 5× more requests. WebSocket requires connection management overhead — REST polling is the simpler fallback.</td>
+                </tr>
+                <tr>
+                  <td>Container lifecycle</td>
+                  <td>Pre-warmed pool, reset between runs</td>
+                  <td>New container per submission</td>
+                  <td>Container startup adds 200ms. Pre-warm pool reduces to &lt;10ms. Reset (rm -rf /tmp/*, kill processes) is &lt;100ms. Net saving: 100ms per submission. At 100K/day: saves ~2.8 hours of execution time.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -219,113 +530,198 @@ GET  /v1/problems/{problemId}/submissions?userId={}&limit=20</code></pre>
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * SandboxedExecutor — runs user-submitted code in an isolated Docker container.
- * Enforces CPU, memory, network, and time limits. Never executes code on the host OS.
+ * @file JudgeWorker.java
+ * @description Kafka consumer that pulls submission jobs and executes them
+ *              in Docker containers. Handles compilation, execution, output comparison.
+ *
+ * Public API:
+ *   run() — main consumer loop (blocking)
  */
-public class SandboxedExecutor {
+public class JudgeWorker implements Runnable {
 
-    private static final int TIME_LIMIT_BUFFER_MS = 1000; // extra buffer beyond problem's limit
-    private static final String EXECUTOR_IMAGE_JAVA  = "openjdk:17-slim";
-    private static final String EXECUTOR_IMAGE_PYTHON = "python:3.11-slim";
+    private static final int COMPILE_TIMEOUT_SECONDS = 15;
+    private static final int EXECUTION_TIMEOUT_BUFFER_MS = 1000;
 
-    /**
-     * Executes compiled code in a sandboxed container against one test case.
-     *
-     * @param language       "java", "python", "cpp"
-     * @param codeFilePath   path to compiled binary or source on executor host
-     * @param stdinInput     test case input
-     * @param timeLimitMs    problem's time limit in milliseconds
-     * @param memoryLimitMb  problem's memory limit in megabytes
-     * @return ExecutionResult with stdout, stderr, runtime, status
-     */
-    public ExecutionResult execute(String language, String codeFilePath,
-                                   String stdinInput, int timeLimitMs, int memoryLimitMb) {
-        String dockerImage = resolveDockerImage(language);
-        int timeoutSeconds = (timeLimitMs + TIME_LIMIT_BUFFER_MS) / 1000;
+    private final KafkaConsumer&lt;String, String&gt; kafkaConsumer;
+    private final ContainerPool containerPool;
+    private final SubmissionRepository submissionRepository;
+    private final S3Client s3Client;
+    private final TestCaseRepository testCaseRepository;
 
-        // Build the Docker run command with all security constraints
-        List&lt;String&gt; dockerCommand = buildDockerCommand(
-            dockerImage, codeFilePath, memoryLimitMb, timeoutSeconds, language
-        );
+    // ── Main Loop ─────────────────────────────────────────────────
 
-        try {
-            ProcessBuilder processBuilder = new ProcessBuilder(dockerCommand);
-            processBuilder.redirectErrorStream(false);
-            Process dockerProcess = processBuilder.start();
+    @Override
+    public void run() {
+        kafkaConsumer.subscribe(List.of("submission-jobs"));
 
-            // Write stdin to the container
-            try (OutputStream stdinStream = dockerProcess.getOutputStream()) {
-                stdinStream.write(stdinInput.getBytes());
+        while (true) {
+            var records = kafkaConsumer.poll(Duration.ofMillis(100));
+            for (var record : records) {
+                processSubmission(deserializeJob(record.value()));
             }
-
-            long executionStartMs = System.currentTimeMillis();
-            boolean completedInTime = dockerProcess.waitFor(timeoutSeconds + 1, TimeUnit.SECONDS);
-            long runtimeMs = System.currentTimeMillis() - executionStartMs;
-
-            if (!completedInTime) {
-                dockerProcess.destroyForcibly();
-                return ExecutionResult.timeLimitExceeded(runtimeMs);
-            }
-
-            String stdout = readStream(dockerProcess.getInputStream());
-            String stderr = readStream(dockerProcess.getErrorStream());
-            int exitCode = dockerProcess.exitValue();
-
-            return buildExecutionResult(exitCode, stdout, stderr, runtimeMs, timeLimitMs);
-
-        } catch (IOException ioException) {
-            throw new RuntimeException("[SandboxedExecutor.execute] Docker invocation failed", ioException);
-        } catch (InterruptedException interruptedException) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("[SandboxedExecutor.execute] Interrupted", interruptedException);
+            kafkaConsumer.commitSync();
         }
     }
 
-    private List&lt;String&gt; buildDockerCommand(String image, String codeFilePath,
-                                              int memoryLimitMb, int timeoutSeconds, String language) {
-        return List.of(
-            "docker", "run",
-            "--rm",                                          // auto-remove container on exit
-            "--network=none",                                // no network access
-            "--cpus=1",                                      // one CPU core max
-            "--memory=" + memoryLimitMb + "m",              // hard memory limit
-            "--memory-swap=" + memoryLimitMb + "m",         // no swap (swap would allow memory bypass)
-            "--read-only",                                   // read-only root filesystem
-            "--tmpfs=/tmp:size=64m",                         // writable /tmp only
-            "--security-opt=no-new-privileges",              // prevent privilege escalation
-            "--user=1000:1000",                              // run as non-root
-            "-v", codeFilePath + ":/code:ro",               // mount code read-only
-            image,
-            buildRunCommand(language)
-        );
+    // ── Submission Processing ─────────────────────────────────────
+
+    private void processSubmission(SubmissionJob job) {
+        submissionRepository.updateStatus(job.getSubmissionId(), SubmissionStatus.RUNNING);
+
+        try {
+            String codeFilePath = downloadCode(job);
+            String compiledPath = compileIfNeeded(job.getLanguage(), codeFilePath, job.getSubmissionId());
+            if (compiledPath == null) {
+                return; // COMPILE_ERROR already written to DB
+            }
+
+            List&lt;TestCase&gt; testCases = testCaseRepository.findByProblemId(job.getProblemId());
+            List&lt;TestResult&gt; testResults = runAllTestCases(
+                job, compiledPath, testCases);
+
+            SubmissionStatus finalStatus = determineFinalStatus(testResults);
+            submissionRepository.writeResults(job.getSubmissionId(), finalStatus, testResults);
+
+        } catch (Exception unexpectedException) {
+            System.err.println("[JudgeWorker.processSubmission] Unexpected error for submission "
+                + job.getSubmissionId() + ": " + unexpectedException.getMessage());
+            submissionRepository.updateStatus(job.getSubmissionId(), SubmissionStatus.INTERNAL_ERROR);
+        }
     }
 
-    private String buildRunCommand(String language) {
-        return switch (language) {
-            case "python" -> "python3 /code/solution.py";
-            case "java"   -> "java -cp /code Main";
-            case "cpp"    -> "/code/solution";
-            default -> throw new IllegalArgumentException("Unsupported language: " + language);
-        };
+    // ── Compilation ───────────────────────────────────────────────
+
+    /**
+     * Compiles code for compiled languages. Returns path to binary.
+     * Returns null and writes COMPILE_ERROR to DB if compilation fails.
+     * Returns original path (no compile needed) for interpreted languages.
+     */
+    private String compileIfNeeded(String language, String codeFilePath, String submissionId) {
+        if (isInterpretedLanguage(language)) {
+            return codeFilePath; // Python, JS: no compilation
+        }
+
+        String containerBuildId = containerPool.acquireContainer(language + "-compile");
+        try {
+            List&lt;String&gt; compileCommand = buildCompileCommand(language, codeFilePath);
+            ProcessBuilder processBuilder = new ProcessBuilder(compileCommand);
+            Process compileProcess = processBuilder.start();
+            boolean finished = compileProcess.waitFor(COMPILE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            if (!finished) {
+                compileProcess.destroyForcibly();
+                submissionRepository.writeCompileError(submissionId, "Compilation timed out");
+                return null;
+            }
+            if (compileProcess.exitValue() != 0) {
+                String compileError = readStream(compileProcess.getErrorStream());
+                submissionRepository.writeCompileError(submissionId, compileError);
+                return null;
+            }
+            return codeFilePath.replace(".java", "").replace(".cpp", ""); // compiled binary path
+        } catch (Exception exception) {
+            throw new RuntimeException("[JudgeWorker.compileIfNeeded] Compile invocation failed", exception);
+        } finally {
+            containerPool.releaseContainer(containerBuildId, language + "-compile");
+        }
     }
 
-    private String resolveDockerImage(String language) {
-        return switch (language) {
-            case "java"   -> EXECUTOR_IMAGE_JAVA;
-            case "python" -> EXECUTOR_IMAGE_PYTHON;
-            default -> throw new IllegalArgumentException("Unsupported language: " + language);
-        };
+    // ── Test Execution ────────────────────────────────────────────
+
+    private List&lt;TestResult&gt; runAllTestCases(SubmissionJob job, String compiledPath,
+                                               List&lt;TestCase&gt; testCases) {
+        List&lt;TestResult&gt; results = new ArrayList&lt;&gt;();
+        String containerId = containerPool.acquireContainer(job.getLanguage());
+
+        try {
+            for (TestCase testCase : testCases) {
+                TestResult result = executeOneTestCase(job, compiledPath, testCase, containerId);
+                results.add(result);
+                // Early termination: stop on first failure for efficiency
+                if (!result.isPassed() &amp;&amp; result.getStatus() != SubmissionStatus.WRONG_ANSWER) {
+                    break; // TLE, MLE, RE — no point running remaining cases
+                }
+            }
+        } finally {
+            containerPool.releaseContainer(containerId, job.getLanguage());
+        }
+        return results;
     }
 
-    private ExecutionResult buildExecutionResult(int exitCode, String stdout,
-                                                  String stderr, long runtimeMs, int timeLimitMs) {
-        if (runtimeMs &gt; timeLimitMs) return ExecutionResult.timeLimitExceeded(runtimeMs);
-        if (exitCode != 0)           return ExecutionResult.runtimeError(stderr, runtimeMs);
-        return ExecutionResult.success(stdout, runtimeMs);
+    /**
+     * Executes one test case in a Docker container.
+     * Returns TestResult with status, runtime, and actual output.
+     */
+    private TestResult executeOneTestCase(SubmissionJob job, String compiledPath,
+                                           TestCase testCase, String containerId) {
+        String testInput = s3Client.getObjectAsString(testCase.getInputS3Key());
+        String expectedOutput = s3Client.getObjectAsString(testCase.getExpectedOutputS3Key());
+        int timeLimitMs = job.getTimeLimitMs();
+
+        List&lt;String&gt; execCommand = buildExecCommand(job.getLanguage(), compiledPath, containerId);
+
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder(execCommand);
+            Process execProcess = processBuilder.start();
+
+            // Feed test input to container's stdin
+            try (OutputStream stdinStream = execProcess.getOutputStream()) {
+                stdinStream.write(testInput.getBytes());
+            }
+
+            long startMs = System.currentTimeMillis();
+            boolean completedInTime = execProcess.waitFor(
+                timeLimitMs + EXECUTION_TIMEOUT_BUFFER_MS, TimeUnit.MILLISECONDS);
+            long runtimeMs = System.currentTimeMillis() - startMs;
+
+            if (!completedInTime) {
+                execProcess.destroyForcibly();
+                return TestResult.timeLimitExceeded(testCase.getTestCaseId(), runtimeMs);
+            }
+
+            String actualOutput = readStream(execProcess.getInputStream());
+            int exitCode = execProcess.exitValue();
+
+            if (exitCode != 0) {
+                String stderr = readStream(execProcess.getErrorStream());
+                return TestResult.runtimeError(testCase.getTestCaseId(), stderr, runtimeMs);
+            }
+
+            boolean passed = normalizeOutput(actualOutput).equals(normalizeOutput(expectedOutput));
+            return passed
+                ? TestResult.accepted(testCase.getTestCaseId(), runtimeMs)
+                : TestResult.wrongAnswer(testCase.getTestCaseId(), actualOutput, expectedOutput, runtimeMs);
+
+        } catch (IOException ioException) {
+            throw new RuntimeException("[JudgeWorker.executeOneTestCase] exec failed", ioException);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("[JudgeWorker.executeOneTestCase] interrupted", interruptedException);
+        }
     }
 
-    private String readStream(InputStream inputStream) throws IOException {
-        return new String(inputStream.readAllBytes());
+    // ── Helpers ───────────────────────────────────────────────────
+
+    private String normalizeOutput(String output) {
+        // Trim trailing whitespace and normalize line endings — common source of false WA
+        return output.strip().replace("\r\n", "\n").stripTrailing();
+    }
+
+    private SubmissionStatus determineFinalStatus(List&lt;TestResult&gt; results) {
+        for (TestResult result : results) {
+            if (result.getStatus() != SubmissionStatus.ACCEPTED) {
+                return result.getStatus(); // first non-accepted status = final verdict
+            }
+        }
+        return SubmissionStatus.ACCEPTED;
+    }
+
+    private boolean isInterpretedLanguage(String language) {
+        return language.equals("python") || language.equals("javascript");
+    }
+
+    private String readStream(InputStream stream) throws IOException {
+        return new String(stream.readAllBytes());
     }
 }</code></pre>
         </div>
@@ -339,15 +735,16 @@ public class SandboxedExecutor {
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Why is --network=none a critical security constraint when running user-submitted code?" data-options='["It improves performance by disabling network stack overhead","Without network isolation, submitted code could connect to the internet — exfiltrating test case answers, downloading malware, or attacking other services on the network","Network access is required for compiling code dependencies","Docker containers always run with --network=none by default"]' data-correct="1" data-explanation="Disabling network access prevents: (1) fetching hidden test case answers from your DB, (2) sending user data to an attacker's server, (3) connecting to internal services (AWS metadata endpoint, databases), (4) participating in DDoS attacks. This is not optional." style="display:none"></div>
-          <div data-question="Why use an async job queue (Kafka) for code execution instead of synchronous HTTP?" data-options='["Kafka is required because code execution uses a binary protocol","Code execution takes 1–5 seconds per submission. Synchronous HTTP would hold connections open during execution — at 1,200 submissions/min this would require 1,000+ concurrent connections on the API server. A queue decouples submission acceptance from execution and handles traffic bursts.","Kafka provides the time-limit enforcement mechanism","Asynchronous execution allows multiple test cases to run in parallel"]' data-correct="1" data-explanation="Queuing is a classic pattern for decoupling variable-latency work from the request/response cycle. The API accepts submissions instantly (fast), the executor processes them at its own rate. If there's a burst of 10K submissions, they queue up without dropping requests — the API stays fast and the executors catch up." style="display:none"></div>
-          <div data-question="A user submits C++ code that calls fork() in a loop to create thousands of processes. Which Docker flag prevents this from exhausting host OS process table?" data-options='["--memory=256m limits child processes indirectly","--pids-limit=100 caps the number of processes inside the container, preventing fork bombs","--network=none prevents fork() system calls","--cpus=1 limits fork bombs because child processes share the CPU budget"]' data-correct="1" data-explanation="--pids-limit caps the total number of process IDs in the container's namespace. A fork bomb creates exponentially growing child processes — without --pids-limit, it would eventually exhaust the host OS process table (typically 32K-4M PIDs), crashing the host. --pids-limit=100 would abort the fork bomb after 100 processes." style="display:none"></div>
-          <div data-question="Why does the executor use --memory-swap equal to --memory rather than leaving swap unlimited?" data-options='["Swap is slower than RAM so limiting it improves performance","Setting swap equal to memory limit effectively disables swap. Allowing swap would let code bypass the memory limit by swapping to disk — a user could allocate 10GB even with --memory=256m by paging to swap. Equal values = hard memory limit with no overflow.","Swap is not available inside Docker containers","Unlimited swap would cause the container to compete with other containers for disk I/O"]' data-correct="1" data-explanation="Docker's --memory sets RAM limit; --memory-swap sets RAM+swap combined limit. If --memory=256m and --memory-swap is default (2× RAM = 512m), the container gets 256m of swap space. Setting --memory-swap=256m (same as --memory) allows 0 bytes of swap — a true hard memory limit." style="display:none"></div>
+          <div data-question="Why is --network=none a critical security constraint when running user-submitted code?" data-options='["It improves performance by disabling network stack overhead","Without network isolation, submitted code could connect to the internet — exfiltrating test case answers from your DB, sending credentials to an attacker, or attacking internal services via the AWS metadata endpoint (169.254.169.254)","Network access is required for compiling code dependencies","Docker containers run with --network=none by default"]' data-correct="1" data-explanation="Network isolation prevents: (1) reading hidden test cases from your database, (2) sending user data to an attacker's server, (3) reaching AWS metadata endpoint to steal IAM credentials, (4) participating in DDoS attacks. A single unsandboxed network call could leak your entire test case corpus. This is non-negotiable." style="display:none"></div>
+          <div data-question="Why use an async job queue (Kafka) for code execution instead of synchronous HTTP?" data-options='["Kafka is required because code execution uses a binary protocol","Code execution takes 1–10 seconds. At 1,667 submissions/sec during a contest, synchronous HTTP would require 10,000+ concurrent connections on the API server. Kafka decouples submission acceptance (fast) from execution (slow), allowing the API to return immediately and workers to drain the queue at their own pace.","Kafka provides the time-limit enforcement mechanism","Asynchronous execution enables parallel test case execution"]' data-correct="1" data-explanation="Decoupling via queuing is essential for variable-latency work. The API accepts a submission in &lt;100ms; execution takes 1-10s. Without a queue, 1,667 submissions/sec × 5s average = 8,335 concurrent in-flight executions that the API server must track. With Kafka: queue absorbs any burst, workers drain at steady rate, API stays fast." style="display:none"></div>
+          <div data-question="A user submits C++ code that calls fork() in a loop to create thousands of processes. Which Docker flag prevents this from crashing the host?" data-options='["--memory=256m limits child processes indirectly","--pids-limit=100 caps the total number of processes inside the container's namespace, preventing fork bombs from exhausting the host OS process table","--network=none prevents fork() system calls","--cpus=1 limits fork bombs because child processes share the CPU budget"]' data-correct="1" data-explanation="--pids-limit caps the total process IDs in the container's namespace. A fork bomb (while True: os.fork()) creates exponentially growing child processes. Without --pids-limit, it eventually exhausts the host PID table (32K-4M PIDs), crashing the host. --pids-limit=100 aborts the fork bomb after 100 processes. CPU limits alone don't help — the bomb can fork much faster than it uses CPU." style="display:none"></div>
+          <div data-question="What is the difference between Docker and gVisor sandboxing, and when should you use gVisor?" data-options='["gVisor is a Docker plugin that adds GPU support for ML code","Docker containers share the host Linux kernel — a kernel exploit could break out of the container. gVisor runs a user-space kernel that intercepts all syscalls, meaning host kernel only sees ~20 syscalls from gVisor instead of 300+ directly from user code. Use gVisor for high-value contests where extra security justifies the 20% performance overhead.","gVisor runs code faster than Docker by eliminating container overhead","gVisor provides better network isolation than Docker's --network=none"]' data-correct="1" data-explanation="Docker's security boundary is the kernel's namespace/cgroup isolation — a kernel vulnerability can escape. gVisor's boundary is much smaller: the host kernel only ever sees syscalls from the Sentry process (gVisor's kernel), not from user code. For a $100K prize contest, 20% overhead is acceptable. For everyday 100K/day volume, Docker + seccomp is the right trade-off." style="display:none"></div>
+          <div data-question="A user resubmits the exact same C++ code for a problem. How can the system avoid recompiling?" data-options='["The system cannot detect duplicate code since user_id differs between submissions","Cache compiled binaries keyed by hash(code + language + compiler_version). On submission, compute the hash and check the compilation cache. If hit, skip compilation and execute the cached binary directly — saves 1-3 seconds of compile time per duplicate submission.","Always recompile for fairness — cached binaries might be corrupted","Compilation is fast enough (&lt;100ms) that caching is not worth implementing"]' data-correct="1" data-explanation="Content-addressable compilation cache: SHA-256(source code + language + compiler flags) = cache key. Same code = same hash = same binary. At LeetCode scale where many users attempt the same problem, popular solutions are submitted thousands of times. Caching compilation saves significant compute, especially for C++ (which can take 2-5 seconds to compile)." style="display:none"></div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

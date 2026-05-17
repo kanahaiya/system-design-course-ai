@@ -208,6 +208,79 @@ GatewayContext {
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="API Gateway request pipeline showing 8 stages from client through plugins to backend and back">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Pipeline boxes -->
+            <rect x="10" y="30" width="72" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="46" y="55" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+
+            <rect x="110" y="30" width="82" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="151" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">TLS</text>
+            <text x="151" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Termination</text>
+
+            <rect x="220" y="30" width="82" height="40" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="261" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Auth</text>
+            <text x="261" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Plugin</text>
+
+            <rect x="330" y="30" width="82" height="40" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="371" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Rate Limit</text>
+            <text x="371" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Plugin</text>
+
+            <rect x="440" y="30" width="82" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="481" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Request</text>
+            <text x="481" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Transform</text>
+
+            <rect x="550" y="30" width="82" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="591" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Circuit</text>
+            <text x="591" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Breaker</text>
+
+            <rect x="660" y="30" width="82" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="701" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Backend</text>
+            <text x="701" y="62" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Router</text>
+
+            <!-- Arrows between pipeline boxes -->
+            <line x1="82" y1="50" x2="108" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="192" y1="50" x2="218" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="302" y1="50" x2="328" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="412" y1="50" x2="438" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="522" y1="50" x2="548" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="632" y1="50" x2="658" y2="50" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Response path back -->
+            <text x="400" y="110" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">← Response Transform ←</text>
+            <line x1="82" y1="105" x2="718" y2="105" stroke="#6366f1" stroke-width="1" stroke-dasharray="5,3"/>
+            <polygon points="82,102 72,105 82,108" fill="#6366f1"/>
+
+            <!-- Plugin Chain label -->
+            <text x="400" y="140" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-style="italic">Plugin Chain Pattern — each plugin is independently configurable and composable</text>
+
+            <!-- Canary split diagram -->
+            <rect x="50" y="170" width="120" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="110" y="188" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Backend</text>
+            <text x="110" y="202" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Router</text>
+
+            <rect x="230" y="155" width="100" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="280" y="170" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">v1 Service</text>
+            <text x="280" y="184" fill="#4ade80" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">95% traffic</text>
+
+            <rect x="230" y="203" width="100" height="36" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="280" y="218" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">v2 Service</text>
+            <text x="280" y="232" fill="#fbbf24" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">5% canary</text>
+
+            <line x1="170" y1="185" x2="228" y2="173" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="170" y1="195" x2="228" y2="214" stroke="#818cf8" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow)"/>
+
+            <text x="110" y="255" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Canary Split</text>
+
+            <!-- Labels for highlighted boxes -->
+            <text x="261" y="20" fill="#818cf8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">★ highlighted</text>
+            <text x="371" y="20" fill="#818cf8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">★ highlighted</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: API Gateway request pipeline — 8-stage plugin chain with canary traffic splitting</p>
           <h3>System Components</h3>
           <ul>
             <li><strong>Load Balancer (L4/L7):</strong> AWS ALB or GCP Load Balancer in front of the gateway fleet. DNS-based failover across AZs. Health checks every 5 seconds.</li>

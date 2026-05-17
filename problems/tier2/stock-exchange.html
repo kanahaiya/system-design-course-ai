@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Stock Exchange — RESHADED walkthrough covering order book data structures, matching engine, sub-millisecond latency, and market data distribution for MAANG interviews.">
+  <meta name="description" content="Design a Stock Exchange — RESHADED walkthrough covering order book data structures, matching engine, event sourcing, circuit breakers, and sub-100μs latency for L6 interviews.">
   <title>Design a Stock Exchange — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -66,11 +66,11 @@
           <span class="tag">Ultra-low latency</span>
         </div>
         <h1 class="module-header__title">Design a Stock Exchange</h1>
-        <p class="module-header__desc">A stock exchange has the strictest latency requirements of any system: order matching must complete in &lt;1ms. The core data structure — the order book — is two priority queues. The matching engine processes orders sequentially (single-threaded) to ensure strict price-time priority.</p>
+        <p class="module-header__desc">A stock exchange has the strictest latency requirements of any system: order matching must complete in &lt;100 microseconds. The core data structure — the order book — is two priority queues. The matching engine processes orders sequentially (single-threaded) for strict price-time priority with no lock contention.</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Nasdaq, NYSE, Robinhood</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> &lt;1ms matching</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⚡</span> &lt;100μs matching</div>
         </div>
       </header>
 
@@ -79,19 +79,24 @@
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Place orders: limit orders (price specified) and market orders (execute at best available price)</li>
-            <li>Cancel orders</li>
-            <li>Match buy and sell orders when bid price ≥ ask price</li>
-            <li>Real-time market data feed: price, volume, order book depth</li>
+            <li>Place orders: limit (price specified), market (fill at best price), stop-loss (trigger when price crosses threshold)</li>
+            <li>Cancel open orders</li>
+            <li>Match buy and sell orders when bid price ≥ ask price — price-time priority</li>
+            <li>Real-time market data feed: last trade price, bid/ask, volume, order book depth</li>
             <li>Trade history: list of executed trades per symbol</li>
+            <li>Account management: portfolio positions, P&amp;L, trade confirmations</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Latency:</strong> Order matching &lt;1ms p99 (hardware-level engineering required)</li>
-            <li><strong>Throughput:</strong> 100K orders/sec per symbol at peak</li>
+            <li><strong>Latency:</strong> Order matching &lt;100 microseconds p99 (hardware-level engineering required for HFT)</li>
+            <li><strong>Throughput:</strong> 100K orders/sec per symbol at peak (AAPL, TSLA during market open)</li>
             <li><strong>Fairness:</strong> Price-time priority — first order at a price level executes first</li>
-            <li><strong>Durability:</strong> No order loss; persist to WAL before acknowledging</li>
+            <li><strong>Durability:</strong> No order loss; persist to WAL before acknowledging any order</li>
+            <li><strong>Audit:</strong> Every order, trade, and cancel is immutably recorded for compliance (SEC requires 7-year retention)</li>
           </ul>
+          <div class="callout callout--tip">
+            <strong>L6 depth signal:</strong> Mention event sourcing proactively. "The order book state is derived from an event log — every order and trade is an immutable event. We can reconstruct the order book at any point in time by replaying the log. This is critical for compliance and crash recovery."
+          </div>
         </div>
       </section>
 
@@ -99,10 +104,11 @@
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li>NYSE: ~20B shares/day, 3,000 symbols → avg 7M trades/day per symbol</li>
-            <li>Peak: 100K orders/sec for hot symbols (AAPL, TSLA)</li>
-            <li>Order book depth: typically 10–50 price levels → fits entirely in L1/L2 CPU cache for hot symbols</li>
-            <li>Market data fan-out: 100K subscribers × 100K updates/sec = 10B messages/sec → multicast or specialized market data infrastructure</li>
+            <li>NYSE: ~20B shares/day across 3,000 symbols → ~7M trades/day; peak 100K orders/sec for hot symbols</li>
+            <li>Order book depth: typically 10–50 price levels → entire book fits in L1/L2 CPU cache (64KB) for hot symbols — this is intentional</li>
+            <li>Market data fan-out: 100K updates/sec × 100K subscribers = 10B messages/sec → requires multicast UDP, not unicast</li>
+            <li>WAL writes: 100K orders/sec × 200 bytes/order = 20MB/sec → NVMe SSD absorbs this easily, with fsync batching</li>
+            <li>Settlement: T+2 means 2B shares × avg $100/share = $200B in-flight at DTCC daily</li>
           </ul>
         </div>
       </section>
@@ -110,27 +116,48 @@
       <section class="content-section" id="schema" aria-labelledby="schema-title">
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Orders (in-memory + WAL for durability)
+          <pre><code class="language-java">// Event log — the canonical source of truth (append-only, WAL on NVMe)
+// Replaying this log reconstructs the exact order book state at any timestamp
+order_events:
+    event_id      BIGINT PRIMARY KEY,  -- monotonically increasing sequence
+    event_type    ENUM(ORDER_PLACED, ORDER_CANCELLED, TRADE_EXECUTED),
+    symbol        VARCHAR(10),
+    order_id      BIGINT,
+    side          ENUM(BUY, SELL),
+    order_type    ENUM(LIMIT, MARKET, STOP),
+    price         BIGINT,       -- stored as integer ticks (e.g., $100.50 = 10050 ticks)
+    quantity      BIGINT,
+    account_id    UUID,
+    timestamp_ns  BIGINT,       -- nanosecond precision (hardware timestamp)
+    -- above fits in one 64-byte cache line when packed
+
+// Orders — view over event log (rebuilt from events on startup)
+// In-memory only during normal operation. Persisted lazily to DB for query.
 orders:
-    order_id    BIGINT,           -- Snowflake ID (timestamp-ordered)
+    order_id    BIGINT PRIMARY KEY,
     symbol      VARCHAR(10),
-    side        ENUM(buy, sell),
-    order_type  ENUM(limit, market),
-    price       DECIMAL(10,4),   -- null for market orders
+    side        ENUM(BUY, SELL),
+    order_type  ENUM(LIMIT, MARKET, STOP),
+    price       BIGINT,      -- null for market orders; integer ticks
     quantity    BIGINT,
     filled_qty  BIGINT DEFAULT 0,
-    status      ENUM(open, partial, filled, cancelled),
+    status      ENUM(OPEN, PARTIAL, FILLED, CANCELLED),
+    account_id  UUID,
     created_at  TIMESTAMP
 
-// Trades (append-only)
+// Trades — append-only, persisted immediately on execution
 trades:
-    trade_id    BIGINT PRIMARY KEY,
-    symbol      VARCHAR(10),
+    trade_id      BIGINT PRIMARY KEY,
+    symbol        VARCHAR(10),
     buy_order_id  BIGINT,
     sell_order_id BIGINT,
-    price       DECIMAL(10,4),
-    quantity    BIGINT,
-    executed_at TIMESTAMP</code></pre>
+    price         BIGINT,   -- integer ticks
+    quantity      BIGINT,
+    executed_at   BIGINT    -- nanosecond timestamp
+
+// Price stored as integer ticks to avoid floating-point arithmetic:
+// $100.50 → 10050 ticks (assuming 2 decimal places)
+// Integer comparison is faster and exact — critical for matching correctness</code></pre>
         </div>
       </section>
 
@@ -138,11 +165,13 @@ trades:
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Order Gateway:</strong> Accepts orders via FIX protocol (financial industry standard) or REST. Validates, writes to WAL, forwards to matching engine via ring buffer (LMAX Disruptor pattern).</li>
-            <li><strong>Matching Engine:</strong> Single-threaded (no locks, no contention). Processes orders from ring buffer sequentially. Maintains in-memory order book per symbol. Emits trade events.</li>
-            <li><strong>Market Data Publisher:</strong> Receives trade events. Distributes via multicast UDP or Kafka to market data consumers (trading terminals, algos).</li>
-            <li><strong>Trade Store:</strong> Consumes trade events. Persists to append-only trade log (PostgreSQL or time-series DB).</li>
-            <li><strong>Risk Engine:</strong> Pre-trade validation. Checks margin, position limits before order reaches matching engine. Runs on order arrival, &lt;100μs latency requirement.</li>
+            <li><strong>Order Gateway:</strong> Accepts orders via FIX protocol (financial industry standard) or REST. Validates, writes to WAL (NVMe SSD, fsync), forwards to matching engine via LMAX Disruptor ring buffer (zero-GC, lock-free IPC).</li>
+            <li><strong>Risk Engine (pre-trade):</strong> Runs on every incoming order. Checks: account has sufficient funds/shares, order size within limits, no wash trading. Target: &lt;100μs. In the same JVM process as the matching engine to avoid network round-trip.</li>
+            <li><strong>Matching Engine:</strong> Single-threaded (no locks, no contention). Processes orders from ring buffer sequentially. Maintains in-memory order book per symbol. Emits trade events to output ring buffer.</li>
+            <li><strong>Market Data Publisher:</strong> Receives trade and order book delta events. Distributes via UDP multicast to subscribers (trading terminals, algos). One UDP packet → delivered to thousands of subscribers by network infrastructure simultaneously.</li>
+            <li><strong>Trade Store:</strong> Consumes trade events from output ring buffer. Persists to append-only PostgreSQL trade log. Also feeds position updates to Account Service.</li>
+            <li><strong>Settlement Service:</strong> Batches trades for T+2 settlement. Submits to DTCC (Depository Trust &amp; Clearing Corporation). Handles stock and cash movements.</li>
+            <li><strong>Circuit Breaker:</strong> Monitors price movement rate per symbol. If price moves &gt;5% in 5 minutes → halt trading for that symbol for 5 minutes. Prevents "flash crash" cascades.</li>
           </ul>
         </div>
       </section>
@@ -150,31 +179,257 @@ trades:
       <section class="content-section" id="apis" aria-labelledby="api-title">
         <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">POST /v1/orders          // place limit or market order
+          <pre><code class="language-java">// FIX Protocol (industry standard for order routing between brokers/exchanges)
+// New Order: MsgType=D, Symbol=AAPL, Side=1(BUY), OrdType=2(LIMIT), Price=15050, Qty=100
+// Cancel: MsgType=F, OrigClOrdID=..., OrderID=...
+
+// REST APIs (for retail/algorithmic clients)
+POST /v1/orders
   Body: { symbol, side, orderType, price, quantity, accountId }
-  Returns: { orderId, status }
+  Returns: { orderId, status: "ACCEPTED" }  // accepted into WAL, not yet matched
 
 DELETE /v1/orders/{orderId}    // cancel open order
 
-GET /v1/orderbook/{symbol}     // current bids/asks
-  Returns: { bids: [{price, qty}...], asks: [{price, qty}...] }
+GET /v1/orderbook/{symbol}     // current bids/asks (top 10 levels)
+  Returns: {
+    bids: [{price: 15050, qty: 500}, {price: 15049, qty: 1200}, ...],
+    asks: [{price: 15051, qty: 300}, {price: 15052, qty: 800}, ...]
+  }
 
-GET /v1/trades/{symbol}?limit=50    // recent trades
-WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
+GET /v1/trades/{symbol}?limit=50    // recent executed trades
+GET /v1/accounts/{accountId}/positions
+GET /v1/accounts/{accountId}/orders?status=OPEN
+
+WebSocket /v1/market-data/{symbol}  // real-time price/orderbook stream
+  Outbound: { type: "TRADE", price: 15051, qty: 100, ts: 1700... }
+  Outbound: { type: "BOOK_UPDATE", side: "BID", price: 15050, newQty: 400 }</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Order Book Data Structure<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Order Book, Matching, and Latency<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p>The order book consists of two sorted collections:</p>
+
+          <h3>Order Book Data Structure</h3>
+
+          <svg viewBox="0 0 680 300" role="img" aria-label="Order book visualization: bid side (buy orders) sorted descending by price, ask side (sell orders) sorted ascending by price, matching occurs when best bid crosses best ask" style="width:100%;max-width:680px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-ob" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Bids column -->
+            <text x="155" y="25" fill="#4ade80" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">BIDS (Buy Orders)</text>
+            <text x="155" y="40" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">sorted desc (highest first)</text>
+            <!-- Bid rows -->
+            <rect x="10" y="50" width="290" height="36" rx="4" fill="#14532d" stroke="#4ade80" stroke-width="1.5"/>
+            <text x="60" y="73" fill="#4ade80" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="700">$150.51</text>
+            <text x="200" y="73" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">500 shares  ← BEST BID</text>
+            <rect x="10" y="92" width="290" height="30" rx="4" fill="#1e293b" stroke="#4ade80" stroke-width="1"/>
+            <text x="60" y="112" fill="#86efac" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">$150.50</text>
+            <text x="200" y="112" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">1,200 shares</text>
+            <rect x="10" y="128" width="290" height="30" rx="4" fill="#1e293b" stroke="#4ade80" stroke-width="1"/>
+            <text x="60" y="148" fill="#86efac" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">$150.49</text>
+            <text x="200" y="148" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">800 shares</text>
+            <rect x="10" y="164" width="290" height="30" rx="4" fill="#1e293b" stroke="#6366f1" stroke-width="1" stroke-dasharray="3,2"/>
+            <text x="155" y="184" fill="#475569" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">... more price levels ...</text>
+
+            <!-- Asks column -->
+            <text x="525" y="25" fill="#f87171" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">ASKS (Sell Orders)</text>
+            <text x="525" y="40" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">sorted asc (lowest first)</text>
+            <rect x="380" y="50" width="290" height="36" rx="4" fill="#7f1d1d" stroke="#f87171" stroke-width="1.5"/>
+            <text x="430" y="73" fill="#f87171" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="700">$150.52</text>
+            <text x="570" y="73" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">300 shares  ← BEST ASK</text>
+            <rect x="380" y="92" width="290" height="30" rx="4" fill="#1e293b" stroke="#f87171" stroke-width="1"/>
+            <text x="430" y="112" fill="#fca5a5" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">$150.53</text>
+            <text x="570" y="112" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">600 shares</text>
+            <rect x="380" y="128" width="290" height="30" rx="4" fill="#1e293b" stroke="#f87171" stroke-width="1"/>
+            <text x="430" y="148" fill="#fca5a5" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">$150.55</text>
+            <text x="570" y="148" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">1,100 shares</text>
+            <rect x="380" y="164" width="290" height="30" rx="4" fill="#1e293b" stroke="#6366f1" stroke-width="1" stroke-dasharray="3,2"/>
+            <text x="525" y="184" fill="#475569" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">... more price levels ...</text>
+
+            <!-- Spread indicator -->
+            <rect x="270" y="50" width="110" height="36" rx="4" fill="#0f172a" stroke="#6366f1" stroke-width="1"/>
+            <text x="325" y="65" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">SPREAD</text>
+            <text x="325" y="79" fill="#6366f1" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">$0.01</text>
+
+            <!-- Match annotation -->
+            <rect x="100" y="225" width="480" height="55" rx="8" fill="#0f172a" stroke="#6366f1" stroke-width="1"/>
+            <text x="340" y="245" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Matching condition: Best Bid ($150.51) &lt; Best Ask ($150.52) → No match yet</text>
+            <text x="340" y="261" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">If a new buy order arrives at $150.52+: Best Bid ≥ Best Ask → trade at $150.52 (resting price)</text>
+            <text x="340" y="275" fill="#4ade80" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">TreeMap&lt;Long, Deque&lt;Order&gt;&gt; — O(log P) price navigation + O(1) FIFO at each price level</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Order book — bids sorted descending (highest buy price first), asks sorted ascending (lowest sell price first)</p>
+
+          <h3>Order Types and Matching Logic</h3>
+          <pre><code class="language-java">// LIMIT order: fill only at specified price or better
+// Incoming BUY limit at $150.52: best ask = $150.52 → match at $150.52 (ask's price, price improvement for buyer)
+// Incoming BUY limit at $150.51: best ask = $150.52 → no match (bid < ask) → rest in book
+
+// MARKET order: fill immediately at best available price(s)
+// Incoming BUY market: takes the best ask ($150.52, 300 shares)
+//   If market order qty > 300: takes next ask ($150.53, 600 shares), then next, until filled
+//   Risk: "market impact" — large market orders move the price adversely
+
+// STOP-LOSS order: passive until trigger price crossed, then converts to market
+// STOP-LOSS SELL at $150.40: sits dormant; if last trade price hits $150.40 or below,
+//   it activates and immediately becomes a market sell order
+
+// Price-time priority within a price level:
+// Multiple sell orders at $150.52: $150.52 first FIFO (first posted = first matched)
+// TreeMap key = price level; Deque value = FIFO queue of orders at that price
+// O(log P) to find price level (P = number of distinct price levels, typically 10-50)
+// O(1) to dequeue the front order at a price level</code></pre>
+
+          <h3>Matching Algorithm — Single-Threaded Design</h3>
+          <pre><code class="language-java">// Why single-threaded? Any concurrent modification to the order book
+// requires locks. Every lock acquisition = potential cache miss + OS scheduling.
+// A single-threaded engine with a ring buffer achieves 500K+ orders/sec on modern
+// hardware without any contention. Correctness is trivially guaranteed.
+
+// LMAX Disruptor ring buffer: pre-allocated fixed-size array of event slots
+// Producer (Order Gateway) writes to ring buffer: no allocation, no GC
+// Consumer (Matching Engine) reads from ring buffer: cache-line friendly access
+// Throughput: 25M events/sec vs 2M for ConcurrentLinkedQueue
+
+public class MatchingEngine implements Runnable {
+    private final Map&lt;String, OrderBook&gt; orderBooks = new HashMap&lt;&gt;();
+    private final RingBuffer&lt;OrderEvent&gt; inputRingBuffer;  // from Order Gateway
+    private final RingBuffer&lt;TradeEvent&gt; outputRingBuffer; // to Market Data Publisher
+
+    @Override
+    public void run() {
+        // Pin this thread to a specific CPU core (CPU affinity)
+        // Prevents OS from migrating thread = no cache invalidation on core switch
+        while (true) {
+            OrderEvent event = inputRingBuffer.poll(); // non-blocking, spins on empty
+            if (event != null) {
+                processOrder(event);
+            }
+        }
+    }
+
+    private void processOrder(OrderEvent event) {
+        OrderBook book = orderBooks.computeIfAbsent(event.getSymbol(), OrderBook::new);
+        List&lt;Trade&gt; trades = switch (event.getOrderType()) {
+            case LIMIT  -> book.addLimitOrder(event.toOrder());
+            case MARKET -> book.addMarketOrder(event.toOrder());
+            case CANCEL -> book.cancelOrder(event.getOrderId());
+        };
+        // Emit trades and book deltas to market data output ring buffer
+        for (Trade trade : trades) {
+            outputRingBuffer.publish(TradeEvent.from(trade));
+        }
+    }
+}</code></pre>
+
+          <h3>Event Sourcing for Compliance and Recovery</h3>
+          <pre><code class="language-java">// Event sourcing: the order book is not stored — it is DERIVED from events
+// Every incoming order is first written to the WAL (Write-Ahead Log)
+// On crash: replay all WAL events to rebuild exact order book state
+
+// WAL format (binary, NVMe SSD, fsync every batch)
+// [8 bytes] event_id  [1 byte] type  [10 bytes] symbol
+// [8 bytes] order_id  [1 byte] side  [8 bytes] price_ticks
+// [8 bytes] quantity  [8 bytes] account_id  [8 bytes] timestamp_ns
+// = 62 bytes per event, fits in one cache line (64 bytes)
+
+// Recovery procedure on restart:
+// 1. Open WAL file
+// 2. For each event in order:
+//    - ORDER_PLACED: add to order book
+//    - ORDER_CANCELLED: remove from order book
+//    - TRADE_EXECUTED: update fill quantities
+// 3. Order book is now identical to pre-crash state
+// 4. Resume processing new orders
+
+// Compliance: SEC requires 7-year retention of all order activity
+// WAL segments archived to S3 (Parquet format, queryable via Athena)</code></pre>
+
+          <h3>Circuit Breakers and Risk Controls</h3>
+          <pre><code class="language-java">/**
+ * Monitors price velocity per symbol.
+ * Halts trading if price moves more than 5% in 5 minutes (flash crash prevention).
+ */
+public class CircuitBreaker {
+
+    private static final double HALT_THRESHOLD_PERCENT = 5.0;
+    private static final int MONITORING_WINDOW_MINUTES = 5;
+    private static final int HALT_DURATION_MINUTES = 5;
+
+    // Sliding window of trade prices per symbol
+    private final Map&lt;String, Deque&lt;PriceSnapshot&gt;&gt; priceHistory = new ConcurrentHashMap&lt;&gt;();
+    private final Map&lt;String, Instant&gt; haltedUntil = new ConcurrentHashMap&lt;&gt;();
+
+    /**
+     * Called on every trade execution. Returns true if trading should halt.
+     */
+    public boolean shouldHalt(String symbol, long tradePriceTicks) {
+        Instant haltedUntilTime = haltedUntil.get(symbol);
+        if (haltedUntilTime != null &amp;&amp; Instant.now().isBefore(haltedUntilTime)) {
+            return true; // still in halt period
+        }
+
+        Deque&lt;PriceSnapshot&gt; history = priceHistory.computeIfAbsent(
+            symbol, s -> new ArrayDeque&lt;&gt;());
+
+        history.addLast(new PriceSnapshot(tradePriceTicks, Instant.now()));
+
+        // Remove snapshots older than 5 minutes
+        Instant windowStart = Instant.now().minusSeconds(MONITORING_WINDOW_MINUTES * 60L);
+        while (!history.isEmpty() &amp;&amp; history.peekFirst().getTimestamp().isBefore(windowStart)) {
+            history.pollFirst();
+        }
+
+        if (history.size() &lt; 2) {
+            return false; // not enough data
+        }
+
+        long firstPrice = history.peekFirst().getPriceTicks();
+        double priceChangePct = Math.abs((double)(tradePriceTicks - firstPrice) / firstPrice * 100);
+
+        if (priceChangePct &gt;= HALT_THRESHOLD_PERCENT) {
+            haltedUntil.put(symbol, Instant.now().plusSeconds(HALT_DURATION_MINUTES * 60L));
+            return true; // halt this symbol
+        }
+
+        return false;
+    }
+}
+
+// Pre-trade risk check (runs before every order reaches matching engine):
+public class RiskEngine {
+    public RiskCheckResult checkOrder(Order order, AccountPosition position) {
+        // 1. Sufficient funds/shares
+        if (order.getSide() == Side.BUY) {
+            long requiredCash = order.getPriceTicks() * order.getQuantity();
+            if (position.getCashBalance() &lt; requiredCash) {
+                return RiskCheckResult.reject("Insufficient funds");
+            }
+        } else {
+            if (position.getSharesHeld(order.getSymbol()) &lt; order.getQuantity()) {
+                return RiskCheckResult.reject("Insufficient shares");
+            }
+        }
+        // 2. Order size limits (prevent fat-finger errors)
+        if (order.getQuantity() &gt; 1_000_000) {
+            return RiskCheckResult.reject("Order exceeds size limit");
+        }
+        // 3. No wash trading (buy and sell same symbol from same account)
+        // (additional checks omitted for brevity)
+        return RiskCheckResult.approved();
+    }
+}</code></pre>
+
+          <h3>Settlement — T+2</h3>
+          <p>NYSE and NASDAQ use T+2 settlement (SEC regulation SHO): a trade executed today settles 2 business days later. This means:</p>
           <ul>
-            <li><strong>Bids (buy orders):</strong> Max-heap by price. Best bid = highest price.</li>
-            <li><strong>Asks (sell orders):</strong> Min-heap by price. Best ask = lowest price.</li>
+            <li>Buyer has 2 days to deliver cash; seller has 2 days to deliver shares</li>
+            <li>DTCC (Depository Trust &amp; Clearing Corporation) acts as central counterparty — nets all trades across all brokers to minimize actual cash and share movements</li>
+            <li>If a broker fails to deliver ("fails to deliver"), DTCC invokes buy-in procedures</li>
+            <li>In our system: trades are held in a settlement queue. A batch job at 5pm EST creates net obligations per broker and submits to DTCC API</li>
           </ul>
-          <p><strong>Matching logic:</strong> After inserting an order, check if best bid ≥ best ask. If yes: match. Trade executes at the resting order's price (the order already in the book). Repeat until no match.</p>
-          <p><strong>Price-time priority within a price level:</strong> A simple heap doesn't give time priority at the same price. Use a TreeMap&lt;Price, Queue&lt;Order&gt;&gt; where orders at the same price are queued FIFO. This gives O(log N) price navigation and O(1) within a price level.</p>
-          <p><strong>Why single-threaded?</strong> Any concurrent modification to the order book requires locks, adding latency and complexity. A single-threaded matching engine processes 500K+ orders/sec on modern hardware (ring buffer eliminates IPC overhead). Correctness is trivial; no race conditions possible.</p>
         </div>
       </section>
 
@@ -182,9 +437,10 @@ WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Partial fills:</strong> If a buy order for 100 shares matches a sell order for 60 shares: trade executes for 60, buy order becomes partially filled (40 remaining). The remainder stays in the book.</li>
-            <li><strong>Disaster recovery:</strong> WAL (Write-Ahead Log) on NVMe SSD. On crash, replay WAL to rebuild in-memory order book. Target: &lt;5 minute recovery time.</li>
-            <li><strong>Hot backup:</strong> Primary matching engine streams state to a hot standby. Failover in &lt;1s (sub-millisecond switchover for co-located primary/backup).</li>
+            <li><strong>Partial fills:</strong> Buy 100 shares, best ask has 60 → trade executes for 60, buy order becomes partially filled (40 remaining). Remainder stays in book. Market order continues to consume next price levels until filled or book exhausted.</li>
+            <li><strong>Disaster recovery:</strong> WAL on NVMe SSD with fsync batching. On crash, replay WAL to rebuild in-memory order book. Target &lt;5 minute recovery. For faster recovery: weekly snapshot of order book state reduces WAL replay to events since last snapshot.</li>
+            <li><strong>Hot backup (sub-second failover):</strong> Primary matching engine streams state changes to a hot standby on the same machine via shared memory. On primary failure, standby takes over in &lt;1 second with all orders intact.</li>
+            <li><strong>GC pauses:</strong> JVM GC can cause &gt;100ms pauses — catastrophic for a &lt;100μs latency target. Mitigation: use pre-allocated object pools (no heap allocation in hot path), or switch to off-heap memory (Unsafe), or use GraalVM native image (no JVM GC).</li>
           </ul>
         </div>
       </section>
@@ -192,7 +448,7 @@ WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a stock exchange with &lt;1ms order matching. Key decisions: single-threaded matching engine (no lock contention), TreeMap+FIFO queue order book for price-time priority, LMAX Disruptor ring buffer for zero-GC order delivery, WAL for durability, and UDP multicast for low-latency market data distribution.</p>
+          <p>We designed a stock exchange with &lt;100μs order matching. Key decisions: single-threaded matching engine (no lock contention), TreeMap+FIFO Deque order book for price-time priority, LMAX Disruptor ring buffer for zero-GC IPC, WAL-based event sourcing for compliance and crash recovery, pre-trade risk checks preventing bad orders, circuit breakers halting trading on 5%+ price moves, and UDP multicast for sub-microsecond market data distribution to HFT subscribers.</p>
         </div>
       </section>
 
@@ -203,10 +459,36 @@ WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
             <table>
               <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
               <tbody>
-                <tr><td>Matching engine threading</td><td>Single-threaded</td><td>Multi-threaded with locks</td><td>No locking = no contention. Single-threaded easily achieves 500K orders/sec. Multi-threaded complexity for no benefit on this workload.</td></tr>
-                <tr><td>Order book structure</td><td>TreeMap + FIFO queue per price level</td><td>Simple PriorityQueue</td><td>PriorityQueue gives best price but no time-ordering within a level. TreeMap + Queue gives O(log N) price + O(1) FIFO within price level — required for price-time priority.</td></tr>
-                <tr><td>Market data distribution</td><td>UDP multicast</td><td>Kafka to subscribers</td><td>UDP multicast: one packet, delivered to all subscribers simultaneously, sub-microsecond additional latency. Kafka adds 5ms+ — unacceptable for HFT consumers.</td></tr>
-                <tr><td>IPC to matching engine</td><td>LMAX Disruptor ring buffer</td><td>ConcurrentLinkedQueue</td><td>Disruptor uses mechanical sympathy (cache-line friendly, no GC allocation) achieving 25M messages/sec. ConcurrentLinkedQueue uses CAS and heap allocation — orders of magnitude slower.</td></tr>
+                <tr>
+                  <td>Matching engine threading</td>
+                  <td>Single-threaded</td>
+                  <td>Multi-threaded with locks</td>
+                  <td>No locking = no contention, no cache invalidation, deterministic ordering. Single-threaded achieves 500K orders/sec. Multi-threading adds 5–50μs of lock overhead per order — unacceptable at &lt;100μs target.</td>
+                </tr>
+                <tr>
+                  <td>Order book structure</td>
+                  <td>TreeMap&lt;Price, Deque&lt;Order&gt;&gt;</td>
+                  <td>Simple PriorityQueue&lt;Order&gt;</td>
+                  <td>PriorityQueue gives best price but no time-ordering within a price level. TreeMap + FIFO Deque gives O(log P) price access + O(1) FIFO at each level. Required for price-time priority compliance.</td>
+                </tr>
+                <tr>
+                  <td>Order book persistence</td>
+                  <td>Event sourcing (WAL replay)</td>
+                  <td>Snapshot order book to DB every N orders</td>
+                  <td>Event log is the compliance record anyway. Rebuilding from events is auditable and deterministic. Snapshots introduce complexity (snapshot consistency, incremental updates). Events are simpler and satisfy both recovery and compliance.</td>
+                </tr>
+                <tr>
+                  <td>Market data distribution</td>
+                  <td>UDP multicast</td>
+                  <td>Kafka to HFT subscribers</td>
+                  <td>UDP multicast: one packet delivered simultaneously to all subscribers by network infrastructure, sub-microsecond additional latency. Kafka adds 5–50ms through broker polling — catastrophic for HFT algorithms.</td>
+                </tr>
+                <tr>
+                  <td>IPC to matching engine</td>
+                  <td>LMAX Disruptor ring buffer</td>
+                  <td>ConcurrentLinkedQueue</td>
+                  <td>Disruptor: pre-allocated, cache-line optimized, lock-free with CAS, 25M events/sec. ConcurrentLinkedQueue: heap allocations (GC pressure), CAS contention, ~5M events/sec max.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -217,9 +499,15 @@ WebSocket /v1/market-data/{symbol}  // real-time price/trade stream</code></pre>
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * OrderBook — in-memory matching engine for one trading symbol.
- * Uses TreeMap&lt;Price, Deque&lt;Order&gt;&gt; for price-time priority matching.
- * Single-threaded: called only from the matching engine thread.
+ * @file OrderBook.java
+ * @description In-memory matching engine for one trading symbol.
+ *              Uses TreeMap&lt;Long, Deque&lt;Order&gt;&gt; for price-time priority matching.
+ *              Single-threaded: called only from the matching engine thread.
+ *
+ * Public API:
+ *   addLimitOrder(order) — insert limit order, attempt matching, return trades
+ *   addMarketOrder(order) — execute against best available prices, return trades
+ *   cancelOrder(orderId) — remove from book, return cancelled order
  */
 public class OrderBook {
 
@@ -228,60 +516,99 @@ public class OrderBook {
     private final TreeMap&lt;Long, Deque&lt;Order&gt;&gt; bids = new TreeMap&lt;&gt;(Comparator.reverseOrder());
     // Sell orders: sorted ascending by price (lowest ask first)
     private final TreeMap&lt;Long, Deque&lt;Order&gt;&gt; asks = new TreeMap&lt;&gt;();
-
-    private final List&lt;Trade&gt; executedTrades = new ArrayList&lt;&gt;();
+    // For O(1) order lookup by orderId (for cancellation)
+    private final Map&lt;Long, Order&gt; orderIndex = new HashMap&lt;&gt;();
 
     public OrderBook(String symbol) {
         this.symbol = symbol;
     }
 
     /**
-     * Adds a limit order to the book and immediately attempts matching.
-     * Returns list of trades generated by this order.
+     * Inserts a limit order and immediately attempts to match against resting orders.
+     * Unfilled remainder is added to the book.
+     *
+     * @param incomingOrder the new limit order
+     * @return list of trades generated (may be empty if no match)
      */
     public List&lt;Trade&gt; addLimitOrder(Order incomingOrder) {
-        executedTrades.clear();
+        List&lt;Trade&gt; trades = new ArrayList&lt;&gt;();
 
         if (incomingOrder.getSide() == Side.BUY) {
-            matchBuyOrder(incomingOrder);
+            matchBuyAgainstAsks(incomingOrder, trades);
             if (incomingOrder.getRemainingQuantity() &gt; 0) {
-                addToBook(bids, incomingOrder.getPriceTicks(), incomingOrder);
+                addToBook(bids, incomingOrder);
             }
         } else {
-            matchSellOrder(incomingOrder);
+            matchSellAgainstBids(incomingOrder, trades);
             if (incomingOrder.getRemainingQuantity() &gt; 0) {
-                addToBook(asks, incomingOrder.getPriceTicks(), incomingOrder);
+                addToBook(asks, incomingOrder);
             }
         }
 
-        return List.copyOf(executedTrades);
+        return trades;
+    }
+
+    /**
+     * Executes a market order against all available resting orders.
+     * Consumes as many price levels as needed until order is filled or book exhausted.
+     */
+    public List&lt;Trade&gt; addMarketOrder(Order marketOrder) {
+        List&lt;Trade&gt; trades = new ArrayList&lt;&gt;();
+        if (marketOrder.getSide() == Side.BUY) {
+            matchBuyAgainstAsks(marketOrder, trades);
+        } else {
+            matchSellAgainstBids(marketOrder, trades);
+        }
+        // Market order never rests in book — filled or cancelled if insufficient liquidity
+        return trades;
+    }
+
+    /**
+     * Cancels an open order by removing it from its price level.
+     */
+    public Order cancelOrder(long orderId) {
+        Order order = orderIndex.remove(orderId);
+        if (order == null) {
+            return null; // already filled or cancelled
+        }
+        TreeMap&lt;Long, Deque&lt;Order&gt;&gt; book = order.getSide() == Side.BUY ? bids : asks;
+        Deque&lt;Order&gt; priceLevel = book.get(order.getPriceTicks());
+        if (priceLevel != null) {
+            priceLevel.remove(order);
+            if (priceLevel.isEmpty()) {
+                book.remove(order.getPriceTicks());
+            }
+        }
+        return order;
     }
 
     /**
      * Matches an incoming buy order against resting asks.
-     * Executes at the resting ask's price (price-improvement for the buyer).
+     * Trade executes at the resting ask's price (price improvement for buyer).
      */
-    private void matchBuyOrder(Order buyOrder) {
+    private void matchBuyAgainstAsks(Order buyOrder, List&lt;Trade&gt; trades) {
         while (buyOrder.getRemainingQuantity() &gt; 0 &amp;&amp; !asks.isEmpty()) {
             Map.Entry&lt;Long, Deque&lt;Order&gt;&gt; bestAskEntry = asks.firstEntry();
             long bestAskPrice = bestAskEntry.getKey();
 
-            if (buyOrder.getPriceTicks() &lt; bestAskPrice) {
-                break; // No match: buyer's max price below best ask
+            // Limit order: only match if buyer's max price >= best ask
+            if (buyOrder.getOrderType() == OrderType.LIMIT &amp;&amp;
+                buyOrder.getPriceTicks() &lt; bestAskPrice) {
+                break;
             }
 
-            Order restingSellOrder = bestAskEntry.getValue().peekFirst();
-            long tradeQuantity = Math.min(buyOrder.getRemainingQuantity(), restingSellOrder.getRemainingQuantity());
-            long tradePrice = restingSellOrder.getPriceTicks(); // resting order's price
+            Order restingSell = bestAskEntry.getValue().peekFirst();
+            long tradeQty = Math.min(buyOrder.getRemainingQuantity(),
+                                     restingSell.getRemainingQuantity());
 
-            executedTrades.add(new Trade(symbol, buyOrder.getOrderId(), restingSellOrder.getOrderId(),
-                                         tradePrice, tradeQuantity));
+            trades.add(buildTrade(buyOrder, restingSell, bestAskPrice, tradeQty));
 
-            buyOrder.fill(tradeQuantity);
-            restingSellOrder.fill(tradeQuantity);
+            buyOrder.fill(tradeQty);
+            restingSell.fill(tradeQty);
 
-            if (restingSellOrder.getRemainingQuantity() == 0) {
+            if (restingSell.getRemainingQuantity() == 0) {
                 bestAskEntry.getValue().pollFirst();
+                orderIndex.remove(restingSell.getOrderId());
                 if (bestAskEntry.getValue().isEmpty()) {
                     asks.pollFirstEntry();
                 }
@@ -289,27 +616,28 @@ public class OrderBook {
         }
     }
 
-    private void matchSellOrder(Order sellOrder) {
+    private void matchSellAgainstBids(Order sellOrder, List&lt;Trade&gt; trades) {
         while (sellOrder.getRemainingQuantity() &gt; 0 &amp;&amp; !bids.isEmpty()) {
             Map.Entry&lt;Long, Deque&lt;Order&gt;&gt; bestBidEntry = bids.firstEntry();
             long bestBidPrice = bestBidEntry.getKey();
 
-            if (sellOrder.getPriceTicks() &gt; bestBidPrice) {
-                break; // No match: seller's min price above best bid
+            if (sellOrder.getOrderType() == OrderType.LIMIT &amp;&amp;
+                sellOrder.getPriceTicks() &gt; bestBidPrice) {
+                break;
             }
 
-            Order restingBuyOrder = bestBidEntry.getValue().peekFirst();
-            long tradeQuantity = Math.min(sellOrder.getRemainingQuantity(), restingBuyOrder.getRemainingQuantity());
-            long tradePrice = restingBuyOrder.getPriceTicks();
+            Order restingBuy = bestBidEntry.getValue().peekFirst();
+            long tradeQty = Math.min(sellOrder.getRemainingQuantity(),
+                                     restingBuy.getRemainingQuantity());
 
-            executedTrades.add(new Trade(symbol, restingBuyOrder.getOrderId(), sellOrder.getOrderId(),
-                                         tradePrice, tradeQuantity));
+            trades.add(buildTrade(restingBuy, sellOrder, bestBidPrice, tradeQty));
 
-            sellOrder.fill(tradeQuantity);
-            restingBuyOrder.fill(tradeQuantity);
+            sellOrder.fill(tradeQty);
+            restingBuy.fill(tradeQty);
 
-            if (restingBuyOrder.getRemainingQuantity() == 0) {
+            if (restingBuy.getRemainingQuantity() == 0) {
                 bestBidEntry.getValue().pollFirst();
+                orderIndex.remove(restingBuy.getOrderId());
                 if (bestBidEntry.getValue().isEmpty()) {
                     bids.pollFirstEntry();
                 }
@@ -317,8 +645,23 @@ public class OrderBook {
         }
     }
 
-    private void addToBook(TreeMap&lt;Long, Deque&lt;Order&gt;&gt; book, long priceTicks, Order order) {
-        book.computeIfAbsent(priceTicks, priceKey -&gt; new ArrayDeque&lt;&gt;()).addLast(order);
+    private void addToBook(TreeMap&lt;Long, Deque&lt;Order&gt;&gt; book, Order order) {
+        book.computeIfAbsent(order.getPriceTicks(), price -> new ArrayDeque&lt;&gt;())
+            .addLast(order);  // FIFO within price level = time priority
+        orderIndex.put(order.getOrderId(), order);
+    }
+
+    private Trade buildTrade(Order buyOrder, Order sellOrder, long priceTicks, long qty) {
+        return new Trade(symbol, buyOrder.getOrderId(), sellOrder.getOrderId(),
+                         priceTicks, qty, System.nanoTime());
+    }
+
+    public long getBestBidTicks() {
+        return bids.isEmpty() ? 0L : bids.firstKey();
+    }
+
+    public long getBestAskTicks() {
+        return asks.isEmpty() ? Long.MAX_VALUE : asks.firstKey();
     }
 
     public int getBidLevels() { return bids.size(); }
@@ -335,15 +678,16 @@ public class OrderBook {
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="The best bid is $100.50 and the best ask is $100.00. Should these orders match?" data-options='["No — orders only match when bid equals ask exactly","Yes — best bid ($100.50) >= best ask ($100.00). A trade executes at the resting order's price. If the ask was there first, the trade executes at $100.00 (price improvement for the buyer).","No — orders only match during specific market hours","Yes — but the trade always executes at the midpoint ($100.25)"]' data-correct="1" data-explanation="Orders match when bid >= ask. The resting order (already in the book) sets the trade price — this is called 'price-time priority.' The incoming aggressive order gets price improvement: the buyer pays $100.00 instead of their limit of $100.50, saving $0.50 per share." style="display:none"></div>
-          <div data-question="Why is the matching engine single-threaded rather than parallelized?" data-options='["Single-threaded engines are limited to 1,000 orders/sec — much faster than multi-threaded","A single-threaded matching engine processes the order book with no locking overhead, achieving 500K+ orders/sec. Multi-threading requires locks on every book modification, adding latency and complexity with no benefit on a sequential, in-order workload.","Multi-threading is illegal under financial exchange regulations","Single-threaded guarantees all orders execute in alphabetical order by symbol"]' data-correct="1" data-explanation="The order book is a serial data structure — order processing must be deterministic and ordered. Multi-threading would require a global lock on the book for every order, actually slowing throughput. Single-threaded + non-blocking ring buffer (Disruptor) achieves maximum throughput with minimal latency variance." style="display:none"></div>
-          <div data-question="Why is a TreeMap<Price, Deque<Order>> better than a simple PriorityQueue<Order> for the order book?" data-options='["TreeMap is faster for insertions than PriorityQueue","PriorityQueue gives you the best price, but when multiple orders sit at the same price, it provides no time-ordering guarantee. A TreeMap + FIFO Deque gives O(log N) price navigation AND first-in-first-out ordering within each price level — this is the required price-time priority.","TreeMap uses less memory than PriorityQueue","PriorityQueue cannot store orders with the same price"]' data-correct="1" data-explanation="Price-time priority (FIFO within each price level) is the law at most exchanges. With a simple heap, two orders at $100.00 could match in any order. TreeMap keys are price levels; each value is a FIFO queue of orders at that price. This gives both best-price access and time-fairness." style="display:none"></div>
-          <div data-question="Why use UDP multicast for market data distribution to HFT (high-frequency trading) firms rather than Kafka?" data-options='["Kafka doesn't support financial data formats","UDP multicast sends one packet that is delivered simultaneously to all subscribers by the network infrastructure — no per-subscriber copy, sub-microsecond additional latency. Kafka adds 5-50ms of latency through brokers and consumer polling — unacceptable for algorithms that trade on price movements measured in microseconds.","UDP provides stronger delivery guarantees than Kafka","Market data volumes are too large for Kafka to handle"]' data-correct="1" data-explanation="For HFT, 1 millisecond of latency disadvantage costs millions annually. UDP multicast is as close to 'speed of light' as packet delivery gets — one transmission reaches all subscribers via network-layer replication. Kafka's broker-mediated delivery adds orders of magnitude more latency. HFT firms pay millions for co-location precisely to shave these microseconds." style="display:none"></div>
+          <div data-question="The best bid is $150.51 and the best ask is $150.52. A new market buy order for 100 shares arrives. At what price does the trade execute?" data-options='["$150.515 — the midpoint between bid and ask","$150.52 — the resting ask price. Market orders execute at the resting order's price. The buyer's aggressive market order takes the best ask.","$150.51 — the best bid price","No trade — market orders only execute during special auctions"]' data-correct="1" data-explanation="Market orders take the other side immediately at the best available price. The 'resting order' (the ask at $150.52 that was already in the book) sets the trade price. The aggressive market buy order provides 'price improvement' to the ask owner — they get the price they asked for. The buyer pays $150.52 rather than their limit, but gets immediate execution." style="display:none"></div>
+          <div data-question="Why is the matching engine single-threaded rather than parallelized across CPU cores?" data-options='["Single-threaded engines are limited to 1,000 orders/sec — more than fast enough","Multi-threading the order book requires locking every book access: each lock acquisition costs 50–500ns in cache invalidation and OS scheduling — easily exceeding the 100μs total latency budget. Single-threaded + ring buffer eliminates all contention, achieving 500K+ orders/sec with zero locking overhead.","Multi-threading is illegal under financial exchange regulations","Single-threaded prevents two trades from executing simultaneously which would create duplicate trade IDs"]' data-correct="1" data-explanation="Lock contention is catastrophic for latency. When Thread A locks the order book, Thread B must wait — and that wait time is non-deterministic. Lock acquisition also invalidates CPU cache lines, adding 50–200ns. A single-threaded ring buffer model achieves ~25M events/sec with predictable sub-microsecond processing latency — far better than any lock-based concurrent approach." style="display:none"></div>
+          <div data-question="Why is a TreeMap<Long, Deque<Order>> better than a simple PriorityQueue<Order> for the order book?" data-options='["TreeMap uses less memory than PriorityQueue","PriorityQueue gives the best price but no time-ordering within a price level. TreeMap keys are price levels; each value is a FIFO Deque. This gives O(log P) best-price access AND first-in-first-out fairness at each price level — the required price-time priority.","TreeMap is faster for insertions than PriorityQueue","PriorityQueue cannot store orders at the same price"]' data-correct="1" data-explanation="Price-time priority (FIFO within each price level) is mandated by most exchanges. With a heap, two orders at $150.52 could match in random order — a fairness violation. TreeMap maps price → FIFO queue. O(log P) to find the price level (P = number of distinct price levels, typically &lt;100). O(1) to dequeue the front order. This gives both best-price access and time-priority fairness." style="display:none"></div>
+          <div data-question="What is event sourcing in the context of a stock exchange, and why is it used?" data-options='["Event sourcing means persisting the order book to a relational database after every trade","Every order, cancellation, and trade is persisted as an immutable event. The order book state is not stored directly — it is rebuilt by replaying the event log. This enables: crash recovery (replay to rebuild), compliance audit trail, and deterministic time-travel (reconstruct book at any timestamp).","Event sourcing is a frontend pattern for handling user interaction events","Events are stored in Kafka topics and the order book state is maintained in Redis"]' data-correct="1" data-explanation="Event sourcing is a perfect fit for exchanges: (1) Compliance — SEC requires 7-year retention of all order activity; the event log IS the audit trail. (2) Recovery — WAL replay rebuilds exact order book state after a crash. (3) Debugging — replay events to reproduce any market condition. (4) Hot backup — stream events to standby which replays in real-time. The order book is an ephemeral in-memory view of the canonical event stream." style="display:none"></div>
+          <div data-question="A circuit breaker halts trading on AAPL when its price drops 6% in 4 minutes. A market sell order arrives during the halt. What happens?" data-options='["The order is immediately rejected with an error","The order is queued and held for the duration of the halt. After 5 minutes, the halt lifts and the order enters the normal queue. This prevents panic-selling from cascading into a flash crash — the halt gives market participants time to reassess.","Circuit breakers only affect buy orders, not sells","The order is routed to an alternative exchange"]' data-correct="1" data-explanation="Circuit breakers were introduced after the 2010 Flash Crash when the Dow Jones dropped 9% in minutes due to cascading automated sell orders. The halt pauses all trading for 5 minutes — orders queue but don't execute. When trading resumes, the order book stabilizes through normal price discovery rather than a one-sided rush." style="display:none"></div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

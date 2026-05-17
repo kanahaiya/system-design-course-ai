@@ -176,6 +176,71 @@ CREATE TABLE device_tokens (
           <span class="reshaded-step__letter">10 min</span>
         </h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 760 340" role="img" aria-label="Notification system fan-out pipeline: Event triggers Notification Service which fans out through Kafka to Push Worker for APNs/FCM, Email Worker for SendGrid, and SMS Worker for Twilio" style="width:100%;max-width:760px;display:block;margin:0 auto var(--space-4)">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker></defs>
+
+            <!-- Event source -->
+            <rect x="10" y="140" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="65" y="158" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Event Source</text>
+            <text x="65" y="172" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">like / comment / payment</text>
+
+            <!-- Notification Service (highlighted) -->
+            <rect x="168" y="135" width="130" height="50" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+            <text x="233" y="155" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Notification</text>
+            <text x="233" y="170" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Service</text>
+            <text x="233" y="183" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">dedup + persist</text>
+            <line x1="120" y1="160" x2="166" y2="160" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Kafka -->
+            <rect x="353" y="135" width="110" height="50" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" rx="8"/>
+            <text x="408" y="158" fill="#fbbf24" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Kafka</text>
+            <text x="408" y="172" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">topic per channel</text>
+            <line x1="298" y1="160" x2="351" y2="160" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Push Worker -->
+            <rect x="520" y="40" width="120" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="580" y="58" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Push Worker</text>
+            <!-- APNs/FCM -->
+            <rect x="660" y="30" width="90" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="705" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">APNs</text>
+            <text x="705" y="62" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">FCM</text>
+            <line x1="640" y1="60" x2="658" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Email Worker -->
+            <rect x="520" y="140" width="120" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="580" y="162" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Email Worker</text>
+            <!-- SendGrid -->
+            <rect x="660" y="133" width="90" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="705" y="151" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">SendGrid</text>
+            <line x1="640" y1="160" x2="658" y2="157" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- SMS Worker -->
+            <rect x="520" y="240" width="120" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="580" y="262" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">SMS Worker</text>
+            <!-- Twilio -->
+            <rect x="660" y="233" width="90" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="705" y="255" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Twilio</text>
+            <line x1="640" y1="260" x2="658" y2="258" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Kafka → Workers (fan-out arrows) -->
+            <line x1="463" y1="150" x2="518" y2="72" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="482" y="108" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">push topic</text>
+            <line x1="463" y1="160" x2="518" y2="160" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="488" y="155" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">email topic</text>
+            <line x1="463" y1="168" x2="518" y2="248" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="482" y="218" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">sms topic</text>
+
+            <!-- Retry annotation -->
+            <text x="10" y="310" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">Failed deliveries → exponential backoff retry (3 attempts) → DLQ after exhaustion</text>
+
+            <!-- Cassandra -->
+            <rect x="168" y="240" width="130" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="233" y="263" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Cassandra</text>
+            <line x1="233" y1="185" x2="233" y2="238" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="248" y="220" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">PENDING→SENT</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Notification fan-out pipeline — event triggers Notification Service → Kafka topics → parallel workers delivering to APNs/FCM (push), SendGrid (email), Twilio (SMS)</p>
+
           <h3>Triggered Notification Flow</h3>
           <ol>
             <li>Event source (social service, payment service, etc.) calls <strong>Notification API</strong></li>

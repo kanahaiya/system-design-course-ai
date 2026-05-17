@@ -217,6 +217,92 @@ GROUP BY hour, page_url;</code></pre>
       <section class="content-section" id="hld">
         <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 800 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lambda architecture versus Kappa architecture side-by-side comparison diagram">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+
+            <!-- Divider -->
+            <line x1="400" y1="10" x2="400" y2="330" stroke="#475569" stroke-width="1" stroke-dasharray="6,3"/>
+
+            <!-- LEFT: Lambda -->
+            <text x="200" y="24" fill="#818cf8" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="bold">Lambda Architecture</text>
+
+            <!-- Raw Events box -->
+            <rect x="20" y="34" width="110" height="34" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="75" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Raw Events</text>
+
+            <!-- Kafka -->
+            <rect x="160" y="34" width="80" height="34" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="200" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Kafka</text>
+
+            <line x1="130" y1="51" x2="158" y2="51" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Speed Layer -->
+            <rect x="50" y="104" width="150" height="38" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="125" y="121" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Speed Layer: Flink</text>
+            <text x="125" y="135" fill="#fbbf24" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">approx, &lt;1 min</text>
+
+            <!-- Batch Layer -->
+            <rect x="215" y="104" width="155" height="38" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="292" y="121" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Batch Layer: Spark</text>
+            <text x="292" y="135" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">accurate, 2hr delay</text>
+
+            <!-- Kafka to both layers -->
+            <line x1="200" y1="68" x2="145" y2="102" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="220" y1="68" x2="275" y2="102" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Serving Layer -->
+            <rect x="120" y="178" width="130" height="34" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="185" y="196" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Serving Layer</text>
+            <text x="185" y="208" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">merges speed + batch</text>
+
+            <line x1="125" y1="142" x2="160" y2="176" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="292" y1="142" x2="220" y2="176" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Dashboard -->
+            <rect x="145" y="240" width="90" height="30" fill="#1e293b" stroke="#4ade80" stroke-width="1.5" rx="8"/>
+            <text x="190" y="260" fill="#4ade80" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Dashboard</text>
+            <line x1="185" y1="212" x2="185" y2="238" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <text x="185" y="296" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">accurate but complex (2 layers)</text>
+
+            <!-- RIGHT: Kappa -->
+            <text x="610" y="24" fill="#818cf8" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="bold">Kappa Architecture</text>
+
+            <rect x="430" y="34" width="110" height="34" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="485" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Raw Events</text>
+
+            <rect x="560" y="34" width="80" height="34" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="600" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Kafka</text>
+
+            <line x1="540" y1="51" x2="558" y2="51" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Stream only -->
+            <rect x="520" y="104" width="180" height="46" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="610" y="122" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Stream Only: Flink</text>
+            <text x="610" y="137" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">reprocess = replay Kafka</text>
+
+            <line x1="600" y1="68" x2="600" y2="102" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Serving Layer Kappa -->
+            <rect x="535" y="178" width="130" height="34" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="600" y="200" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Serving Layer</text>
+            <line x1="610" y1="150" x2="600" y2="176" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Dashboard Kappa -->
+            <rect x="555" y="240" width="90" height="30" fill="#1e293b" stroke="#4ade80" stroke-width="1.5" rx="8"/>
+            <text x="600" y="260" fill="#4ade80" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Dashboard</text>
+            <line x1="600" y1="212" x2="600" y2="238" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <text x="610" y="296" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">simpler, good enough for most</text>
+
+            <!-- Bottom label -->
+            <text x="400" y="326" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Lambda: accurate but complex | Kappa: simpler, good enough for most</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Lambda vs Kappa architecture — Lambda adds accuracy via batch layer at the cost of operational complexity</p>
 
           <h3>Lambda Architecture vs Kappa Architecture</h3>
           <h4>Lambda Architecture (Traditional)</h4>
@@ -487,6 +573,169 @@ ORDER BY cohort_week;</code></pre>
             <li>Dashboard API reads 60 keys (MGET) → 1ms response, no ClickHouse query. Redis TTL = 25 hours (one day of minute-granularity data).</li>
             <li>For HyperLogLog (approximate distinct users): Flink calls <code>PFADD active_users:hour:2024-03-15T10 {user_id}</code>. Dashboard reads <code>PFCOUNT active_users:hour:2024-03-15T10</code> → ~10,000 distinct users with &lt;1% error in 12 bytes of memory. Exact count would require storing all user IDs.</li>
           </ul>
+
+          <h3>Interactive: Stream Windowing Visualizer</h3>
+          <p>Toggle between window types to see how the same event stream is grouped differently.</p>
+          <div id="js-windowing-widget" style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-top:8px;">
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+              <button id="js-btn-tumbling" style="padding:6px 14px;border-radius:6px;border:1.5px solid #6366f1;background:#312e81;color:#e2e8f0;font-family:Inter,sans-serif;font-size:13px;cursor:pointer;">Tumbling Window</button>
+              <button id="js-btn-sliding" style="padding:6px 14px;border-radius:6px;border:1.5px solid #475569;background:#1e293b;color:#e2e8f0;font-family:Inter,sans-serif;font-size:13px;cursor:pointer;">Sliding Window</button>
+              <button id="js-btn-session" style="padding:6px 14px;border-radius:6px;border:1.5px solid #475569;background:#1e293b;color:#e2e8f0;font-family:Inter,sans-serif;font-size:13px;cursor:pointer;">Session Window</button>
+            </div>
+            <svg id="js-windowing-svg" viewBox="0 0 680 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;border-radius:4px;"></svg>
+            <p id="js-windowing-desc" style="margin:8px 0 0;font-size:12px;color:#94a3b8;font-family:Inter,sans-serif;"></p>
+          </div>
+          <script>
+            (function () {
+              const EVENTS = [20, 60, 95, 130, 160, 230, 260, 340, 380, 430, 500, 540, 580, 640, 660];
+              const SVG_NS = 'http://www.w3.org/2000/svg';
+              const svgElement = document.getElementById('js-windowing-svg');
+              const descElement = document.getElementById('js-windowing-desc');
+              const buttonTumbling = document.getElementById('js-btn-tumbling');
+              const buttonSliding = document.getElementById('js-btn-sliding');
+              const buttonSession = document.getElementById('js-btn-session');
+
+              const WINDOW_DESCRIPTIONS = {
+                tumbling: 'Tumbling: fixed-size, non-overlapping windows. Each event belongs to exactly one window. Simple and common for hourly/daily aggregations.',
+                sliding: 'Sliding: fixed-size windows that advance by a step (here: size=200, step=100). Events can belong to multiple windows. Used for moving averages.',
+                session: 'Session: windows that group events separated by less than a gap threshold (here: gap=60). No fixed size — captures natural user sessions.'
+              };
+
+              function clearSvg() {
+                while (svgElement.firstChild) {
+                  svgElement.removeChild(svgElement.firstChild);
+                }
+              }
+
+              function createSvgElement(tag, attributes) {
+                const element = document.createElementNS(SVG_NS, tag);
+                Object.entries(attributes).forEach(function (entry) {
+                  element.setAttribute(entry[0], entry[1]);
+                });
+                return element;
+              }
+
+              function drawTimeline() {
+                svgElement.appendChild(createSvgElement('line', { x1: 10, y1: 80, x2: 670, y2: 80, stroke: '#475569', 'stroke-width': 1 }));
+                EVENTS.forEach(function (eventX) {
+                  const circle = createSvgElement('circle', { cx: eventX, cy: 80, r: 5, fill: '#6366f1' });
+                  svgElement.appendChild(circle);
+                });
+              }
+
+              function drawWindows(windowDefinitions, color) {
+                windowDefinitions.forEach(function (windowDef) {
+                  const rect = createSvgElement('rect', {
+                    x: windowDef.start,
+                    y: 50,
+                    width: windowDef.end - windowDef.start,
+                    height: 60,
+                    fill: color,
+                    'fill-opacity': 0.18,
+                    stroke: color,
+                    'stroke-width': 1.5,
+                    rx: 4
+                  });
+                  svgElement.appendChild(rect);
+                  if (windowDef.label !== undefined) {
+                    const labelText = createSvgElement('text', {
+                      x: (windowDef.start + windowDef.end) / 2,
+                      y: 44,
+                      fill: color,
+                      'font-family': 'Inter,sans-serif',
+                      'font-size': 10,
+                      'text-anchor': 'middle'
+                    });
+                    labelText.textContent = windowDef.label;
+                    svgElement.appendChild(labelText);
+                  }
+                });
+              }
+
+              function drawAxisLabels() {
+                [0, 100, 200, 300, 400, 500, 600].forEach(function (tick) {
+                  const labelText = createSvgElement('text', {
+                    x: tick + 10,
+                    y: 100,
+                    fill: '#475569',
+                    'font-family': 'Inter,sans-serif',
+                    'font-size': 9,
+                    'text-anchor': 'middle'
+                  });
+                  labelText.textContent = tick + 's';
+                  svgElement.appendChild(labelText);
+                });
+              }
+
+              function renderTumbling() {
+                clearSvg();
+                const tumblingWindows = [
+                  { start: 10, end: 210, label: 'W1' },
+                  { start: 210, end: 410, label: 'W2' },
+                  { start: 410, end: 610, label: 'W3' },
+                  { start: 610, end: 670, label: 'W4' }
+                ];
+                drawWindows(tumblingWindows, '#6366f1');
+                drawTimeline();
+                drawAxisLabels();
+                descElement.textContent = WINDOW_DESCRIPTIONS.tumbling;
+                setActiveButton(buttonTumbling);
+              }
+
+              function renderSliding() {
+                clearSvg();
+                const slidingWindows = [
+                  { start: 10, end: 210 },
+                  { start: 110, end: 310 },
+                  { start: 210, end: 410 },
+                  { start: 310, end: 510 },
+                  { start: 410, end: 610 },
+                  { start: 510, end: 670 }
+                ];
+                drawWindows(slidingWindows, '#818cf8');
+                drawTimeline();
+                drawAxisLabels();
+                descElement.textContent = WINDOW_DESCRIPTIONS.sliding;
+                setActiveButton(buttonSliding);
+              }
+
+              function renderSession() {
+                clearSvg();
+                const SESSION_GAP = 60;
+                const sessionWindows = [];
+                let sessionStart = EVENTS[0];
+                let sessionEnd = EVENTS[0];
+                for (let eventIndex = 1; eventIndex < EVENTS.length; eventIndex++) {
+                  if (EVENTS[eventIndex] - EVENTS[eventIndex - 1] > SESSION_GAP) {
+                    sessionWindows.push({ start: sessionStart - 5, end: sessionEnd + 5 });
+                    sessionStart = EVENTS[eventIndex];
+                  }
+                  sessionEnd = EVENTS[eventIndex];
+                }
+                sessionWindows.push({ start: sessionStart - 5, end: sessionEnd + 5 });
+                drawWindows(sessionWindows, '#4ade80');
+                drawTimeline();
+                drawAxisLabels();
+                descElement.textContent = WINDOW_DESCRIPTIONS.session;
+                setActiveButton(buttonSession);
+              }
+
+              function setActiveButton(activeButton) {
+                [buttonTumbling, buttonSliding, buttonSession].forEach(function (button) {
+                  button.style.background = '#1e293b';
+                  button.style.borderColor = '#475569';
+                });
+                activeButton.style.background = '#312e81';
+                activeButton.style.borderColor = '#6366f1';
+              }
+
+              buttonTumbling.addEventListener('click', renderTumbling);
+              buttonSliding.addEventListener('click', renderSliding);
+              buttonSession.addEventListener('click', renderSession);
+
+              renderTumbling();
+            })();
+          </script>
         </div>
       </section>
 

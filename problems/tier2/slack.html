@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Slack real-time chat — RESHADED walkthrough covering WebSocket scaling, Redis Pub/Sub routing, message fan-out, and offline sync for MAANG interviews.">
+  <meta name="description" content="Design Slack real-time chat — RESHADED walkthrough covering WebSocket fan-out, sticky sessions, Snowflake IDs, Redis Pub/Sub routing, presence system, and file sharing for L6 interviews.">
   <title>Design Slack / Real-time Chat — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -66,7 +66,7 @@
           <span class="tag">Real-time</span>
         </div>
         <h1 class="module-header__title">Design Slack / Real-time Chat</h1>
-        <p class="module-header__desc">The core challenge: WebSocket connections don't map 1:1 to chat servers. When user A on server 1 sends a message to user B on server 2, you need a cross-server delivery mechanism. Redis Pub/Sub is the standard answer.</p>
+        <p class="module-header__desc">The core challenge: WebSocket connections don't map 1:1 to chat servers. When user A on server 1 sends a message to user B on server 2, you need a cross-server delivery mechanism. Redis Pub/Sub is the standard answer. Slack runs 20M DAU, 5B messages/day, 500K concurrent WebSocket connections.</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Google, Slack</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
@@ -80,21 +80,25 @@
           <h3>Functional Requirements</h3>
           <ul>
             <li>Send and receive messages in real-time within channels and DMs</li>
-            <li>Support workspaces, channels (public/private), and direct messages</li>
+            <li>Support workspaces, channels (public/private), and direct messages (DM, group DM)</li>
             <li>Message history — fetch last N messages, paginate older history</li>
-            <li>Presence indicators — who is online</li>
+            <li>Presence indicators — who is online, away, or do-not-disturb</li>
             <li>File and image sharing (up to 1GB per file)</li>
-            <li>Message reactions, threads (replies)</li>
-            <li>Unread counts and notifications for offline users</li>
+            <li>Message reactions, threads (replies to messages)</li>
+            <li>Slash commands — /giphy, /remind, custom app integrations</li>
+            <li>Unread counts and push notifications for offline users</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
             <li><strong>Latency:</strong> &lt;100ms message delivery p99 within same region</li>
             <li><strong>Availability:</strong> 99.99% — messaging is business-critical</li>
-            <li><strong>Scale:</strong> 10M concurrent WebSocket connections, 1B messages/day</li>
+            <li><strong>Scale:</strong> 20M DAU, 500K concurrent WebSocket connections, 5B messages/day</li>
             <li><strong>Ordering:</strong> Messages within a channel must be ordered (no re-ordering)</li>
             <li><strong>Durability:</strong> No message loss — at-least-once delivery</li>
           </ul>
+          <div class="callout callout--tip">
+            <strong>L6 scope clarification:</strong> Ask "should we support enterprise features like SAML SSO, compliance retention, e-discovery?" This signals whether you need immutable audit logging (Kafka → S3 → Parquet) on top of the standard message flow.
+          </div>
         </div>
       </section>
 
@@ -102,11 +106,12 @@
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon" aria-hidden="true">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li>1B messages/day = ~11,600 msg/sec average; peak ~50K msg/sec</li>
-            <li>Avg message size: 200 bytes → 200B bytes/day = 200GB/day storage</li>
-            <li>10M concurrent connections at ~10KB RAM per WebSocket → 100GB RAM for connections</li>
-            <li>Each chat server can hold ~50K connections → need 200 chat servers for connections alone</li>
-            <li>5 years retention → 365TB of message storage → use Cassandra or HBase</li>
+            <li>5B messages/day = ~58,000 msg/sec average; peak ~200K msg/sec</li>
+            <li>Avg message size: 200 bytes → 1TB/day storage → Cassandra handles this at 5-year retention = ~1.8PB</li>
+            <li>500K concurrent WebSocket connections at ~10KB RAM per WebSocket = 5GB RAM just for connections</li>
+            <li>Each chat server holds ~50K connections → need ~10 chat servers minimum (100 for headroom)</li>
+            <li>Channel fan-out: large channel with 10K members posting 1 msg/sec = 10K deliveries/sec from that one channel alone</li>
+            <li>Redis Pub/Sub throughput: ~1M messages/sec per Redis node — sufficient for the cross-server routing layer</li>
           </ul>
         </div>
       </section>
@@ -114,42 +119,158 @@
       <section class="content-section" id="schema" aria-labelledby="schema-title">
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon" aria-hidden="true">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Messages table (Cassandra — wide column, write-heavy)
+          <pre><code class="language-java">// Messages (Cassandra — wide column, write-heavy, 5B/day)
 // Partition key: channel_id → all messages in a channel on same node
-// Clustering key: message_id (time-ordered ULID/Snowflake) → range queries
+// Clustering key: message_id (Snowflake BIGINT, time-ordered) DESC → newest first
 CREATE TABLE messages (
     channel_id   UUID,
-    message_id   BIGINT,  -- Snowflake ID (timestamp-based, sortable)
+    message_id   BIGINT,       -- Snowflake ID (see below for structure)
     user_id      UUID,
     content      TEXT,
-    thread_id    BIGINT,  -- null if top-level
+    thread_id    BIGINT,       -- null = top-level; set = reply in thread
+    file_keys    LIST&lt;TEXT&gt;,   -- S3 keys for attachments
+    is_deleted   BOOLEAN DEFAULT FALSE,
     created_at   TIMESTAMP,
     PRIMARY KEY (channel_id, message_id)
 ) WITH CLUSTERING ORDER BY (message_id DESC);
+-- "Last 50 messages": SELECT * WHERE channel_id=? LIMIT 50 → single partition read
 
-// Users table (PostgreSQL)
-users: user_id, username, email, status (online/away/dnd), last_seen
+// Users (PostgreSQL — relational, small)
+users: user_id, workspace_id, username, display_name, avatar_s3_key,
+       status ENUM(online, away, dnd, offline), last_seen_at
 
 // Channels (PostgreSQL)
-channels: channel_id, workspace_id, name, is_private, created_at
+channels: channel_id, workspace_id, name, is_private, creator_id, created_at
 
-// channel_members (PostgreSQL)
-channel_members: channel_id, user_id, last_read_message_id</code></pre>
+// Channel members with unread tracking (PostgreSQL)
+channel_members: channel_id, user_id, last_read_message_id, joined_at
+-- Unread count: SELECT COUNT(*) FROM messages WHERE channel_id=?
+--               AND message_id > last_read_message_id
+-- (Cassandra: efficient since message_id is the clustering key)
+
+// WebSocket connection registry (Redis — ephemeral, expires on disconnect)
+// Key: "ws:{userId}" → Value: "{serverId}:{connectionId}"
+// TTL: 5 minutes (refreshed on each message, acts as keepalive)
+
+// Presence state (Redis — TTL-based heartbeat)
+// Key: "presence:{userId}" → Value: "online"
+// TTL: 90 seconds (client heartbeat every 30s, 3× buffer for late heartbeats)</code></pre>
+
+          <h3>Snowflake ID Structure</h3>
+          <pre><code class="language-java">// 64-bit Snowflake ID: monotonically increasing, globally unique, time-sortable
+// | 41 bits timestamp (ms since epoch) | 10 bits worker ID | 12 bits sequence |
+// timestamp: 41 bits → 2^41 ms = ~69 years from epoch
+// worker ID: 10 bits → 1024 workers
+// sequence:  12 bits → 4096 IDs per ms per worker
+
+public class SnowflakeIdGenerator {
+    private static final long EPOCH = 1_700_000_000_000L; // Nov 2023 custom epoch
+    private static final int WORKER_BITS = 10;
+    private static final int SEQUENCE_BITS = 12;
+
+    private final long workerId;
+    private long lastTimestampMs = -1;
+    private long sequence = 0;
+
+    public synchronized long nextId() {
+        long currentMs = System.currentTimeMillis() - EPOCH;
+        if (currentMs == lastTimestampMs) {
+            sequence = (sequence + 1) &amp; 0xFFF; // 4096 per ms
+            if (sequence == 0) currentMs = waitForNextMs(lastTimestampMs);
+        } else {
+            sequence = 0;
+        }
+        lastTimestampMs = currentMs;
+        return (currentMs &lt;&lt; (WORKER_BITS + SEQUENCE_BITS))
+             | (workerId &lt;&lt; SEQUENCE_BITS)
+             | sequence;
+    }
+    // Guarantees: monotonic per worker, globally unique across workers,
+    // time-sortable → Cassandra clustering order gives chronological message order
+}</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon" aria-hidden="true">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+
+          <svg viewBox="0 0 750 320" role="img" aria-label="Slack message delivery: sender to WebSocket server 1, through Redis Pub/Sub, to recipient WebSocket server 2 and recipient client" style="width:100%;max-width:750px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-sl" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Row 1: sender path -->
+            <rect x="10" y="20" width="90" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="55" y="38" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Sender</text>
+            <text x="55" y="54" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Client A</text>
+
+            <rect x="140" y="20" width="120" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="200" y="38" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">WS Server 1</text>
+            <text x="200" y="54" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">holds A's connection</text>
+
+            <rect x="310" y="20" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="365" y="38" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Cassandra</text>
+            <text x="365" y="54" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">persist message</text>
+
+            <rect x="470" y="20" width="110" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="525" y="38" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Redis Pub/Sub</text>
+            <text x="525" y="54" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">channel:{channelId}</text>
+
+            <line x1="100" y1="42" x2="138" y2="42" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <line x1="260" y1="42" x2="308" y2="42" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <line x1="420" y1="42" x2="468" y2="42" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <text x="128" y="34" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">WS frame</text>
+            <text x="283" y="34" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">write first</text>
+            <text x="443" y="34" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">then publish</text>
+
+            <!-- Row 2: delivery path -->
+            <rect x="470" y="130" width="110" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="525" y="148" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">WS Server 2</text>
+            <text x="525" y="164" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">subscribed, holds B</text>
+
+            <rect x="630" y="130" width="90" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="675" y="148" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Recipient</text>
+            <text x="675" y="164" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Client B</text>
+
+            <!-- WS Server 3 (also subscribed) -->
+            <rect x="310" y="130" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="365" y="148" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">WS Server 3</text>
+            <text x="365" y="164" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">subscribed, no B</text>
+
+            <!-- Offline notification -->
+            <rect x="140" y="130" width="120" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="200" y="148" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Notification Svc</text>
+            <text x="200" y="164" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">APNs/FCM offline</text>
+
+            <!-- Vertical arrow from Redis to row 2 -->
+            <line x1="525" y1="64" x2="525" y2="128" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <line x1="525" y1="174" x2="628" y2="174" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <line x1="490" y1="80" x2="365" y2="128" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+            <line x1="490" y1="80" x2="200" y2="128" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-sl)"/>
+
+            <text x="375" y="110" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Redis broadcasts to ALL subscribed servers</text>
+            <text x="525" y="90" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">O(servers)</text>
+
+            <!-- Scale annotation -->
+            <rect x="10" y="220" width="720" height="60" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+            <text x="370" y="242" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle" font-style="italic">Scale insight: 1 publish to Redis → all subscribed WS servers receive it simultaneously (O(servers), not O(members))</text>
+            <text x="370" y="260" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle" font-style="italic">Each WS server fans out to its locally connected channel members in parallel</text>
+            <text x="370" y="276" fill="#6366f1" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Slack: 500K concurrent WS connections across ~100 servers → ~5K connections per server</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Message delivery sequence — sender → WS Server 1 → Cassandra persist → Redis Pub/Sub → all subscribed WS servers → recipients</p>
+
           <p>The critical insight: WebSocket connections are stateful and sticky. User A connects to Chat Server 1; User B connects to Chat Server 2. When A sends a message to B, server 1 doesn't have B's connection.</p>
           <ul>
-            <li><strong>Client ↔ Chat Server:</strong> WebSocket (persistent, bidirectional). Fallback: Long-polling for corporate firewalls.</li>
-            <li><strong>Chat Server:</strong> Holds active WebSocket connections. Routes messages via Redis Pub/Sub.</li>
-            <li><strong>Redis Pub/Sub:</strong> Each chat server subscribes to channels for its connected users. Delivers cross-server messages.</li>
-            <li><strong>Message Store (Cassandra):</strong> Persists all messages. Chat server writes to Cassandra before publishing to Redis.</li>
-            <li><strong>Presence Service:</strong> Users publish heartbeat every 5s to Redis. TTL-based — if no heartbeat in 10s, marked offline.</li>
-            <li><strong>Notification Service:</strong> For offline users, sends push notifications (APNs/FCM).</li>
-            <li><strong>Service Discovery (ZooKeeper):</strong> Clients look up which chat server to connect to. Consistent hashing on user_id → chat server.</li>
+            <li><strong>Client ↔ Chat Server:</strong> WebSocket (persistent, bidirectional). Fallback: Long-polling for corporate firewalls that block WS upgrades.</li>
+            <li><strong>Sticky Sessions:</strong> Load balancer routes each user to the same WS server (consistent hashing on userId). This is critical — if a reconnect goes to a different server, the old server's subscription must be cleaned up.</li>
+            <li><strong>Connection Registry (Redis):</strong> On connect, WS server writes <code>ws:{userId} → serverId</code>. Allows other services to route messages to the correct server.</li>
+            <li><strong>Redis Pub/Sub:</strong> Each channel maps to a Redis Pub/Sub channel. All WS servers with members of that channel subscribe. Message publish = O(subscribed servers), not O(members).</li>
+            <li><strong>Message Store (Cassandra):</strong> Write before publishing to Redis. If Redis publish fails, message is in Cassandra — client can fetch via REST history API.</li>
+            <li><strong>Presence Service:</strong> Heartbeat every 30s from client. Redis key <code>presence:{userId}</code> with 90s TTL. No heartbeat = key expires = user marked offline.</li>
+            <li><strong>Notification Service:</strong> If user not in connection registry (offline): send APNs/FCM push notification. Consumes Kafka events (not Redis Pub/Sub — Kafka is durable for notification audit).</li>
+            <li><strong>Service Discovery (ZooKeeper / Consul):</strong> Clients look up healthy WS servers. Consistent hashing routes to the same server on reconnect within a time window.</li>
           </ul>
         </div>
       </section>
@@ -157,35 +278,152 @@ channel_members: channel_id, user_id, last_read_message_id</code></pre>
       <section class="content-section" id="apis" aria-labelledby="api-title">
         <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon" aria-hidden="true">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// WebSocket messages (JSON frames over WS)
+          <pre><code class="language-java">// WebSocket messages (JSON frames over WS connection)
 // Client → Server
-{ "type": "send_message", "channel_id": "...", "content": "hello", "client_msg_id": "uuid" }
+{ "type": "send_message", "channel_id": "...", "content": "hello",
+  "client_msg_id": "uuid" }     // client_msg_id = idempotency key
 { "type": "typing_start", "channel_id": "..." }
+{ "type": "heartbeat" }         // every 30s — keeps presence alive
 
 // Server → Client
-{ "type": "new_message", "message_id": 123, "channel_id": "...", "user_id": "...", "content": "hello", "ts": 1700000000 }
-{ "type": "ack", "client_msg_id": "uuid", "message_id": 123 }
+{ "type": "new_message", "message_id": 7234..., "channel_id": "...",
+  "user_id": "...", "content": "hello", "ts": 1700000000000 }
+{ "type": "ack", "client_msg_id": "uuid", "message_id": 7234... }
+{ "type": "presence_update", "user_id": "...", "status": "online" }
+{ "type": "message_deleted", "message_id": 7234... }
 
-// REST APIs (history, channel management)
+// REST APIs (history fetch, channel management, file upload)
 GET  /v1/channels/{channelId}/messages?before={messageId}&limit=50
-POST /v1/channels/{channelId}/messages       // fallback for offline clients
-GET  /v1/users/{userId}/presence</code></pre>
+     // Cassandra: SELECT * WHERE channel_id=? AND message_id &lt; ? LIMIT 50
+
+POST /v1/channels/{channelId}/messages   // fallback for offline clients
+GET  /v1/users/{userId}/presence         // current presence status
+
+// File upload (pre-signed S3 URL flow)
+POST /v1/files/upload-url
+  Body: { fileName, fileSize, contentType }
+  Returns: { uploadUrl, fileKey, expiresAt }
+  // Client uploads directly to S3 using pre-signed URL
+  // On success: sends message with file_key in attachment field
+
+GET  /v1/channels/{channelId}/members    // for DM autocomplete
+POST /v1/channels/{channelId}/slash      // slash command dispatch</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon" aria-hidden="true">🔬</span>D — Deep Dive: Cross-Server Message Routing<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon" aria-hidden="true">🔬</span>D — Deep Dive: Fan-out, Presence, and File Sharing<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Problem:</strong> User A (on Chat Server 1) sends a DM to User B (connected to Chat Server 2). How does server 1 deliver to B?</p>
-          <p><strong>Solution — Redis Pub/Sub:</strong></p>
+
+          <h3>Cross-Server Delivery via Redis Pub/Sub</h3>
+          <p>User A (on WS Server 1) sends a DM to User B (connected to WS Server 2). How does Server 1 deliver to B?</p>
           <ol>
-            <li>On connect, Chat Server 2 subscribes to Redis channel <code>user:{B_id}</code></li>
-            <li>Server 1 receives message from A, persists to Cassandra, then publishes to Redis channel <code>user:{B_id}</code></li>
-            <li>Server 2 receives from Redis, pushes down B's WebSocket</li>
-            <li>For channel messages: Redis channel = <code>channel:{channel_id}</code>. All servers with members of that channel subscribe.</li>
+            <li>On connect, WS Server 2 looks up which channels User B is in. Subscribes to Redis channels: <code>channel:{channelId}</code> for each of B's channels.</li>
+            <li>Server 1 receives message from A, assigns a Snowflake message_id, persists to Cassandra (durable first), then publishes to Redis: <code>PUBLISH channel:{channelId} {messageJson}</code>.</li>
+            <li>Redis delivers to all servers subscribed to that channel, including Server 2.</li>
+            <li>Server 2 receives from Redis. Iterates its local connections for that channel. Pushes down B's WebSocket.</li>
           </ol>
-          <p><strong>Fan-out for channels:</strong> A channel with 10,000 members means 10,000 Redis publishes or a single publish to a Redis channel that all servers subscribing to that channel pick up and fan out locally. Use the latter — O(servers) not O(members).</p>
-          <p><strong>Message ordering:</strong> Use Snowflake IDs (timestamp-based monotonic). Cassandra clustering on message_id DESC gives natural ordering per channel.</p>
+
+          <h3>Channel Fan-out Strategies by Channel Type</h3>
+          <p>Slack has three channel types with different fan-out patterns:</p>
+          <pre><code class="language-java">// DM (2 users): publish to Redis channel "dm:{userId1}:{userId2}"
+// Each WS server subscribed for each of its connected users' DMs
+// Fan-out: 2 deliveries max (trivial)
+
+// Group DM (up to 9 users): publish to Redis channel "gdm:{channelId}"
+// Fan-out: up to 9 deliveries. Still simple.
+
+// Channel (unlimited members): one Redis Pub/Sub channel per channel_id
+// Critical insight: O(WS servers subscribed), NOT O(members)
+// 10,000 member channel: if 100 WS servers, publish reaches all 100 servers at once
+// Each server fans out to its locally connected members of that channel
+// Total: 100 Redis messages (to WS servers) + up to 10,000 WebSocket pushes (per-server parallel)
+
+// For very large channels (100K+ members like announcements):
+// Use tiered fan-out: Kafka → Fan-out workers → Redis Pub/Sub (same as live-comments pattern)</code></pre>
+
+          <h3>Message Ordering — Why Snowflake IDs Are Critical</h3>
+          <pre><code class="language-java">// Snowflake ID properties:
+// 1. Monotonically increasing per worker (41-bit timestamp component)
+// 2. Globally unique across workers (10-bit worker component)
+// 3. Time-sortable: comparing two Snowflake IDs = comparing timestamps first
+
+// In Cassandra: PRIMARY KEY (channel_id, message_id)
+//               CLUSTERING ORDER BY (message_id DESC)
+// "Last 50 messages" = SELECT with LIMIT 50, no sort needed — Cassandra already sorted
+
+// Why not UUID v4? UUID is random → no ordering → Cassandra must sort on read
+// Why not auto-increment? Not globally unique across DB shards, requires coordination
+
+// Client-side: client_msg_id is client's own UUID for tracking ACKs
+// Server assigns message_id (Snowflake) on receipt — this is the canonical ordering ID</code></pre>
+
+          <h3>Presence System</h3>
+          <pre><code class="language-java">// Client heartbeat (every 30 seconds):
+// WebSocket frame: { "type": "heartbeat" }
+
+// Server on heartbeat receipt:
+jedis.set("presence:" + userId, "online", SetParams.setParams().ex(90));
+// TTL = 90s = 3× heartbeat interval (tolerates 2 missed heartbeats before going offline)
+
+// Presence subscription for channel:
+// WS Server subscribes to Redis: SUBSCRIBE "presence-updates:{workspaceId}"
+// When presence key expires (Redis keyspace notification, or poll):
+//   Publish: PUBLISH presence-updates:{workspaceId} {"userId": "...", "status": "offline"}
+// All servers in workspace receive and push presence_update to their connections
+
+// Status transitions:
+// CONNECT → set presence key → publish "online" to workspace
+// HEARTBEAT → refresh TTL
+// TTL EXPIRES → keyspace notification → publish "offline"
+// CLIENT SETS DND → presence key value = "dnd" instead of "online"
+
+// Scale: 500K concurrent users × 30s heartbeat = ~16,600 Redis writes/sec for presence
+//        At &lt;1ms per write, Redis handles this on a single node easily</code></pre>
+
+          <h3>File Sharing — Pre-signed S3 URLs</h3>
+          <pre><code class="language-java">// Flow: client → API → S3 (direct upload) → message
+
+// Step 1: client requests upload URL (no file bytes sent to our API)
+POST /v1/files/upload-url
+Returns: {
+  "uploadUrl": "https://s3.amazonaws.com/slack-files/...?X-Amz-Signature=...",
+  "fileKey": "workspaces/{wsId}/files/{uuid}.jpg",
+  "expiresAt": "2024-01-01T12:10:00Z"   // 10 minute expiry
+}
+
+// Step 2: client uploads DIRECTLY to S3 (bypasses our servers entirely)
+// No bandwidth cost to our API servers for file uploads
+
+// Step 3: client sends message with attachment
+{ "type": "send_message", "channel_id": "...",
+  "content": "Look at this",
+  "attachments": [{ "fileKey": "workspaces/.../uuid.jpg", "fileName": "photo.jpg" }] }
+
+// Step 4: API validates fileKey exists in S3 before persisting message
+// Step 5: thumbnail generation (Lambda trigger on S3 put event)
+//   → sharp/ImageMagick creates 200×200 thumbnail
+//   → stored at "thumbnails/{uuid}_thumb.jpg"
+// Step 6: delivery via CDN (CloudFront URL, not direct S3)
+// CDN URL: "https://files.slack.com/workspaces/{wsId}/files/{uuid}.jpg"</code></pre>
+
+          <h3>Slash Commands Routing</h3>
+          <pre><code class="language-java">// Message starting with "/" → slash command
+// Slash commands are handled by external apps via webhooks
+
+// Flow:
+// 1. Client sends: { "type": "send_message", "content": "/remind tomorrow buy milk" }
+// 2. WS Server detects "/" prefix
+// 3. Routes to App Router Service (does NOT go through normal message fan-out)
+// 4. App Router: looks up registered slash command handler for "/remind"
+// 5. HTTP POST to the registered webhook URL (e.g., Slack's Reminder service)
+//    Body: { command: "/remind", text: "tomorrow buy milk", user_id: "...", channel_id: "..." }
+// 6. Command handler returns response JSON (up to 3s timeout)
+// 7. Response message inserted into channel as a "bot" message
+// 8. Normal fan-out to channel members
+
+// Timeout handling: if no response in 3s, send ephemeral "command timed out" to sender
+// Ephemeral messages: visible only to sender, not stored in Cassandra</code></pre>
         </div>
       </section>
 
@@ -193,9 +431,11 @@ GET  /v1/users/{userId}/presence</code></pre>
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon" aria-hidden="true">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Bottleneck:</strong> Redis Pub/Sub is in-memory and not persistent — a Redis crash loses in-flight messages. Mitigation: Redis Cluster with persistence, or replace with Kafka for durability.</li>
-            <li><strong>Celebrity problem:</strong> Large channels (10K+ members) cause fan-out storms. Limit to Redis channel approach where each server handles its own members.</li>
-            <li><strong>WebSocket server failure:</strong> Client detects via heartbeat timeout, reconnects via service discovery to a new server. Missed messages fetched via REST history API.</li>
+            <li><strong>Redis Pub/Sub durability:</strong> Redis Pub/Sub is not persistent — a message published while no subscriber is connected is lost. Mitigation: write to Cassandra before publishing to Redis. If Redis fails, client can fetch missed messages via REST history API using the last-known message_id as cursor.</li>
+            <li><strong>Large channels (100K+ members):</strong> With 100 WS servers each holding some members, a channel publish reaches all 100 servers. Each server iterates its local connections — safe. The bottleneck is Redis → 100 servers: at 1ms per delivery, all servers notified within 1ms. This doesn't scale to 1M subscriber channels — need hierarchical fan-out (like live-comments) at that scale.</li>
+            <li><strong>WS server failure:</strong> Load balancer detects unhealthy server. Sticky session routing fails → clients reconnect to a new server via service discovery. Missed messages: client stores last_received_message_id and fetches gap on reconnect via REST.</li>
+            <li><strong>Thundering herd on WS server restart:</strong> When a WS server restarts, all its 50K connections reconnect simultaneously. Stagger reconnection using exponential backoff with jitter on the client side.</li>
+            <li><strong>Message ordering guarantee:</strong> Snowflake IDs guarantee ordering within a worker. Cross-worker ordering is clock-dependent — if two workers have clock skew, messages may appear out-of-order by milliseconds. Cassandra stores by message_id but Redis Pub/Sub delivers in publish order. Client deduplicates using message_id and re-sorts if needed.</li>
           </ul>
         </div>
       </section>
@@ -203,7 +443,7 @@ GET  /v1/users/{userId}/presence</code></pre>
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon" aria-hidden="true">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a real-time chat system handling 10M concurrent connections. Key decisions: WebSocket for low-latency delivery, Redis Pub/Sub for cross-server routing (O(servers) fan-out), Cassandra for message storage partitioned by channel_id, Snowflake IDs for globally ordered messages, and a separate presence service with heartbeat TTLs.</p>
+          <p>We designed a real-time chat system handling Slack's scale: 20M DAU, 500K concurrent connections, 5B messages/day. Key decisions: WebSocket with sticky sessions for low-latency delivery; Redis Pub/Sub for O(servers) cross-server channel fan-out; Cassandra partitioned by channel_id with Snowflake ID clustering for ordered message history; heartbeat-TTL presence (90s window tolerating 2 missed heartbeats); pre-signed S3 URLs for file uploads bypassing API server bandwidth; and slash commands via external webhooks with 3s timeout.</p>
         </div>
       </section>
 
@@ -214,10 +454,36 @@ GET  /v1/users/{userId}/presence</code></pre>
             <table>
               <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
               <tbody>
-                <tr><td>Cross-server routing</td><td>Redis Pub/Sub</td><td>Kafka topics</td><td>Lower latency (&lt;1ms vs &gt;5ms); Kafka overkill for transient delivery signals</td></tr>
-                <tr><td>Message storage</td><td>Cassandra</td><td>PostgreSQL</td><td>Write-heavy (1B/day); partition by channel_id scales horizontally; no complex joins needed</td></tr>
-                <tr><td>Connection protocol</td><td>WebSocket</td><td>Long-polling</td><td>Bidirectional; lower overhead; long-polling wastes connections on idle</td></tr>
-                <tr><td>Message ID</td><td>Snowflake (timestamp-based)</td><td>UUID</td><td>Naturally ordered; enables cursor-based pagination; UUID not sortable</td></tr>
+                <tr>
+                  <td>Cross-server routing</td>
+                  <td>Redis Pub/Sub</td>
+                  <td>Kafka topics per channel</td>
+                  <td>Redis: sub-millisecond delivery, simple API, adequate for transient signals. Kafka: persistent, replayable — 5ms+ latency overhead. For 100ms message delivery SLA, Redis wins. Kafka used only for durable notification events.</td>
+                </tr>
+                <tr>
+                  <td>Message storage</td>
+                  <td>Cassandra (wide-column)</td>
+                  <td>PostgreSQL + sharding</td>
+                  <td>Cassandra: write-heavy (5B/day), horizontal scaling, partition by channel_id gives O(1) message history fetch. PostgreSQL needs careful sharding; every new channel is a new partition concern. Cassandra's eventual consistency is acceptable for chat.</td>
+                </tr>
+                <tr>
+                  <td>Connection protocol</td>
+                  <td>WebSocket (full-duplex)</td>
+                  <td>Long-polling or SSE</td>
+                  <td>WebSocket: bidirectional (messages + acks + typing indicators in both directions), lower overhead per message. SSE: server→client only, browser reconnects automatically — suitable for read-only feeds. Long-polling: wastes connections, high latency.</td>
+                </tr>
+                <tr>
+                  <td>Message ID</td>
+                  <td>Snowflake (timestamp-based BIGINT)</td>
+                  <td>UUID v4 (random)</td>
+                  <td>Snowflake: sortable → Cassandra clustering gives natural chronological order with no additional sorting. UUID: random distribution breaks time ordering. Sortable IDs enable efficient cursor-based pagination (WHERE message_id &lt; cursor LIMIT 50).</td>
+                </tr>
+                <tr>
+                  <td>File upload path</td>
+                  <td>Pre-signed S3 URLs (client → S3 direct)</td>
+                  <td>Upload through API server</td>
+                  <td>Direct S3 upload: zero bandwidth cost on API servers for potentially large files. Files up to 1GB would saturate API server connections if proxied. Pre-signed URLs expire in 10 minutes and are scoped to one specific S3 key.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -228,95 +494,203 @@ GET  /v1/users/{userId}/presence</code></pre>
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon" aria-hidden="true">☕</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * ChatRouter — cross-server message routing using Redis Pub/Sub.
- * Each chat server subscribes to channels for its connected users.
- * Publishing a message notifies all servers that have the recipient connected.
+ * @file WebSocketMessageRouter.java
+ * @description Cross-server message routing using Redis Pub/Sub.
+ *              Each WS server subscribes to channels for its connected users.
+ *              Publishing a message notifies all servers that have channel members.
+ *
+ * Public API:
+ *   registerConnection(userId, channelIds, session) — subscribe to user's channels
+ *   deregisterConnection(userId) — unsubscribe and clean up
+ *   routeMessage(message, channelId) — publish to Redis for cross-server delivery
  */
-public class ChatRouter {
+public class WebSocketMessageRouter {
 
-    private static final String USER_CHANNEL_PREFIX = "user:";
     private static final String CHANNEL_PREFIX = "channel:";
+    private static final String CONNECTION_REGISTRY_PREFIX = "ws:";
+    private static final int CONNECTION_TTL_SECONDS = 300; // 5 min, refreshed on activity
 
     private final JedisPool jedisPool;
-    // Maps userId → active WebSocket session (local connections only)
+    private final String thisServerId;
+    // userId → active WebSocket session (local connections only)
     private final Map&lt;String, WebSocketSession&gt; localConnections = new ConcurrentHashMap&lt;&gt;();
-    private final JedisSubscriber subscriber = new JedisSubscriber();
+    // channelId → set of userIds connected on this server
+    private final Map&lt;String, Set&lt;String&gt;&gt; channelLocalMembers = new ConcurrentHashMap&lt;&gt;();
 
-    public ChatRouter(JedisPool jedisPool) {
+    public WebSocketMessageRouter(JedisPool jedisPool, String thisServerId) {
+        this.jedisPool = jedisPool;
+        this.thisServerId = thisServerId;
+    }
+
+    /**
+     * Called when a user connects via WebSocket.
+     * Registers connection locally and subscribes to their channels' Redis topics.
+     *
+     * @param userId     connecting user
+     * @param channelIds all channels this user is a member of
+     * @param session    WebSocket session handle
+     */
+    public void registerConnection(String userId, List&lt;String&gt; channelIds,
+                                    WebSocketSession session) {
+        localConnections.put(userId, session);
+
+        // Register in Redis: "this user is connected to this server"
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.setex(CONNECTION_REGISTRY_PREFIX + userId,
+                        CONNECTION_TTL_SECONDS, thisServerId);
+        }
+
+        // Add user to local channel membership index
+        for (String channelId : channelIds) {
+            channelLocalMembers.computeIfAbsent(channelId, id -> ConcurrentHashMap.newKeySet())
+                               .add(userId);
+        }
+
+        // Subscribe to Redis channels for each of this user's channels
+        // (Only subscribe once per channel_id on this server — many users may share channels)
+        subscribeToChannelIfNeeded(channelIds);
+    }
+
+    /**
+     * Called on disconnect. Removes from local index and Redis registry.
+     */
+    public void deregisterConnection(String userId, List&lt;String&gt; channelIds) {
+        localConnections.remove(userId);
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.del(CONNECTION_REGISTRY_PREFIX + userId);
+        }
+
+        for (String channelId : channelIds) {
+            Set&lt;String&gt; members = channelLocalMembers.get(channelId);
+            if (members != null) {
+                members.remove(userId);
+                if (members.isEmpty()) {
+                    channelLocalMembers.remove(channelId);
+                    // Could unsubscribe from Redis channel here if no local members remain
+                }
+            }
+        }
+    }
+
+    /**
+     * Routes a message to all members of a channel.
+     * Publishes to Redis Pub/Sub — all subscribed WS servers deliver to their local members.
+     * Write to Cassandra must happen BEFORE calling this method.
+     *
+     * @param messageJson serialized message JSON
+     * @param channelId   target channel
+     */
+    public void routeMessage(String messageJson, String channelId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.publish(CHANNEL_PREFIX + channelId, messageJson);
+        }
+        // Redis deliver to all subscribed servers (including this one) asynchronously
+        // This server's subscriber callback handles local delivery
+    }
+
+    /**
+     * Delivers a Redis-received message to all locally connected channel members.
+     * Called by the Redis subscriber callback thread.
+     */
+    private void deliverToLocalChannelMembers(String channelId, String messageJson) {
+        Set&lt;String&gt; localMemberIds = channelLocalMembers.getOrDefault(
+            channelId, java.util.Collections.emptySet());
+
+        for (String memberId : localMemberIds) {
+            WebSocketSession memberSession = localConnections.get(memberId);
+            if (memberSession != null &amp;&amp; memberSession.isOpen()) {
+                sendToSession(memberSession, messageJson);
+            } else if (memberSession != null) {
+                localConnections.remove(memberId); // stale entry — session closed
+            }
+        }
+    }
+
+    private void sendToSession(WebSocketSession session, String messageJson) {
+        try {
+            session.sendMessage(new TextMessage(messageJson));
+        } catch (IOException ioException) {
+            // WebSocket send failed — session likely closed between check and send
+            // Log and let the deregister logic handle cleanup on close event
+            System.err.println("[WebSocketMessageRouter.sendToSession] Send failed: "
+                + ioException.getMessage());
+        }
+    }
+
+    private void subscribeToChannelIfNeeded(List&lt;String&gt; channelIds) {
+        // In production: maintain a single JedisPubSub subscriber per server
+        // and call subscribe() with new channels as users join
+        // This is simplified for clarity
+        Thread.ofVirtual().start(() -> {
+            try (Jedis jedis = jedisPool.getResource()) {
+                String[] redisChannels = channelIds.stream()
+                    .map(id -> CHANNEL_PREFIX + id)
+                    .toArray(String[]::new);
+
+                jedis.subscribe(new JedisPubSub() {
+                    @Override
+                    public void onMessage(String redisChannel, String message) {
+                        String channelId = redisChannel.substring(CHANNEL_PREFIX.length());
+                        deliverToLocalChannelMembers(channelId, message);
+                    }
+                }, redisChannels);
+            }
+        });
+    }
+}
+
+// ── PresenceService ───────────────────────────────────────────────
+
+/**
+ * @file PresenceService.java
+ * @description Tracks user online/offline status using Redis TTL-based heartbeats.
+ *
+ * Public API:
+ *   recordHeartbeat(userId) — refreshes TTL, user is online
+ *   setStatus(userId, status) — explicit DND/away
+ *   getPresence(userId) — current status
+ */
+public class PresenceService {
+
+    private static final String PRESENCE_KEY_PREFIX = "presence:";
+    private static final int PRESENCE_TTL_SECONDS = 90; // 3× 30s heartbeat
+
+    private final JedisPool jedisPool;
+
+    public PresenceService(JedisPool jedisPool) {
         this.jedisPool = jedisPool;
     }
 
     /**
-     * Called when a user connects to this server via WebSocket.
-     * Subscribes to their personal Redis channel to receive messages from other servers.
+     * Client sends heartbeat every 30 seconds over WebSocket.
+     * Refreshes the Redis key TTL — user remains "online".
+     * When no heartbeat arrives, TTL expires → user goes offline.
      */
-    public void registerConnection(String userId, WebSocketSession session) {
-        localConnections.put(userId, session);
-        // Subscribe in a separate thread — Jedis subscribe() blocks
-        Thread.ofVirtual().start(() -> {
-            try (Jedis jedis = jedisPool.getResource()) {
-                jedis.subscribe(subscriber, USER_CHANNEL_PREFIX + userId);
-            }
-        });
-    }
-
-    /**
-     * Called when a user disconnects. Unsubscribes from Redis.
-     */
-    public void deregisterConnection(String userId) {
-        localConnections.remove(userId);
-        subscriber.unsubscribe(USER_CHANNEL_PREFIX + userId);
-    }
-
-    /**
-     * Routes a direct message to the recipient.
-     * Publishes to Redis — the server holding the recipient's connection will deliver it.
-     */
-    public void routeDirectMessage(ChatMessage message, String recipientId) {
-        String serializedMessage = serializeMessage(message);
+    public void recordHeartbeat(String userId) {
         try (Jedis jedis = jedisPool.getResource()) {
-            jedis.publish(USER_CHANNEL_PREFIX + recipientId, serializedMessage);
+            jedis.setex(PRESENCE_KEY_PREFIX + userId, PRESENCE_TTL_SECONDS, "online");
         }
     }
 
     /**
-     * Routes a channel message. All servers subscribed to this channel's Redis topic
-     * will receive it and deliver to their locally connected channel members.
+     * User explicitly sets their status (DND, away, etc).
+     * Overrides the "online" default set by heartbeat.
      */
-    public void routeChannelMessage(ChatMessage message, String channelId) {
-        String serializedMessage = serializeMessage(message);
+    public void setStatus(String userId, String status) {
         try (Jedis jedis = jedisPool.getResource()) {
-            jedis.publish(CHANNEL_PREFIX + channelId, serializedMessage);
+            jedis.setex(PRESENCE_KEY_PREFIX + userId, PRESENCE_TTL_SECONDS, status);
         }
     }
 
     /**
-     * Delivers a message to a locally connected user's WebSocket.
-     * Called by the Redis subscriber callback when this server receives a published message.
+     * Returns the current presence status for a user.
+     * Returns "offline" if key doesn't exist (TTL expired or never connected).
      */
-    private void deliverToLocalConnection(String userId, String serializedMessage) {
-        WebSocketSession session = localConnections.get(userId);
-        if (session != null &amp;&amp; session.isOpen()) {
-            try {
-                session.sendMessage(new TextMessage(serializedMessage));
-            } catch (IOException ioException) {
-                // Session closed between check and send — remove stale entry
-                localConnections.remove(userId);
-            }
-        }
-    }
-
-    private String serializeMessage(ChatMessage message) {
-        // In production: use Jackson ObjectMapper
-        return "{\"id\":" + message.getId() + ",\"content\":\"" + message.getContent() + "\"}";
-    }
-
-    private class JedisSubscriber extends JedisPubSub {
-        @Override
-        public void onMessage(String channel, String message) {
-            // Extract userId from "user:{userId}" channel name
-            String userId = channel.substring(USER_CHANNEL_PREFIX.length());
-            deliverToLocalConnection(userId, message);
+    public String getPresence(String userId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            String status = jedis.get(PRESENCE_KEY_PREFIX + userId);
+            return status != null ? status : "offline";
         }
     }
 }</code></pre>
@@ -331,15 +705,16 @@ public class ChatRouter {
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="User A is connected to Chat Server 1. User B is connected to Chat Server 2. When A sends a DM to B, how does Server 1 deliver the message to B?" data-options='["Server 1 directly connects to Server 2 via TCP","Server 1 publishes to Redis channel user:{B_id}; Server 2 (subscribed to that channel) receives it and pushes to B's WebSocket","Server 1 writes to Cassandra; Server 2 polls Cassandra every 100ms","Server 1 broadcasts to all chat servers and they filter irrelevant messages"]' data-correct="1" data-explanation="Redis Pub/Sub enables cross-server delivery without direct server-to-server connections. Server 1 publishes, Server 2 receives via its Redis subscription and delivers locally. This is O(servers that have members) not O(total members)." style="display:none"></div>
-          <div data-question="Why is Cassandra preferred over PostgreSQL for message storage in Slack?" data-options='["Cassandra supports SQL queries which PostgreSQL does not","Cassandra partitions by channel_id so all messages in a channel co-locate on one node, supporting efficient range scans — critical for history fetch","Cassandra provides stronger ACID guarantees for messages","Cassandra replicates synchronously while PostgreSQL does not"]' data-correct="1" data-explanation="Cassandra's wide-column model partitioned by channel_id with message_id as clustering key is ideal: all channel messages are on the same node (fast range scan), write throughput scales horizontally, and no joins are needed. PostgreSQL would need sharding to handle 1B messages/day." style="display:none"></div>
-          <div data-question="How does Slack detect that a user has gone offline without them explicitly logging out?" data-options='["The WebSocket TCP connection always closes immediately when the user closes the app","The client sends a heartbeat every 5 seconds; if the server receives no heartbeat for 10 seconds, the user is marked offline via Redis TTL expiry","The OS notifies the server when the process terminates","The server checks the OS-level TCP state of each connection every second"]' data-correct="1" data-explanation="Heartbeat-based presence is the standard approach. The client sends a ping every 5s; the server sets a Redis key user:{id}:online with 10s TTL on each heartbeat. When no heartbeat arrives (app backgrounded, crash, network loss), the TTL expires and the user is marked offline." style="display:none"></div>
-          <div data-question="For a channel with 50,000 members, which fan-out approach scales better?" data-options='["Publish 50,000 individual Redis messages — one per member","Publish one message to a Redis channel; each chat server receives it once and delivers to its locally connected members of that channel","Store the message in Cassandra and have all 50,000 clients poll for updates","Use a separate WebSocket broadcast server that maintains all connections"]' data-correct="1" data-explanation="Publishing to one Redis channel is O(number of subscribed chat servers), not O(members). If you have 200 chat servers, only 200 Redis messages are sent regardless of channel size. Each server then does local delivery to its connected members — this is the efficient fan-out pattern." style="display:none"></div>
+          <div data-question="User A is connected to Chat Server 1. User B is connected to Chat Server 2. When A sends a DM to B, how does Server 1 deliver the message to B?" data-options='["Server 1 directly connects to Server 2 via TCP and forwards the message","Server 1 publishes to Redis channel user:{B_id}; Server 2 (subscribed to that channel) receives it and pushes to B's WebSocket","Server 1 writes to Cassandra; Server 2 polls Cassandra every 100ms","Server 1 broadcasts to all chat servers and they filter irrelevant messages"]' data-correct="1" data-explanation="Redis Pub/Sub enables cross-server delivery without direct server-to-server connections. Server 1 publishes to a channel, Server 2 receives via its Redis subscription and delivers locally. This is O(servers that subscribe to that channel) — not O(total connections). No server needs to know the addresses of other servers." style="display:none"></div>
+          <div data-question="Why is Cassandra preferred over PostgreSQL for message storage in Slack?" data-options='["Cassandra supports SQL queries which PostgreSQL does not","Cassandra partitions by channel_id so all messages in a channel co-locate on one node, supporting efficient range scans for message history — critical at 5B messages/day","Cassandra provides stronger ACID guarantees for messages","Cassandra replicates synchronously while PostgreSQL does not"]' data-correct="1" data-explanation="Cassandra's wide-column model partitioned by channel_id with message_id (Snowflake) as clustering key is ideal: all channel messages are on the same node (fast range scan), write throughput scales horizontally with no joins needed. 'Last 50 messages' is a single partition read with LIMIT 50. PostgreSQL would need careful sharding at 5B messages/day." style="display:none"></div>
+          <div data-question="How does Slack detect that a user has gone offline without them explicitly logging out?" data-options='["The WebSocket TCP connection always closes immediately when the user closes the app","The client sends a heartbeat every 30 seconds; if the server receives no heartbeat for 90 seconds (3 missed heartbeats), the presence Redis key expires and the user is marked offline","The OS notifies the server when the process terminates","The server checks the OS-level TCP state of each connection every second"]' data-correct="1" data-explanation="Heartbeat-TTL presence: client sends heartbeat every 30s → server does SETEX presence:{userId} 90 'online'. TTL = 3× heartbeat interval to tolerate 2 missed heartbeats (poor network, app backgrounded). When TTL expires, a Redis keyspace notification triggers publishing an 'offline' event to the workspace's presence channel." style="display:none"></div>
+          <div data-question="For a channel with 50,000 members, which fan-out approach scales better and why?" data-options='["Publish 50,000 individual Redis messages — one per member — to ensure reliable delivery","Publish one message to a Redis channel; each chat server receives it once and delivers to its locally connected members. O(servers) not O(members).","Store the message in Cassandra and have all 50,000 clients poll every 500ms","Use a separate broadcast server that maintains direct connections to all 50,000 members"]' data-correct="1" data-explanation="One Redis publish reaches all subscribed servers simultaneously. If 100 WS servers have some members of that channel, 100 Redis deliveries occur (not 50,000). Each server then delivers locally to its connected members. Total: 100 Redis + up to 50,000 WebSocket pushes, all in parallel. The alternative (50,000 individual publishes) would be O(members) on the Redis layer." style="display:none"></div>
+          <div data-question="A user uploads a 500MB video file to share in Slack. What is the correct upload architecture?" data-options='["Client sends 500MB to the API server which proxies it to S3","Client requests a pre-signed S3 URL from the API, then uploads the 500MB directly to S3. The API never sees the file bytes — only the S3 key reference sent in the message afterward.","Split the file into 1MB chunks and send each over the WebSocket connection","Store the video in Cassandra as a binary blob alongside the message"]' data-correct="1" data-explanation="Pre-signed S3 URLs bypass the API server entirely for file bytes. At 500MB, proxying through the API server would consume 500MB of bandwidth on every upload — catastrophic at scale. The API server issues a time-limited URL authorizing upload to a specific S3 key. The client uploads directly. After upload, a Lambda trigger generates thumbnails and the client sends a message referencing the S3 key." style="display:none"></div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

@@ -183,6 +183,78 @@ CREATE TABLE comment_reactions (
           <span class="reshaded-step__letter">10 min</span>
         </h2>
         <div class="content-section__body">
+
+          <svg viewBox="0 0 750 320" role="img" aria-label="Live comments architecture: user posts via WebSocket Gateway to Comment Service, which persists to Cassandra and publishes to Kafka, Fan-out Consumers push via Redis Pub/Sub to all WebSocket Gateway servers which deliver to viewer browsers" style="width:100%;max-width:750px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-lc" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+
+            <!-- Row 1: Write path -->
+            <rect x="10" y="30" width="110" height="50" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="65" y="51" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">User Browser</text>
+            <text x="65" y="68" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">(WebSocket)</text>
+
+            <rect x="165" y="30" width="130" height="50" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="230" y="51" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">WebSocket Gateway</text>
+            <text x="230" y="68" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">(Sticky Sessions)</text>
+
+            <rect x="345" y="30" width="120" height="50" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="405" y="51" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Comment Service</text>
+            <text x="405" y="68" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">rate-limit + validate</text>
+
+            <rect x="520" y="30" width="120" height="50" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="580" y="51" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Kafka</text>
+            <text x="580" y="68" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">topic: comments-{streamId}</text>
+
+            <line x1="120" y1="55" x2="163" y2="55" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+            <line x1="295" y1="55" x2="343" y2="55" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+            <line x1="465" y1="55" x2="518" y2="55" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+
+            <!-- Cassandra persist (branch down from Comment Service) -->
+            <rect x="345" y="145" width="120" height="45" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="405" y="163" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Cassandra</text>
+            <text x="405" y="179" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">persist comment</text>
+            <line x1="405" y1="80" x2="405" y2="143" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-lc)"/>
+            <text x="420" y="115" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9">async</text>
+
+            <!-- Row 2: Fan-out path -->
+            <rect x="520" y="145" width="120" height="45" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="580" y="163" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Fan-out Consumer</text>
+            <text x="580" y="179" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Group (N workers)</text>
+
+            <rect x="390" y="240" width="120" height="45" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="450" y="258" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Redis Pub/Sub</text>
+            <text x="450" y="274" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">stream-{streamId}</text>
+
+            <line x1="580" y1="80" x2="580" y2="143" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+            <line x1="580" y1="190" x2="510" y2="240" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+
+            <!-- Multiple WS Servers receiving from Redis -->
+            <rect x="60" y="240" width="90" height="40" rx="8" fill="#1e293b" stroke="#818cf8"/>
+            <text x="105" y="258" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">WS Gateway 1</text>
+            <text x="105" y="272" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">10K viewers</text>
+
+            <rect x="170" y="240" width="90" height="40" rx="8" fill="#1e293b" stroke="#818cf8"/>
+            <text x="215" y="258" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">WS Gateway 2</text>
+            <text x="215" y="272" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">10K viewers</text>
+
+            <rect x="280" y="240" width="90" height="40" rx="8" fill="#1e293b" stroke="#818cf8"/>
+            <text x="325" y="258" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">WS Gateway 3</text>
+            <text x="325" y="272" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">10K viewers</text>
+
+            <line x1="390" y1="262" x2="285" y2="262" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+            <line x1="390" y1="265" x2="262" y2="265" stroke="#6366f1" stroke-width="0"/>
+            <line x1="362" y1="268" x2="175" y2="268" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+            <line x1="350" y1="270" x2="152" y2="270" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-lc)"/>
+
+            <!-- Scale annotation box -->
+            <rect x="10" y="296" width="730" height="18" rx="4" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+            <text x="375" y="309" fill="#6366f1" font-family="Inter,sans-serif" font-size="11" text-anchor="middle" font-style="italic">1M viewers = 1M WebSocket connections, but only N Kafka consumers and M Redis Pub/Sub subscribers (N,M &lt;&lt; 1M)</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Live comments fan-out — 1 Kafka write triggers N parallel fan-out workers → M Redis publishes → M WebSocket servers each push to their local viewer connections</p>
+
           <h3>Component Overview</h3>
           <ul>
             <li><strong>WebSocket Servers</strong> — maintain persistent connections with viewers; each server holds a subset of connections (shard by stream_id or random)</li>

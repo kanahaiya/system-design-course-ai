@@ -178,6 +178,60 @@ CREATE TABLE crawled_pages (
             <div class="hld-box">URL Frontier (Cassandra)</div>
           </div>
         </div>
+        <svg viewBox="0 0 760 300" role="img" aria-label="Web crawler BFS state machine showing Frontier Queue, Fetcher, HTML Parser, URL Extractor, Bloom Filter check, and feedback loop back to frontier" style="width:100%;max-width:760px;display:block;margin:0 auto var(--space-4)">
+          <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker></defs>
+
+          <!-- Frontier Queue -->
+          <rect x="10" y="120" width="120" height="40" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+          <text x="70" y="138" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Frontier Queue</text>
+          <text x="70" y="152" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Cassandra</text>
+
+          <!-- Fetcher -->
+          <rect x="175" y="120" width="100" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="225" y="138" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Fetcher</text>
+          <text x="225" y="152" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">1000 workers</text>
+          <line x1="130" y1="140" x2="173" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- S3 (stores content) -->
+          <rect x="175" y="60" width="100" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="225" y="83" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">S3 Content</text>
+          <line x1="225" y1="120" x2="225" y2="98" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="240" y="113" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">store HTML</text>
+
+          <!-- HTML Parser -->
+          <rect x="320" y="120" width="100" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="370" y="138" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">HTML Parser</text>
+          <text x="370" y="152" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">extract links</text>
+          <line x1="275" y1="140" x2="318" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- URL Extractor / Normalizer -->
+          <rect x="465" y="120" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+          <text x="520" y="138" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Normalizer</text>
+          <text x="520" y="152" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">canonical URL</text>
+          <line x1="420" y1="140" x2="463" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- Bloom Filter -->
+          <rect x="618" y="100" width="120" height="60" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" rx="8"/>
+          <text x="678" y="123" fill="#fbbf24" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Bloom Filter</text>
+          <text x="678" y="138" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">seen before?</text>
+          <text x="678" y="152" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">probabilistic</text>
+          <line x1="575" y1="140" x2="616" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- YES (already visited) → discard -->
+          <rect x="618" y="210" width="120" height="36" fill="#3f1818" stroke="#ef4444" stroke-width="1.5" rx="8"/>
+          <text x="678" y="232" fill="#fca5a5" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Discard</text>
+          <line x1="678" y1="160" x2="678" y2="208" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="693" y="188" fill="#ef4444" font-family="Inter,sans-serif" font-size="10">seen ✓</text>
+
+          <!-- NO (new URL) → feedback loop back to Frontier -->
+          <path d="M 616 130 Q 540 240 70 162" stroke="#22c55e" stroke-width="1.5" fill="none" stroke-dasharray="5" marker-end="url(#arrow)"/>
+          <text x="310" y="255" fill="#22c55e" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">new URL → add to Bloom + enqueue to Frontier</text>
+
+          <!-- Robots.txt check label -->
+          <text x="70" y="175" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">robots.txt + crawl-delay</text>
+        </svg>
+        <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Web crawler BFS loop — Frontier Queue → Fetcher → Parser → Normalizer → Bloom Filter check → discard (seen) or enqueue (new)</p>
+
         <ol>
           <li><strong>URL Frontier</strong> maintains a priority queue in Cassandra, partitioned by domain so each domain's URLs stay together</li>
           <li><strong>Scheduler</strong> dequeues batches of URLs, checks robots.txt cache, enforces per-domain crawl-delay</li>
@@ -227,6 +281,122 @@ Response: { "domain": "example.com", "urlsCrawled": 15000,
         <p>SimHash creates a 64-bit fingerprint where similar documents have similar fingerprints (Hamming distance ≤ 3 = near-duplicate). Algorithm: tokenize text → hash each token → sum weighted hash bits → take sign of each bit dimension.</p>
         <div class="callout callout--warning">
           <strong>Why not MD5/SHA for content dedup?</strong> MD5 only catches exact duplicates. Two pages with 95% identical content (different ads, timestamps) have completely different MD5 hashes. SimHash catches near-duplicates.
+        </div>
+
+        <div class="exercise-box" style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin-top:var(--space-6)">
+          <div style="font-weight:600;margin-bottom:var(--space-3)">⚡ Try it: Bloom Filter Demonstrator</div>
+          <p style="font-size:var(--text-sm);margin-bottom:var(--space-3)">Add URLs to the filter, then check if others "might exist". Watch the bit array change. False positives are possible — that's the trade-off!</p>
+          <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-3)">
+            <label for="js-bloom-input" style="font-size:var(--text-sm)">URL to add/check:</label>
+            <input id="js-bloom-input" type="text" value="https://example.com" style="padding:var(--space-2) var(--space-3);background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);color:var(--color-text-primary);font-family:var(--font-mono);width:260px" aria-label="Enter a URL to add to the Bloom filter or check for membership">
+          </div>
+          <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4)">
+            <button id="js-bloom-add" style="padding:var(--space-2) var(--space-4);background:var(--color-primary);color:#fff;border:none;border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm)" aria-label="Add URL to Bloom filter">Add to Filter</button>
+            <button id="js-bloom-check" style="padding:var(--space-2) var(--space-4);background:var(--color-bg-elevated);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm)" aria-label="Check if URL might be in Bloom filter">Check Membership</button>
+            <button id="js-bloom-reset" style="padding:var(--space-2) var(--space-4);background:var(--color-bg-elevated);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm)" aria-label="Reset the Bloom filter">Reset</button>
+          </div>
+          <!-- Bit array visualization -->
+          <div style="margin-bottom:var(--space-3)">
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2)">Bit array (32 bits, 3 hash functions):</div>
+            <div id="js-bloom-bits" style="display:flex;gap:2px;flex-wrap:wrap"></div>
+          </div>
+          <div id="js-bloom-result" style="font-family:var(--font-mono);font-size:var(--text-sm);min-height:48px;padding:var(--space-3);background:var(--color-bg-elevated);border-radius:var(--radius-md)"></div>
+          <script>
+            (function() {
+              const BLOOM_BIT_ARRAY_SIZE = 32;
+              const BLOOM_HASH_COUNT = 3;
+              const bloomBitArray = new Array(BLOOM_BIT_ARRAY_SIZE).fill(0);
+              const addedUrls = new Set();
+
+              function bloomHashOne(inputString, seed) {
+                let hashValue = seed;
+                for (let charIndex = 0; charIndex < inputString.length; charIndex++) {
+                  hashValue = Math.imul(hashValue ^ inputString.charCodeAt(charIndex), 0x9e3779b9);
+                  hashValue = (hashValue << 13) | (hashValue >>> 19);
+                }
+                return Math.abs(hashValue) % BLOOM_BIT_ARRAY_SIZE;
+              }
+
+              function getHashPositions(inputString) {
+                return [
+                  bloomHashOne(inputString, 0x123abc),
+                  bloomHashOne(inputString, 0x456def),
+                  bloomHashOne(inputString, 0x789fed)
+                ];
+              }
+
+              function renderBitArray(highlightPositions) {
+                const bitsContainer = document.getElementById('js-bloom-bits');
+                bitsContainer.innerHTML = '';
+                bloomBitArray.forEach(function(bitValue, bitIndex) {
+                  const bitCell = document.createElement('div');
+                  const isHighlighted = highlightPositions !== null && highlightPositions.includes(bitIndex);
+                  bitCell.style.cssText = 'width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:11px;font-weight:600;border:1px solid;transition:all 0.3s ease;';
+                  if (isHighlighted) {
+                    bitCell.style.background = '#f59e0b';
+                    bitCell.style.borderColor = '#fbbf24';
+                    bitCell.style.color = '#1e293b';
+                  } else if (bitValue === 1) {
+                    bitCell.style.background = '#312e81';
+                    bitCell.style.borderColor = '#6366f1';
+                    bitCell.style.color = '#e2e8f0';
+                  } else {
+                    bitCell.style.background = '#1e293b';
+                    bitCell.style.borderColor = '#334155';
+                    bitCell.style.color = '#475569';
+                  }
+                  bitCell.textContent = bitValue;
+                  bitCell.title = 'bit ' + bitIndex;
+                  bitsContainer.appendChild(bitCell);
+                });
+              }
+
+              function addToFilter(urlValue) {
+                const positions = getHashPositions(urlValue);
+                positions.forEach(function(position) { bloomBitArray[position] = 1; });
+                addedUrls.add(urlValue);
+                renderBitArray(positions);
+                document.getElementById('js-bloom-result').innerHTML =
+                  '<span style="color:#86efac">✓ Added "' + urlValue + '" — set bits at positions [' + positions.join(', ') + ']</span>';
+              }
+
+              function checkMembership(urlValue) {
+                const positions = getHashPositions(urlValue);
+                const allBitsSet = positions.every(function(position) { return bloomBitArray[position] === 1; });
+                renderBitArray(positions);
+                const isTrueMember = addedUrls.has(urlValue);
+                if (allBitsSet && isTrueMember) {
+                  document.getElementById('js-bloom-result').innerHTML =
+                    '<span style="color:#86efac">✓ LIKELY SEEN — all bits set at [' + positions.join(', ') + '] — URL was actually added</span>';
+                } else if (allBitsSet && !isTrueMember) {
+                  document.getElementById('js-bloom-result').innerHTML =
+                    '<span style="color:#fbbf24">⚠ FALSE POSITIVE — all bits set at [' + positions.join(', ') + '] but URL was never added! This is the Bloom filter trade-off.</span>';
+                } else {
+                  document.getElementById('js-bloom-result').innerHTML =
+                    '<span style="color:#94a3b8">✗ DEFINITELY NOT SEEN — bit ' + positions.find(function(p) { return bloomBitArray[p] === 0; }) + ' is 0 → safe to crawl</span>';
+                }
+              }
+
+              document.getElementById('js-bloom-add').addEventListener('click', function() {
+                const urlValue = document.getElementById('js-bloom-input').value.trim();
+                if (urlValue !== '') addToFilter(urlValue);
+              });
+
+              document.getElementById('js-bloom-check').addEventListener('click', function() {
+                const urlValue = document.getElementById('js-bloom-input').value.trim();
+                if (urlValue !== '') checkMembership(urlValue);
+              });
+
+              document.getElementById('js-bloom-reset').addEventListener('click', function() {
+                bloomBitArray.fill(0);
+                addedUrls.clear();
+                renderBitArray(null);
+                document.getElementById('js-bloom-result').textContent = 'Filter reset.';
+              });
+
+              renderBitArray(null);
+            })();
+          </script>
         </div>
       </section>
 

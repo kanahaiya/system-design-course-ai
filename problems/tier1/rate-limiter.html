@@ -159,6 +159,80 @@
           <span class="reshaded-step__letter">10 min</span>
         </h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 720 300" role="img" aria-label="Rate limiter token bucket state diagram and sliding window counter illustration" style="width:100%;max-width:720px;display:block;margin:0 auto var(--space-4)">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker></defs>
+
+            <!-- Token Bucket section -->
+            <text x="160" y="20" fill="#818cf8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Token Bucket</text>
+
+            <!-- Bucket shape -->
+            <rect x="100" y="60" width="120" height="100" fill="#1e293b" stroke="#6366f1" stroke-width="2" rx="4"/>
+            <!-- Tokens inside bucket (circles) -->
+            <circle cx="130" cy="90" r="10" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+            <text x="130" y="95" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">T</text>
+            <circle cx="160" cy="90" r="10" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+            <text x="160" y="95" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">T</text>
+            <circle cx="190" cy="90" r="10" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+            <text x="190" y="95" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">T</text>
+            <circle cx="130" cy="120" r="10" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+            <text x="130" y="125" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">T</text>
+            <circle cx="160" cy="120" r="10" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+            <text x="160" y="125" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">T</text>
+
+            <!-- Refill arrow (top) -->
+            <line x1="160" y1="30" x2="160" y2="58" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="195" y="48" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">refill R/sec</text>
+
+            <!-- Request arrives → Check -->
+            <rect x="10" y="100" width="80" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="50" y="123" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Request</text>
+            <line x1="90" y1="118" x2="98" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- ALLOW path -->
+            <rect x="250" y="75" width="90" height="36" fill="#14532d" stroke="#22c55e" stroke-width="1.5" rx="8"/>
+            <text x="295" y="98" fill="#86efac" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">✓ ALLOW</text>
+            <line x1="220" y1="105" x2="248" y2="95" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="235" y="99" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">tokens&gt;0</text>
+
+            <!-- REJECT path -->
+            <rect x="250" y="145" width="100" height="36" fill="#7f1d1d" stroke="#ef4444" stroke-width="1.5" rx="8"/>
+            <text x="300" y="163" fill="#fca5a5" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">✗ 429</text>
+            <text x="300" y="177" fill="#fca5a5" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Too Many Requests</text>
+            <line x1="220" y1="118" x2="248" y2="155" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="235" y="145" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">tokens=0</text>
+
+            <!-- Sliding Window section -->
+            <line x1="400" y1="0" x2="400" y2="300" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
+            <text x="565" y="20" fill="#818cf8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="600">Sliding Window Counter</text>
+
+            <!-- Timeline -->
+            <line x1="420" y1="120" x2="700" y2="120" stroke="#475569" stroke-width="1.5"/>
+            <text x="420" y="140" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">t=0</text>
+            <text x="560" y="140" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">t=30s</text>
+            <text x="695" y="140" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10">t=60s</text>
+            <!-- Request dots on timeline -->
+            <circle cx="435" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="455" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="480" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="500" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="520" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="545" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="580" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="610" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="635" cy="120" r="4" fill="#6366f1"/>
+            <circle cx="660" cy="120" r="4" fill="#6366f1"/>
+
+            <!-- Sliding window rectangle -->
+            <rect x="510" y="95" width="150" height="30" fill="none" stroke="#f59e0b" stroke-width="2" rx="4"/>
+            <text x="585" y="88" fill="#f59e0b" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">window (60s)</text>
+            <text x="585" y="145" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">count requests in window</text>
+
+            <!-- Window slides label -->
+            <text x="560" y="175" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Window slides →</text>
+            <text x="560" y="190" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">old requests fall off left edge</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Token Bucket (left) — tokens refill at R/sec, requests consume tokens, empty bucket = 429; Sliding Window Counter (right) — count requests within rolling window</p>
+
           <h3>Placement: API Gateway Middleware</h3>
           <p>Rate limiter runs as middleware in the API Gateway — before the request reaches any application logic. This ensures rejected requests cost the minimum compute.</p>
 
@@ -226,6 +300,112 @@ Content-Type: application/json
 
           <h3>Race Condition: Why You Need a Lua Script</h3>
           <p>Two requests arrive simultaneously. Both read count=99 (limit=100). Both think they're the 100th request. Both write count=100. You've allowed 101 requests. Fix: use a Redis Lua script that atomically checks-and-increments in one operation — Redis is single-threaded, so Lua scripts are always atomic.</p>
+
+          <div class="exercise-box" style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin-top:var(--space-6)">
+            <div style="font-weight:600;margin-bottom:var(--space-3)">⚡ Try it: Token Bucket Simulator</div>
+            <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-4)">
+              <div>
+                <label for="js-tb-capacity" style="font-size:var(--text-sm);display:block;margin-bottom:4px">Bucket Capacity:</label>
+                <input id="js-tb-capacity" type="number" value="10" min="1" max="50" style="padding:var(--space-2) var(--space-3);background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);color:var(--color-text-primary);font-family:var(--font-mono);width:80px">
+              </div>
+              <div>
+                <label for="js-tb-refill" style="font-size:var(--text-sm);display:block;margin-bottom:4px">Refill Rate (tokens/sec):</label>
+                <input id="js-tb-refill" type="number" value="2" min="1" max="10" style="padding:var(--space-2) var(--space-3);background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);color:var(--color-text-primary);font-family:var(--font-mono);width:80px">
+              </div>
+            </div>
+            <div style="margin-bottom:var(--space-3)">
+              <div style="font-size:var(--text-sm);margin-bottom:var(--space-2)">Tokens: <span id="js-tb-count" style="font-family:var(--font-mono);color:var(--color-primary);font-weight:600">10</span></div>
+              <div id="js-tb-bar-container" style="background:var(--color-bg-elevated);border-radius:var(--radius-md);height:24px;overflow:hidden;border:1px solid var(--color-border)">
+                <div id="js-tb-bar" style="height:100%;background:linear-gradient(90deg,#6366f1,#818cf8);transition:width 0.3s ease;width:100%"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+              <button id="js-tb-consume" style="padding:var(--space-2) var(--space-4);background:var(--color-primary);color:#fff;border:none;border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm)" aria-label="Consume one token from the bucket">Consume 1 Token (Send Request)</button>
+              <button id="js-tb-burst" style="padding:var(--space-2) var(--space-4);background:#7f1d1d;color:#fca5a5;border:1px solid #ef4444;border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm)" aria-label="Send 5 requests at once to demonstrate burst">Burst: Send 5 Requests</button>
+            </div>
+            <div id="js-tb-log" style="margin-top:var(--space-3);font-family:var(--font-mono);font-size:var(--text-sm);min-height:60px;max-height:100px;overflow-y:auto;background:var(--color-bg-elevated);padding:var(--space-2);border-radius:var(--radius-md)"></div>
+            <script>
+              (function() {
+                const TOKEN_REFILL_INTERVAL_MS = 1000;
+                const capacityInput = document.getElementById('js-tb-capacity');
+                const refillInput = document.getElementById('js-tb-refill');
+                const tokenCountDisplay = document.getElementById('js-tb-count');
+                const tokenBar = document.getElementById('js-tb-bar');
+                const logContainer = document.getElementById('js-tb-log');
+                const consumeButton = document.getElementById('js-tb-consume');
+                const burstButton = document.getElementById('js-tb-burst');
+
+                let currentTokens = parseInt(capacityInput.value, 10);
+                let refillIntervalId = null;
+
+                function getCapacity() { return parseInt(capacityInput.value, 10) || 10; }
+                function getRefillRate() { return parseInt(refillInput.value, 10) || 2; }
+
+                function updateDisplay() {
+                  const capacity = getCapacity();
+                  const percentage = Math.min(100, (currentTokens / capacity) * 100);
+                  tokenCountDisplay.textContent = currentTokens;
+                  tokenBar.style.width = percentage + '%';
+                  tokenBar.style.background = currentTokens === 0
+                    ? 'linear-gradient(90deg,#7f1d1d,#ef4444)'
+                    : 'linear-gradient(90deg,#6366f1,#818cf8)';
+                }
+
+                function appendLog(message, isAllowed) {
+                  const logEntry = document.createElement('div');
+                  logEntry.style.color = isAllowed ? '#86efac' : '#fca5a5';
+                  logEntry.textContent = new Date().toLocaleTimeString() + ' — ' + message;
+                  logContainer.appendChild(logEntry);
+                  logContainer.scrollTop = logContainer.scrollHeight;
+                }
+
+                function consumeToken(requestLabel) {
+                  if (currentTokens > 0) {
+                    currentTokens--;
+                    appendLog(requestLabel + ': ✓ ALLOWED (tokens remaining: ' + currentTokens + ')', true);
+                  } else {
+                    appendLog(requestLabel + ': ✗ REJECTED 429 — bucket empty', false);
+                  }
+                  updateDisplay();
+                }
+
+                function startRefill() {
+                  if (refillIntervalId !== null) clearInterval(refillIntervalId);
+                  refillIntervalId = setInterval(function() {
+                    const capacity = getCapacity();
+                    const rate = getRefillRate();
+                    const tokensAdded = Math.min(rate, capacity - currentTokens);
+                    if (tokensAdded > 0) {
+                      currentTokens = Math.min(capacity, currentTokens + rate);
+                      updateDisplay();
+                    }
+                  }, TOKEN_REFILL_INTERVAL_MS);
+                }
+
+                consumeButton.addEventListener('click', function() {
+                  consumeToken('Request');
+                });
+
+                burstButton.addEventListener('click', function() {
+                  for (let requestIndex = 1; requestIndex <= 5; requestIndex++) {
+                    consumeToken('Burst-' + requestIndex);
+                  }
+                });
+
+                capacityInput.addEventListener('input', function() {
+                  currentTokens = Math.min(currentTokens, getCapacity());
+                  updateDisplay();
+                });
+
+                refillInput.addEventListener('input', function() {
+                  startRefill();
+                });
+
+                updateDisplay();
+                startRefill();
+              })();
+            </script>
+          </div>
         </div>
       </section>
 

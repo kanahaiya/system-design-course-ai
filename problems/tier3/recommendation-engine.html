@@ -171,6 +171,85 @@ RecommendationModel {
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 700 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Recommendation engine two-stage retrieval and ranking funnel with Two-Tower model side box">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+
+            <!-- Stage 1: Wide funnel top -->
+            <text x="280" y="22" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="bold">STAGE 1 — Retrieval (ANN)</text>
+
+            <rect x="20" y="30" width="150" height="44" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="95" y="50" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">500M Items</text>
+            <text x="95" y="65" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">in catalog</text>
+
+            <line x1="170" y1="52" x2="208" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="210" y="30" width="150" height="44" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="285" y="50" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">ANN / FAISS</text>
+            <text x="285" y="65" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">vector retrieval</text>
+
+            <line x1="360" y1="52" x2="398" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="400" y="30" width="140" height="44" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="470" y="50" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">500 Candidates</text>
+            <text x="470" y="65" fill="#4ade80" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">&lt;10ms latency</text>
+
+            <!-- Funnel shape narrowing -->
+            <polygon points="150,100 410,100 350,140 200,140" fill="#1e293b" stroke="#475569" stroke-width="1" opacity="0.5"/>
+            <text x="280" y="125" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">narrowing to 500 candidates</text>
+
+            <!-- Stage 2 -->
+            <text x="280" y="164" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="bold">STAGE 2 — Ranking (ML)</text>
+
+            <rect x="120" y="172" width="150" height="44" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="195" y="192" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">500 Candidates</text>
+            <text x="195" y="207" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">from retrieval</text>
+
+            <line x1="270" y1="194" x2="308" y2="194" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="310" y="172" width="160" height="44" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="390" y="192" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">ML Ranker</text>
+            <text x="390" y="207" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">rich features, &lt;40ms</text>
+
+            <line x1="470" y1="194" x2="508" y2="194" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="510" y="172" width="120" height="44" fill="#1e293b" stroke="#4ade80" stroke-width="1.5" rx="8"/>
+            <text x="570" y="192" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Top 20 Results</text>
+            <text x="570" y="207" fill="#4ade80" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">total &lt;50ms</text>
+
+            <!-- Latency budget bar -->
+            <text x="280" y="238" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Latency budget: retrieval &lt;10ms + ranking &lt;40ms = total &lt;50ms end-to-end</text>
+
+            <!-- Two-Tower Model side box -->
+            <rect x="20" y="258" width="640" height="108" fill="#0f172a" stroke="#475569" stroke-width="1" rx="8"/>
+            <text x="340" y="278" fill="#818cf8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="bold">Two-Tower Model (for ANN retrieval)</text>
+
+            <rect x="50" y="286" width="120" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="6"/>
+            <text x="110" y="309" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">User Tower</text>
+
+            <rect x="210" y="286" width="120" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="6"/>
+            <text x="270" y="309" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Item Tower</text>
+
+            <text x="185" y="308" fill="#6366f1" font-family="Inter,sans-serif" font-size="18" text-anchor="middle">+</text>
+
+            <line x1="330" y1="304" x2="368" y2="304" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="370" y="286" width="130" height="36" fill="#312e81" stroke="#818cf8" rx="6"/>
+            <text x="435" y="302" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">dot product</text>
+            <text x="435" y="316" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">similarity score</text>
+
+            <line x1="500" y1="304" x2="538" y2="304" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <rect x="540" y="286" width="100" height="36" fill="#1e293b" stroke="#4ade80" stroke-width="1.5" rx="6"/>
+            <text x="590" y="302" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Top-K</text>
+            <text x="590" y="316" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">ANN index</text>
+
+            <text x="340" y="356" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Towers trained jointly; at serving time only user embedding is computed online</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Two-stage recommendation funnel — ANN retrieval narrows 500M→500 candidates, ML ranker produces top 20 in &lt;50ms total</p>
           <h3>System Architecture Overview</h3>
           <pre><code class="language-java">// Two major pipelines:
 // 1. Offline training pipeline (batch, daily/weekly)

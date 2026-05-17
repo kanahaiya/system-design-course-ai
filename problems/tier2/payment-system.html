@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Payment System — RESHADED walkthrough covering idempotency keys, double-entry bookkeeping, ACID transactions, and reconciliation for MAANG interviews.">
+  <meta name="description" content="Design a Payment System like Stripe — RESHADED walkthrough covering idempotency keys, payment state machine, 3D Secure, fraud detection, reconciliation, and PCI DSS for L6 interviews.">
   <title>Design a Payment System — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -65,8 +65,8 @@
           <span class="tag">45 min</span>
           <span class="tag">Correctness-critical</span>
         </div>
-        <h1 class="module-header__title">Design a Payment System</h1>
-        <p class="module-header__desc">Payment systems have zero tolerance for money duplication or loss. The two cardinal rules: idempotency (charging a user twice is catastrophic) and double-entry bookkeeping (every debit has a corresponding credit — balances must always sum to zero).</p>
+        <h1 class="module-header__title">Design a Payment System (Stripe)</h1>
+        <p class="module-header__desc">Payment systems have zero tolerance for money duplication or loss. Two cardinal rules: idempotency (charging a user twice is catastrophic) and double-entry bookkeeping (every debit has a corresponding credit). Stripe processes $800B/year = $25,000/second. Black Friday creates 10× spikes.</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Stripe, PayPal, Amazon</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
@@ -79,20 +79,24 @@
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Transfer money between user accounts</li>
-            <li>Pay merchants (debit user account, credit merchant account)</li>
+            <li>Charge a payment method (credit/debit card, bank account)</li>
+            <li>Authorize and capture separately (authorize = reserve funds; capture = charge)</li>
             <li>View transaction history and balance</li>
             <li>Support refunds and chargebacks</li>
-            <li>Multi-currency support</li>
+            <li>Multi-currency support (USD, EUR, GBP, etc.)</li>
+            <li>Webhook delivery to merchants on payment status changes</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
             <li><strong>Correctness:</strong> No double charges, no money creation or loss — ACID transactions required</li>
             <li><strong>Idempotency:</strong> Retrying a failed payment request must not charge twice</li>
-            <li><strong>Scale:</strong> 1M transactions/day = ~12 TPS average, 100 TPS peak</li>
-            <li><strong>Latency:</strong> Payment response &lt;3s (includes bank authorization)</li>
-            <li><strong>Auditability:</strong> Every state change must be logged and traceable</li>
+            <li><strong>Scale:</strong> $25K/second ($800B/year); 10× spikes on Black Friday = ~250K TPS peaks</li>
+            <li><strong>Latency:</strong> Payment response &lt;3s (includes PSP authorization round-trip)</li>
+            <li><strong>Auditability:</strong> Every state change must be logged and traceable (PCI DSS, SOX compliance)</li>
           </ul>
+          <div class="callout callout--tip">
+            <strong>L6 signal — mention PCI DSS proactively:</strong> "We never store raw card numbers. Only the PSP token (last 4 digits + network token). PCI DSS compliance is why companies use Stripe/Braintree — they handle the cardholder data environment, not us. This reduces our PCI scope from SAQ D (hardest) to SAQ A (simplest)."
+          </div>
         </div>
       </section>
 
@@ -100,10 +104,11 @@
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li>1M transactions/day; each transaction = ~2 ledger entries (double-entry) → 2M ledger rows/day</li>
-            <li>Each ledger row ~200 bytes → 400MB/day, 150GB/year → fits in PostgreSQL easily</li>
-            <li>Idempotency keys: 1M/day with 24h TTL → 1M keys in Redis at any time → ~100MB RAM</li>
-            <li>Read:write ratio ~10:1 (users checking balances) → balance cache in Redis, recomputed from ledger on miss</li>
+            <li>Normal: 1M transactions/day = 12 TPS; Black Friday: 120 TPS peak (10× spike)</li>
+            <li>Each transaction = 2 ledger entries (debit + credit) → 2M ledger rows/day → 400MB/day → 150GB/year → PostgreSQL easily handles this</li>
+            <li>Idempotency keys: 1M/day with 24h TTL → at most 1M keys in Redis → ~100MB RAM</li>
+            <li>Reconciliation: 1M transactions × avg 200 bytes = 200MB/day to compare against PSP settlement files</li>
+            <li>Webhook delivery: 1M events/day × 3 delivery attempts avg = 3M HTTP calls/day = ~35 RPS</li>
           </ul>
         </div>
       </section>
@@ -112,30 +117,84 @@
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <pre><code class="language-java">// Double-entry ledger (PostgreSQL — ACID required)
-// Every payment creates TWO rows: debit on payer, credit on payee
+// Every payment creates TWO rows: debit (negative) on payer, credit (positive) on payee
 // SUM(amount) across all rows for an account = current balance
+// SUM(amount) across ALL rows = 0 always (invariant — detects bugs immediately)
 ledger_entries:
-    entry_id     BIGINT PRIMARY KEY,
+    entry_id     BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     account_id   UUID NOT NULL,
-    amount       DECIMAL(19,4) NOT NULL,  -- negative = debit, positive = credit
-    currency     CHAR(3) NOT NULL,
+    amount       BIGINT NOT NULL,     -- integer cents! (100 = $1.00) — NEVER FLOAT
+    currency     CHAR(3) NOT NULL,    -- ISO 4217 (USD, EUR, GBP)
     entry_type   ENUM(debit, credit),
-    payment_id   UUID NOT NULL,           -- links the two sides of a transaction
-    created_at   TIMESTAMP NOT NULL,
-    INDEX on (account_id, created_at)
+    payment_id   UUID NOT NULL,       -- links both sides of a transaction
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+    INDEX(account_id, created_at)     -- for efficient balance computation
 
-// Payments (state machine)
+// Payment state machine
 payments:
-    payment_id         UUID PRIMARY KEY,
+    payment_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     idempotency_key    VARCHAR(255) UNIQUE NOT NULL,
-    payer_account_id   UUID,
-    payee_account_id   UUID,
-    amount             DECIMAL(19,4),
-    currency           CHAR(3),
-    status             ENUM(pending, processing, completed, failed, refunded),
-    external_txn_id    VARCHAR(255),   -- bank/card network reference
-    created_at         TIMESTAMP,
-    updated_at         TIMESTAMP</code></pre>
+    payer_account_id   UUID NOT NULL,
+    payee_account_id   UUID NOT NULL,
+    amount             BIGINT NOT NULL,   -- integer cents
+    currency           CHAR(3) NOT NULL,
+    status             VARCHAR(20) NOT NULL DEFAULT 'INITIATED',
+    -- INITIATED → PROCESSING → AUTHORIZED → CAPTURED → SETTLED
+    -- Also: FAILED, REFUNDED, DISPUTED, REVERSED
+    psp_charge_id      VARCHAR(255),      -- Stripe charge ID / PSP reference
+    fraud_score        SMALLINT,          -- 0-100 from fraud ML model
+    created_at         TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMP NOT NULL DEFAULT NOW()
+
+// Outbox table (transactional outbox pattern)
+payment_outbox:
+    outbox_id    BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    payment_id   UUID NOT NULL,
+    event_type   VARCHAR(50) NOT NULL,  -- PSP_CHARGE, WEBHOOK_DELIVERY, etc.
+    payload      JSONB NOT NULL,
+    processed    BOOLEAN DEFAULT FALSE,
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+
+// Webhook subscriptions
+webhook_endpoints:
+    endpoint_id  UUID PRIMARY KEY,
+    merchant_id  UUID NOT NULL,
+    url          VARCHAR(500) NOT NULL,
+    events       VARCHAR[],             -- ['payment.succeeded', 'payment.failed']
+    secret_key   VARCHAR(255) NOT NULL  -- for HMAC signature validation</code></pre>
+
+          <h3>Money Representation — Why BIGINT, Not DECIMAL</h3>
+          <pre><code class="language-java">// Store amounts as integer smallest-currency-units:
+// USD: cents (100 = $1.00), EUR: cents (100 = €1.00)
+// JPY: yen (100 = ¥100 — no cents in JPY)
+// BHD: fils (1000 = 1 BHD — 3 decimal places)
+
+// In Java: use a MoneyAmount value object
+public record MoneyAmount(long amount, String currency) {
+
+    public static MoneyAmount ofDollars(BigDecimal dollars) {
+        // 1.99 dollars = 199 cents
+        return new MoneyAmount(
+            dollars.multiply(BigDecimal.valueOf(100))
+                   .setScale(0, RoundingMode.HALF_EVEN)
+                   .longValueExact(),
+            "USD"
+        );
+    }
+
+    public BigDecimal toDollars() {
+        return BigDecimal.valueOf(amount).movePointLeft(2);
+    }
+
+    public MoneyAmount add(MoneyAmount other) {
+        if (!this.currency.equals(other.currency)) {
+            throw new IllegalArgumentException("Cannot add different currencies");
+        }
+        return new MoneyAmount(this.amount + other.amount, this.currency);
+    }
+}
+// Integer arithmetic: no floating-point rounding errors.
+// $0.10 + $0.20 = 30 cents (not 29.999... as with double)</code></pre>
         </div>
       </section>
 
@@ -143,12 +202,14 @@ payments:
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Payment API:</strong> Client sends payment request with idempotency-key header. API checks Redis for existing result before processing.</li>
-            <li><strong>Idempotency Layer:</strong> Redis key = idempotency-key. If exists: return cached response. If not: process + store result in Redis (24h TTL) atomically.</li>
-            <li><strong>Payment Processor:</strong> Validates funds, calls external payment gateway (Stripe/bank), on success writes double-entry ledger rows in a single DB transaction.</li>
-            <li><strong>Ledger Service:</strong> Append-only. Balances computed as SUM(amount) for account. Cached in Redis, invalidated on new ledger entry.</li>
-            <li><strong>Reconciliation Job:</strong> Nightly batch job compares internal ledger with bank statements. Flags discrepancies for manual review.</li>
-            <li><strong>Audit Log (Kafka):</strong> Every payment state change emitted to Kafka topic. Consumers write to immutable audit log (S3/BigQuery).</li>
+            <li><strong>Payment API:</strong> Client sends payment request with Idempotency-Key header. API checks Redis idempotency cache before any processing.</li>
+            <li><strong>Idempotency Layer (Redis):</strong> Key = idempotency-key. If exists: return cached response (no re-processing). If not: process + cache result with 24h TTL.</li>
+            <li><strong>Fraud Detection (real-time ML):</strong> Before calling PSP, score the transaction (0–100). Block if &gt;80. Flag for review if 60–80. Accept if &lt;60. Sub-100ms latency requirement.</li>
+            <li><strong>PSP Integration (Stripe/Braintree):</strong> Handles the actual card network interaction. We never see raw card numbers — only PSP tokens. PSP charges 2.9% + 30¢ per transaction. Authorization + Capture: two separate API calls.</li>
+            <li><strong>Outbox Pattern (transactional outbox):</strong> DB write (payment record + outbox entry) in one ACID transaction. Separate outbox processor polls the table and makes PSP API calls. Guarantees at-least-once PSP call without two-phase commit.</li>
+            <li><strong>Ledger Service (double-entry):</strong> Append-only. Balances = SUM(amount) for account. Cached in Redis; invalidated on new entry.</li>
+            <li><strong>Webhook Service:</strong> Delivers payment status events to merchant-registered URLs. Retry with exponential backoff (1s, 5s, 30s, 5m, 30m, 2h, 8h, 24h — Stripe's actual schedule). Idempotent delivery via webhook_id.</li>
+            <li><strong>Reconciliation Job:</strong> Nightly batch: compare internal ledger with PSP settlement files. Flag discrepancies for manual review.</li>
           </ul>
         </div>
       </section>
@@ -157,32 +218,263 @@ payments:
         <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
           <pre><code class="language-java">// Idempotency-Key header is REQUIRED on all write operations
+// Client generates UUID on button click — same key on every retry of same intent
+
 POST /v1/payments
   Headers: Idempotency-Key: {client-generated-uuid}
-  Body: { payerAccountId, payeeAccountId, amount, currency }
-  Returns: { paymentId, status, amount, currency, createdAt }
+  Body: {
+    payerAccountId, payeeAccountId,
+    amount: 1999,          // integer cents — never float
+    currency: "USD",
+    paymentMethodId: "pm_xxx",  // PSP payment method token (not raw card)
+    description: "Order #12345"
+  }
+  Returns: {
+    paymentId, status: "PROCESSING",
+    amount: 1999, currency: "USD", createdAt
+  }
 
-GET  /v1/payments/{paymentId}         // check status
-POST /v1/payments/{paymentId}/refund  // initiate refund
-  Headers: Idempotency-Key: {client-generated-uuid}
+GET  /v1/payments/{paymentId}         // poll for status
+POST /v1/payments/{paymentId}/capture  // capture authorized payment
+  Headers: Idempotency-Key: {new-uuid}
+  Body: { amount: 1999 }              // can capture less than authorized
+
+POST /v1/payments/{paymentId}/refund
+  Headers: Idempotency-Key: {new-uuid}
+  Body: { amount: 500 }               // partial refund (in cents)
 
 GET  /v1/accounts/{accountId}/balance
+  Returns: { balance: 50000, currency: "USD" }  // 50000 cents = $500.00
 GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Idempotency Guarantees<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Idempotency, State Machine, and Fraud<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>The problem:</strong> Network failures happen. The client sends a payment request; the server processes it (charges the card) but the response is lost. The client retries. Without idempotency: the user is charged twice.</p>
-          <p><strong>Solution:</strong></p>
-          <ol>
-            <li>Client generates a UUID idempotency-key before the first attempt. Same key on every retry.</li>
-            <li>Server checks Redis: <code>GET idempotency:{key}</code>. If found: return cached response immediately (no processing).</li>
-            <li>If not found: acquire distributed lock on the key. Process payment. Store result: <code>SET idempotency:{key} {response} EX 86400</code> (24h TTL). Release lock. Return response.</li>
-            <li>Concurrent requests with the same key: lock ensures only one processes, the other waits and gets the cached result.</li>
-          </ol>
-          <p><strong>Why 24h TTL?</strong> After 24h, a retry of a 24-hour-old payment is almost certainly a bug, not a network retry. Expire the key to reclaim Redis memory.</p>
+
+          <h3>Payment State Machine</h3>
+
+          <svg viewBox="0 0 700 280" role="img" aria-label="Payment state machine: INITIATED → PROCESSING → AUTHORIZED → CAPTURED → SETTLED, with failure paths to FAILED and REFUNDED" style="width:100%;max-width:700px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-pm" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+              <marker id="arrow-pm-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#f87171"/>
+              </marker>
+              <marker id="arrow-pm-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#4ade80"/>
+              </marker>
+            </defs>
+            <!-- Happy path row -->
+            <rect x="10" y="80" width="90" height="40" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="55" y="104" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">INITIATED</text>
+
+            <rect x="140" y="80" width="90" height="40" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="185" y="104" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">PROCESSING</text>
+
+            <rect x="270" y="80" width="90" height="40" rx="8" fill="#1e293b" stroke="#818cf8"/>
+            <text x="315" y="104" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">AUTHORIZED</text>
+
+            <rect x="400" y="80" width="90" height="40" rx="8" fill="#14532d" stroke="#4ade80"/>
+            <text x="445" y="104" fill="#4ade80" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">CAPTURED</text>
+
+            <rect x="530" y="80" width="90" height="40" rx="8" fill="#14532d" stroke="#4ade80" stroke-width="2"/>
+            <text x="575" y="104" fill="#4ade80" font-family="Inter,sans-serif" font-size="12" text-anchor="middle" font-weight="700">SETTLED</text>
+
+            <!-- Happy path arrows -->
+            <line x1="100" y1="100" x2="138" y2="100" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-pm)"/>
+            <line x1="230" y1="100" x2="268" y2="100" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-pm)"/>
+            <line x1="360" y1="100" x2="398" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-pm-green)"/>
+            <line x1="490" y1="100" x2="528" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-pm-green)"/>
+
+            <text x="119" y="93" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">fraud ok</text>
+            <text x="249" y="93" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">PSP auth</text>
+            <text x="379" y="93" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">capture</text>
+            <text x="509" y="93" fill="#94a3b8" font-family="Inter,sans-serif" font-size="9" text-anchor="middle">T+1 batch</text>
+
+            <!-- Failure paths -->
+            <rect x="140" y="195" width="90" height="40" rx="8" fill="#7f1d1d" stroke="#f87171"/>
+            <text x="185" y="219" fill="#f87171" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">FAILED</text>
+
+            <rect x="400" y="195" width="90" height="40" rx="8" fill="#7f1d1d" stroke="#f87171"/>
+            <text x="445" y="219" fill="#f87171" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">REFUNDED</text>
+
+            <rect x="530" y="195" width="90" height="40" rx="8" fill="#7f1d1d" stroke="#f87171"/>
+            <text x="575" y="219" fill="#f87171" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">DISPUTED</text>
+
+            <!-- Failure arrows -->
+            <line x1="185" y1="120" x2="185" y2="193" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-pm-red)"/>
+            <text x="195" y="165" fill="#f87171" font-family="Inter,sans-serif" font-size="9">fraud &gt;80</text>
+            <line x1="315" y1="120" x2="185" y2="193" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-pm-red)"/>
+            <text x="240" y="168" fill="#f87171" font-family="Inter,sans-serif" font-size="9">PSP declined</text>
+            <line x1="445" y1="120" x2="445" y2="193" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-pm-red)"/>
+            <text x="460" y="165" fill="#f87171" font-family="Inter,sans-serif" font-size="9">user refund</text>
+            <line x1="575" y1="120" x2="575" y2="193" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-pm-red)"/>
+            <text x="592" y="165" fill="#f87171" font-family="Inter,sans-serif" font-size="9">chargeback</text>
+
+            <text x="350" y="15" fill="#94a3b8" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Green = happy path    Red dashed = failure/exception paths</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Payment state machine — states and transitions including exception paths</p>
+
+          <h3>Payment Lifecycle: Authorize vs Capture</h3>
+          <pre><code class="language-java">// Two-step payment: Authorize + Capture
+// Authorize: "reserve" funds on the card (hold, no actual charge yet)
+//   → Card network responds: authorized or declined
+//   → Funds "reserved" but customer still has them until capture
+//
+// Capture: actually move the money (can be done days later)
+//   → Only charge what you actually need (can capture less than authorized)
+//   → Hotel: authorize on check-in, capture on check-out (actual charges may differ)
+//   → E-commerce: authorize at order, capture at shipment
+//
+// One-step (authorize + capture simultaneously):
+//   → Used when amount is known and final (food delivery, immediate charges)
+
+// Stripe API flow:
+// Step 1: PaymentIntent.create(amount, currency, capture_method='manual')
+//          → returns paymentIntentId, status='requires_capture'
+// Step 2: PaymentIntent.confirm(paymentIntentId, payment_method=pm_xxx)
+//          → PSP communicates with card network
+//          → returns status='requires_capture' (authorized, not charged)
+// Step 3: PaymentIntent.capture(paymentIntentId, amount_to_capture=actual_amount)
+//          → Money moves to merchant account
+//          → status='succeeded'</code></pre>
+
+          <h3>Idempotency — The Full Protocol</h3>
+          <pre><code class="language-java">// Problem: network failure after PSP charges but before response arrives
+// Client retries. Without idempotency: user charged twice.
+
+// Full idempotency protocol:
+// 1. Client generates UUID idempotency-key before first attempt
+//    (generated ONCE per user intent, same on every retry)
+// 2. Server: GET Redis idempotency:{key}
+//    - HIT: return cached response (skip all processing)
+//    - MISS: continue to processing
+// 3. Acquire distributed lock on idempotency:{key}:lock (prevents concurrent duplicates)
+// 4. Re-check Redis (another thread may have processed while waiting for lock)
+// 5. Process payment (call PSP, write ledger, etc.)
+// 6. SETEX idempotency:{key} 86400 {serialized_response} (24h TTL)
+// 7. Release lock
+// 8. Return response
+
+// Edge case: server crashes between step 5 (PSP charge) and step 6 (Redis write)
+// On restart: client retries with same key, no Redis hit
+// → Server calls PSP AGAIN with same PSP idempotency key
+// → PSP returns original response (PSP also implements idempotency)
+// → Server caches in Redis and returns
+
+// PSP idempotency: Stripe accepts an idempotency-key header
+// If you send the same key within 24h, Stripe returns the original charge result
+// This creates end-to-end idempotency: our key → Stripe's key → card network</code></pre>
+
+          <h3>3D Secure (3DS) — Strong Customer Authentication</h3>
+          <pre><code class="language-java">// 3DS: extra authentication step for high-risk transactions
+// EU PSD2 regulation requires 3DS for most online transactions
+// Cardholder must authenticate with their bank (SMS OTP, banking app)
+
+// Frictionless flow (low-risk transactions):
+// Card issuer silently authenticates using transaction data (device fingerprint, amount)
+// No user interaction required
+// 95% of transactions in well-configured systems
+
+// Challenge flow (high-risk transactions):
+// PSP returns: status = "requires_action", redirect_url = "..."
+// Client must redirect user to bank's authentication page
+// After authentication: user redirected back to merchant site
+// Merchant confirms: PaymentIntent.confirm() → PSP verifies 3DS with card network
+
+// In our system:
+// POST /v1/payments → fraud score check → PSP authorize call
+// If PSP returns requires_action → return to client: { status: "ACTION_REQUIRED", redirectUrl }
+// Client completes 3DS → POST /v1/payments/{paymentId}/confirm-3ds
+// → PSP verifies 3DS token → capture payment
+
+// Liability shift: if 3DS authentication happens, fraud liability shifts from merchant to issuing bank
+// This is the primary business reason merchants implement 3DS</code></pre>
+
+          <h3>Fraud Detection — Real-time ML Scoring</h3>
+          <pre><code class="language-java">// Fraud ML model: runs before every PSP call
+// Must complete in &lt;100ms to stay within 3s total payment latency budget
+// Score: 0 (definitely legit) to 100 (definitely fraud)
+
+// Features used:
+// - IP geolocation: matches billing address country? (country mismatch = +20 score)
+// - Device fingerprint: new device never seen before? (+ 15 score)
+// - Transaction velocity: 5+ transactions in last 10 minutes? (+25 score)
+// - Amount anomaly: 10× user's average transaction? (+20 score)
+// - Time of day: 3am local time? (+10 score)
+// - Email domain: newly created email? (+5 score)
+// - Merchant category: crypto exchanges, gambling (+20 score baseline)
+
+// Decision thresholds (configurable per merchant):
+if (fraudScore &gt; 80) {
+    return PaymentResult.blocked("High fraud risk");  // automatic rejection
+} else if (fraudScore &gt; 60) {
+    // 3DS challenge — force strong authentication
+    return PaymentResult.requiresAction("3ds-challenge");
+} else {
+    // Proceed to PSP
+    return proceedToPaymentProvider();
+}
+
+// False positive rate: ~0.5% of legitimate transactions incorrectly blocked
+// At $25K/sec: 0.5% = $125/sec of legitimate revenue blocked → review queue for 60-80 zone</code></pre>
+
+          <h3>Webhook Reliability</h3>
+          <pre><code class="language-java">// PSP sends webhook on every payment status change
+// Must acknowledge (HTTP 200) within 30 seconds or PSP retries
+// Webhooks CAN be delivered multiple times (network issues, PSP retries)
+// → Our webhook handler MUST be idempotent
+
+// Webhook idempotency:
+// PSP includes unique webhook_id in every delivery
+// Handler: INSERT INTO processed_webhooks (webhook_id) ON CONFLICT DO NOTHING
+// If insert succeeds: process. If conflict (duplicate): skip.
+
+// Webhook verification (HMAC signature):
+// PSP sends: X-Stripe-Signature: t=timestamp,v1=hmac_sha256
+// Verify: HMAC-SHA256(webhookSecret, timestamp + "." + body) == v1
+// This prevents spoofed webhooks
+
+// Merchant webhook delivery (our outgoing webhooks):
+// We deliver payment events to merchant-registered URLs
+// Retry schedule (Stripe's actual schedule):
+// Attempt 1: immediately
+// Attempt 2: 1 minute
+// Attempt 3: 5 minutes
+// Attempt 4: 30 minutes ... up to 8 attempts over 24 hours
+// After 8 failures: mark endpoint disabled, notify merchant</code></pre>
+
+          <h3>Reconciliation</h3>
+          <pre><code class="language-java">// Nightly reconciliation: compare internal records with PSP settlement file
+// PSP provides daily settlement file (CSV/JSON): all charges, refunds, fees
+
+@Scheduled(cron = "0 2 * * *")  // 2am daily, after PSP settlement cut-off
+public void runDailyReconciliation() {
+    LocalDate yesterday = LocalDate.now().minusDays(1);
+
+    // Load internal transactions from DB
+    List&lt;PaymentRecord&gt; internalRecords = paymentRepository.findByDate(yesterday);
+
+    // Download PSP settlement file from S3 (PSP uploads automatically)
+    List&lt;PspSettlementRecord&gt; pspRecords = pspSettlementLoader.load(yesterday);
+
+    // Compare: for each internal record, find matching PSP record
+    List&lt;ReconciliationDiscrepancy&gt; discrepancies = reconcile(internalRecords, pspRecords);
+
+    // Categories of discrepancies:
+    // MISSING_IN_PSP: internal record has no PSP match → possible double-spend in our system
+    // MISSING_IN_INTERNAL: PSP has charge with no internal record → data loss or bug
+    // AMOUNT_MISMATCH: amounts differ → currency conversion error or partial capture bug
+    // STATUS_MISMATCH: internal=CAPTURED, PSP=FAILED → state machine bug
+
+    if (!discrepancies.isEmpty()) {
+        alertOncallEngineer(discrepancies);
+        saveDiscrepanciesToDB(discrepancies);
+    }
+}</code></pre>
         </div>
       </section>
 
@@ -190,8 +482,10 @@ GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Distributed transaction problem:</strong> Charging external bank + writing ledger are two different systems. Use the Outbox Pattern: write to ledger + outbox table in one DB transaction. Separate service polls outbox and calls bank API. On success, marks outbox row processed.</li>
-            <li><strong>Balance calculation cost:</strong> SUM of all ledger rows is O(N). For accounts with years of history: use periodic balance snapshots (checkpoint balance at end of each day) and SUM only since last snapshot.</li>
+            <li><strong>Distributed transaction problem:</strong> Charging PSP + writing ledger are different systems. Outbox pattern: write payment record + outbox entry in one ACID transaction. Separate outbox processor polls table and calls PSP. On success: marks outbox row processed. At-least-once delivery guaranteed without 2PC.</li>
+            <li><strong>Balance calculation cost:</strong> SUM of all ledger rows is O(N) — expensive for accounts with years of history. Mitigation: periodic balance snapshots. Store "balance as of midnight Jan 1 = X". Then SUM only since last snapshot. O(1) lookup + small incremental SUM.</li>
+            <li><strong>Black Friday 10× spike (250K TPS):</strong> PSP is the bottleneck — Stripe's rate limits. Solution: auto-scale idempotency layer (Redis cluster), queued PSP calls with back-pressure, pre-warm DB connection pools. Fraud model: use cached scores for repeat customers during peak.</li>
+            <li><strong>Currency conversion risk:</strong> FX rates change between authorization and settlement. Pre-authorize at current rate + 2% buffer. Settle at actual rate. Difference absorbed as FX risk or passed to customer (disclosed in T&amp;C).</li>
           </ul>
         </div>
       </section>
@@ -199,7 +493,7 @@ GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a payment system with zero-tolerance for money duplication. Key decisions: Redis idempotency layer prevents double-charges on retry, double-entry ledger ensures every debit has a credit (sum = 0), ACID PostgreSQL transactions for ledger writes, Outbox Pattern for safe bank API calls, and nightly reconciliation to catch any discrepancies.</p>
+          <p>We designed a payment system handling Stripe-scale: $800B/year with zero money duplication tolerance. Key decisions: Redis idempotency layer prevents double-charges on network retry; integer cents (never float) prevents rounding errors; Outbox pattern for atomic PSP + ledger writes; double-entry ledger with invariant SUM=0 catches bugs immediately; real-time fraud scoring (&lt;100ms) blocks high-risk transactions; 3DS for strong customer authentication; and nightly reconciliation catches any PSP discrepancies.</p>
         </div>
       </section>
 
@@ -210,10 +504,36 @@ GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
             <table>
               <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
               <tbody>
-                <tr><td>Idempotency storage</td><td>Redis (TTL-based)</td><td>DB unique constraint on idempotency_key</td><td>Redis: fast lookup, automatic expiry. DB unique constraint also valid but slower and requires cleanup job</td></tr>
-                <tr><td>Balance computation</td><td>SUM from ledger (with snapshots)</td><td>Mutable balance column</td><td>Mutable balance has update contention under concurrent transactions; ledger is append-only and auditable</td></tr>
-                <tr><td>Bank API integration</td><td>Outbox Pattern</td><td>Synchronous 2PC</td><td>2PC with external systems is unreliable; Outbox guarantees at-least-once delivery with DB-level atomicity</td></tr>
-                <tr><td>Currency storage</td><td>DECIMAL(19,4) not FLOAT</td><td>FLOAT or DOUBLE</td><td>Floating point has rounding errors — catastrophic for money. DECIMAL stores exact values.</td></tr>
+                <tr>
+                  <td>Idempotency storage</td>
+                  <td>Redis (TTL-based)</td>
+                  <td>DB UNIQUE constraint on idempotency_key</td>
+                  <td>Redis: fast O(1) lookup, automatic expiry via TTL, no cleanup job needed. DB unique constraint: also valid, slower (DB roundtrip on every payment), requires explicit cleanup of old keys. Use DB as fallback if Redis is down.</td>
+                </tr>
+                <tr>
+                  <td>PSP call integration</td>
+                  <td>Outbox pattern (async)</td>
+                  <td>Synchronous 2PC</td>
+                  <td>2PC with external systems (PSP) is unreliable — PSP doesn't support 2PC. Outbox stores intent atomically in our DB, separate processor executes it. At-least-once PSP call with idempotency handles duplicates. Simpler, more resilient.</td>
+                </tr>
+                <tr>
+                  <td>Money representation</td>
+                  <td>BIGINT (integer cents)</td>
+                  <td>DECIMAL(19,4) or FLOAT</td>
+                  <td>Integer: exact arithmetic, no rounding errors, language-agnostic. DECIMAL: exact but slower arithmetic, more complex. FLOAT: binary representation causes errors ($0.10 + $0.20 ≠ $0.30 exactly). Never use FLOAT for money.</td>
+                </tr>
+                <tr>
+                  <td>Balance computation</td>
+                  <td>SUM from append-only ledger (with snapshots)</td>
+                  <td>Mutable balance column</td>
+                  <td>Mutable balance: update contention under concurrent transactions, requires locking, harder to audit. Ledger: append-only (no contention on writes), full audit trail, correctness invariant (SUM=0 across all entries). Snapshots keep query cost O(1) for recent balance.</td>
+                </tr>
+                <tr>
+                  <td>PSP integration</td>
+                  <td>Stripe/Braintree (PSP handles PCI scope)</td>
+                  <td>Direct card network integration</td>
+                  <td>Direct network: cheapest per-transaction cost (no PSP fee), but requires full PCI DSS Level 1 compliance (~$500K/year audit cost), dedicated security team. PSP: 2.9% + 30¢ fee, but PCI scope reduced to SAQ A — worth it until $1B+ volume.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -224,95 +544,117 @@ GET  /v1/accounts/{accountId}/transactions?cursor={}&limit=50</code></pre>
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * IdempotentPaymentService — processes payments with Redis-based idempotency.
- * Guarantees: a payment with a given idempotency-key is executed at most once,
- * even under concurrent retries.
+ * @file IdempotentPaymentService.java
+ * @description Processes payments with Redis-based idempotency.
+ *              Guarantees a payment with a given idempotency-key executes at most once.
+ *
+ * Public API:
+ *   processPayment(idempotencyKey, request) — idempotent payment execution
  */
 public class IdempotentPaymentService {
 
-    private static final String IDEMPOTENCY_KEY_PREFIX = "idempotency:";
-    private static final int IDEMPOTENCY_TTL_SECONDS = 86400; // 24 hours
+    private static final String IDEMPOTENCY_KEY_PREFIX = "idempotency:payment:";
+    private static final String LOCK_KEY_PREFIX = "lock:payment:";
+    private static final int IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 hours
+    private static final int LOCK_TIMEOUT_SECONDS = 30;
 
     private final JedisPool jedisPool;
     private final PaymentProcessor paymentProcessor;
+    private final FraudDetectionService fraudDetectionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public IdempotentPaymentService(JedisPool jedisPool, PaymentProcessor paymentProcessor) {
+    public IdempotentPaymentService(JedisPool jedisPool, PaymentProcessor paymentProcessor,
+                                     FraudDetectionService fraudDetectionService) {
         this.jedisPool = jedisPool;
         this.paymentProcessor = paymentProcessor;
+        this.fraudDetectionService = fraudDetectionService;
     }
 
     /**
      * Processes a payment idempotently.
-     * If this idempotency key was used before, returns the original result.
-     * Otherwise processes the payment and caches the result.
+     * Same idempotency-key on retry returns original result without re-processing.
      *
-     * @param idempotencyKey  client-generated UUID; must be the same on retries
-     * @param paymentRequest  payment details
-     * @return PaymentResult — same object on retries
+     * @param idempotencyKey  client-generated UUID, same on all retries for same intent
+     * @param paymentRequest  amount (in cents), currency, paymentMethodId, etc.
+     * @return PaymentResult — same object on retries as on original call
      */
     public PaymentResult processPayment(String idempotencyKey, PaymentRequest paymentRequest) {
-        String redisKey = IDEMPOTENCY_KEY_PREFIX + idempotencyKey;
+        String cacheKey = IDEMPOTENCY_KEY_PREFIX + idempotencyKey;
 
-        // Check for cached result (fast path — no lock needed for read)
-        String cachedResult = getFromRedis(redisKey);
+        // Fast path: check cache without acquiring lock
+        PaymentResult cachedResult = getFromCache(cacheKey);
         if (cachedResult != null) {
-            return deserializePaymentResult(cachedResult);
+            return cachedResult;
         }
 
-        // Acquire distributed lock to prevent concurrent duplicate processing
-        String lockKey = "lock:" + redisKey;
-        boolean lockAcquired = tryAcquireLock(lockKey, 30); // 30s timeout
-        if (!lockAcquired) {
-            throw new PaymentConflictException("Concurrent payment with same idempotency key");
+        // Slow path: acquire lock to prevent concurrent duplicate processing
+        String lockKey = LOCK_KEY_PREFIX + idempotencyKey;
+        if (!acquireDistributedLock(lockKey, LOCK_TIMEOUT_SECONDS)) {
+            throw new PaymentConflictException("Concurrent payment with same idempotency key: " + idempotencyKey);
         }
 
         try {
-            // Re-check after acquiring lock (another thread may have processed while we waited)
-            cachedResult = getFromRedis(redisKey);
+            // Re-check after acquiring lock (another thread may have processed during our wait)
+            cachedResult = getFromCache(cacheKey);
             if (cachedResult != null) {
-                return deserializePaymentResult(cachedResult);
+                return cachedResult;
             }
 
-            // Process the payment — this calls external bank API and writes the ledger
+            // Fraud check before calling PSP
+            int fraudScore = fraudDetectionService.score(paymentRequest);
+            if (fraudScore &gt; 80) {
+                PaymentResult blockedResult = PaymentResult.blocked(fraudScore);
+                storeInCache(cacheKey, blockedResult);
+                return blockedResult;
+            }
+
+            // Process payment through PSP
             PaymentResult paymentResult = paymentProcessor.execute(paymentRequest);
 
-            // Cache the result so retries return immediately
-            storeInRedis(redisKey, serializePaymentResult(paymentResult), IDEMPOTENCY_TTL_SECONDS);
-
+            // Cache result for idempotency (includes PSP reference, final status)
+            storeInCache(cacheKey, paymentResult);
             return paymentResult;
+
         } finally {
-            releaseLock(lockKey);
+            releaseDistributedLock(lockKey);
         }
     }
 
-    private String getFromRedis(String key) {
+    // ── Cache Operations ──────────────────────────────────────────
+
+    private PaymentResult getFromCache(String cacheKey) {
         try (Jedis jedis = jedisPool.getResource()) {
-            return jedis.get(key);
+            String cachedJson = jedis.get(cacheKey);
+            return cachedJson != null ? deserialize(cachedJson) : null;
         }
     }
 
-    private void storeInRedis(String key, String value, int ttlSeconds) {
+    private void storeInCache(String cacheKey, PaymentResult result) {
         try (Jedis jedis = jedisPool.getResource()) {
-            jedis.setex(key, ttlSeconds, value);
+            jedis.setex(cacheKey, IDEMPOTENCY_TTL_SECONDS, serialize(result));
         }
     }
 
-    private boolean tryAcquireLock(String lockKey, int timeoutSeconds) {
+    // ── Distributed Lock (Redis SET NX EX) ───────────────────────
+
+    private boolean acquireDistributedLock(String lockKey, int timeoutSeconds) {
         try (Jedis jedis = jedisPool.getResource()) {
-            // SET NX EX is atomic — prevents race condition between check and set
-            String result = jedis.set(lockKey, "1", SetParams.setParams().nx().ex(timeoutSeconds));
+            // SET NX EX is atomic: set only if not exists, with TTL
+            String result = jedis.set(lockKey, "1",
+                SetParams.setParams().nx().ex(timeoutSeconds));
             return "OK".equals(result);
         }
     }
 
-    private void releaseLock(String lockKey) {
+    private void releaseDistributedLock(String lockKey) {
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.del(lockKey);
         }
     }
 
-    private String serializePaymentResult(PaymentResult result) {
+    // ── Serialization ─────────────────────────────────────────────
+
+    private String serialize(PaymentResult result) {
         try {
             return objectMapper.writeValueAsString(result);
         } catch (JsonProcessingException jsonException) {
@@ -320,11 +662,56 @@ public class IdempotentPaymentService {
         }
     }
 
-    private PaymentResult deserializePaymentResult(String json) {
+    private PaymentResult deserialize(String json) {
         try {
             return objectMapper.readValue(json, PaymentResult.class);
         } catch (JsonProcessingException jsonException) {
             throw new RuntimeException("[IdempotentPaymentService.deserialize] failed", jsonException);
+        }
+    }
+}
+
+// ── ReconciliationService ─────────────────────────────────────────
+
+/**
+ * @file ReconciliationService.java
+ * @description Nightly batch job comparing internal ledger against PSP settlement file.
+ *
+ * Public API:
+ *   runDailyReconciliation(date) — compares and flags discrepancies
+ */
+public class ReconciliationService {
+
+    private final PaymentRepository paymentRepository;
+    private final PspSettlementLoader pspSettlementLoader;
+    private final AlertService alertService;
+
+    @Scheduled(cron = "0 0 2 * * *") // 2am daily
+    public void runDailyReconciliation() {
+        LocalDate yesterday = LocalDate.now().minusDays(1);
+
+        List&lt;PaymentRecord&gt; internalRecords = paymentRepository.findByDate(yesterday);
+        List&lt;PspSettlementRecord&gt; pspRecords = pspSettlementLoader.loadFor(yesterday);
+
+        Map&lt;String, PspSettlementRecord&gt; pspByChargeId = pspRecords.stream()
+            .collect(Collectors.toMap(PspSettlementRecord::getChargeId, r -> r));
+
+        List&lt;ReconciliationDiscrepancy&gt; discrepancies = new ArrayList&lt;&gt;();
+
+        for (PaymentRecord internal : internalRecords) {
+            PspSettlementRecord pspRecord = pspByChargeId.get(internal.getPspChargeId());
+
+            if (pspRecord == null) {
+                discrepancies.add(ReconciliationDiscrepancy.missingInPsp(internal));
+            } else if (!internal.getAmountCents().equals(pspRecord.getAmountCents())) {
+                discrepancies.add(ReconciliationDiscrepancy.amountMismatch(internal, pspRecord));
+            } else if (!internal.getStatus().equals(pspRecord.getStatus())) {
+                discrepancies.add(ReconciliationDiscrepancy.statusMismatch(internal, pspRecord));
+            }
+        }
+
+        if (!discrepancies.isEmpty()) {
+            alertService.sendReconciliationAlert(yesterday, discrepancies);
         }
     }
 }</code></pre>
@@ -339,15 +726,16 @@ public class IdempotentPaymentService {
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="A client sends a payment request. The server charges the card successfully but the network drops before the response arrives. The client retries. What prevents a double charge?" data-options='["The database primary key constraint on payment_id prevents duplicate rows","The client sends an idempotency-key header on every request; the server checks Redis first and returns the cached result if the key was already processed","The bank API automatically detects and rejects duplicate transactions","The client checks if a payment already exists before retrying"]' data-correct="1" data-explanation="The idempotency-key is the client's 'fingerprint' for this specific intent. On retry, the server finds the key in Redis and returns the original response without re-processing. The client never knows the first attempt succeeded — it just gets the correct result on retry." style="display:none"></div>
-          <div data-question="In double-entry bookkeeping, when user A pays user B $100, how many ledger rows are written?" data-options='["One row recording the $100 transfer","Two rows: a -$100 debit on A's account and a +$100 credit on B's account","Four rows: debit/credit for both the send and receive events","One row per currency conversion involved"]' data-correct="1" data-explanation="Double-entry is the invariant: every debit has a corresponding credit. Two rows ensure SUM(all amounts) = 0 at all times — a built-in correctness check. If the sum ever doesn't equal zero, money was created or destroyed, indicating a bug." style="display:none"></div>
-          <div data-question="Why is DECIMAL(19,4) used instead of FLOAT for storing monetary amounts in the database?" data-options='["DECIMAL is faster to query than FLOAT","FLOAT and DOUBLE use binary floating point which cannot represent 0.10 exactly — 0.1 + 0.2 ≠ 0.3 in binary. This rounding error is catastrophic for financial calculations; DECIMAL stores exact decimal values","FLOAT cannot store negative numbers which are needed for debits","DECIMAL supports more decimal places than FLOAT"]' data-correct="1" data-explanation="This is a famous IEEE 754 floating point problem. 0.1 in binary is 0.10000000000000000555... — an infinite repeating fraction. Summing thousands of such values accumulates cents of error. Financial systems universally use DECIMAL (exact) or integer arithmetic (store cents as BIGINT)." style="display:none"></div>
-          <div data-question="What is the Outbox Pattern and why is it needed for payment systems?" data-options='["A pattern for storing failed payments in a separate 'outbox' table for retry","A pattern that ensures the DB write and the external bank API call are atomically coupled: write both the payment and an outbox record in one DB transaction; a separate process polls the outbox and calls the bank API — ensuring exactly-once delivery without 2PC","A Redis pub/sub pattern for notifying payment services","A queue-based pattern for batching multiple payments together for efficiency"]' data-correct="1" data-explanation="The core problem: you can't atomically write to a DB and call an external API. Outbox solves it by making the external call an 'intent' stored in the DB itself. Since DB write + outbox write are in one transaction, they're atomic. The polling processor ensures the bank call happens eventually, idempotently." style="display:none"></div>
+          <div data-question="A client sends a payment request. The server charges the card but the network drops before the response arrives. The client retries. What prevents a double charge?" data-options='["The database primary key constraint prevents duplicate payment_id rows","The client sends the same idempotency-key on the retry; the server finds it in Redis and returns the cached result of the original charge without re-processing. The client receives the correct result without a second PSP call.","The bank API automatically detects and rejects duplicate transactions within 1 hour","The client checks GET /payments?idempotency_key=... before retrying"]' data-correct="1" data-explanation="The idempotency-key is the client's fingerprint for one specific payment intent. On retry, the server hits the Redis cache and returns the original response. The PSP is never called again. This is end-to-end: our Redis cache handles our server; we also pass the idempotency-key to Stripe which handles duplicate PSP calls." style="display:none"></div>
+          <div data-question="In double-entry bookkeeping, when a user pays $19.99, how many ledger rows are created and what is the invariant?" data-options='["One row per payment — simplest representation","Two rows: a -1999 cent debit on the payer's account and a +1999 cent credit on the payee's. The invariant: SUM(amount) across ALL ledger rows = 0 at all times. Any deviation indicates a bug — money was created or destroyed.","Four rows: one per account per transaction type","One row per currency involved in the transaction"]' data-correct="1" data-explanation="Double-entry bookkeeping traces back to 15th century accounting: every debit must have a corresponding credit. Two rows per payment ensures SUM(all amounts) = 0 globally — this is a built-in correctness invariant that databases can assert. If the sum ever diverges from zero, you immediately know money was created or lost somewhere." style="display:none"></div>
+          <div data-question="Why is BIGINT (integer cents) used instead of DECIMAL or FLOAT for monetary amounts?" data-options='["BIGINT is faster to query than DECIMAL in PostgreSQL","FLOAT has binary rounding errors: 0.10 + 0.20 ≠ 0.30 in IEEE 754 binary floating point. At Stripe's scale ($800B/year), summing billions of floating point values accumulates cents of error. Integer cents are exact: 10 + 20 = 30 always. DECIMAL is also acceptable but BIGINT is faster.","BIGINT supports more decimal places than DECIMAL","FLOAT cannot represent negative values needed for debits"]' data-correct="1" data-explanation="IEEE 754 floating point represents 0.1 as an infinite binary fraction (0.1000000000000000055...). Summing millions of such values accumulates error. For money: store 1999 cents for $19.99. Integer arithmetic is exact and fast. Java: use long for cents. SQL: use BIGINT. Display layer converts to dollars for users. Never FLOAT for money — this is a cardinal rule." style="display:none"></div>
+          <div data-question="What is the Outbox Pattern and why is it needed for PSP integration?" data-options='["An outbox stores failed payments for manual retry by support staff","Ensures atomic coupling of the DB write and external PSP call: write both the payment record and an outbox entry in one DB transaction. A separate processor polls the outbox and calls the PSP. This guarantees at-least-once PSP call with DB-level atomicity — without requiring 2PC with an external system.","A pattern for batching multiple small payments into one PSP call","A queue-based pattern for absorbing PSP rate limit bursts"]' data-correct="1" data-explanation="The core problem: you can't atomically write to your DB and call an external API. Without Outbox: write DB, call PSP, server crashes — DB has record but PSP never charged. Or: call PSP first (charges customer), write DB fails — PSP charged but no record. Outbox pattern: write payment + outbox entry atomically, then outbox processor reliably delivers the PSP call." style="display:none"></div>
+          <div data-question="A fraud score of 75 is returned for a transaction. According to the risk thresholds, what action is taken?" data-options='["Automatic block — score above 50 always means fraud","3DS challenge: force strong customer authentication (SMS OTP or banking app). Score 60-80 = high risk but not certain fraud. User authenticates with their bank, which provides liability protection even if it IS fraud.","Automatically accepted — only scores above 80 are blocked","Flag for manual review queue — human agent reviews within 24 hours"]' data-correct="1" data-explanation="Score 75 falls in the 60-80 range: suspicious but not certain fraud. 3DS forces the cardholder to authenticate with their bank — if the actual cardholder completes it, the transaction is legitimate. If a fraudster can't complete 3DS (they don't have the victim's phone), the transaction is blocked. Liability also shifts to the card issuer if 3DS is completed." style="display:none"></div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

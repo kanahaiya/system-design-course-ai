@@ -165,6 +165,76 @@ CREATE TABLE message_status (
           <span class="reshaded-step__letter">10 min</span>
         </h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 700 420" role="img" aria-label="WhatsApp sequence diagram: Sender connects via WebSocket, server stores message, delivers to recipient WebSocket if online, otherwise queues for offline delivery with read receipts" style="width:100%;max-width:700px;display:block;margin:0 auto var(--space-4)">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker>
+            <marker id="arrow-return" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker></defs>
+
+            <!-- Lifeline headers -->
+            <rect x="30" y="10" width="90" height="36" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+            <text x="75" y="33" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">Sender</text>
+
+            <rect x="200" y="10" width="110" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="255" y="33" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Chat Server</text>
+
+            <rect x="385" y="10" width="100" height="36" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="435" y="28" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Cassandra /</text>
+            <text x="435" y="43" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Redis</text>
+
+            <rect x="560" y="10" width="110" height="36" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+            <text x="615" y="33" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">Recipient</text>
+
+            <!-- Lifelines -->
+            <line x1="75" y1="46" x2="75" y2="410" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="255" y1="46" x2="255" y2="410" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="435" y1="46" x2="435" y2="410" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="615" y1="46" x2="615" y2="410" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
+
+            <!-- Step 1: WebSocket connect -->
+            <line x1="75" y1="75" x2="250" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="163" y="70" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">WebSocket connect</text>
+
+            <!-- Step 2: Send message -->
+            <line x1="75" y1="110" x2="250" y2="110" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="163" y="105" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">send message</text>
+
+            <!-- Step 3: Persist to Cassandra -->
+            <line x1="255" y1="140" x2="430" y2="140" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="342" y="135" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">persist (status=SENT)</text>
+
+            <!-- Step 4: ACK SENT -->
+            <line x1="250" y1="165" x2="80" y2="165" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-return)"/>
+            <text x="163" y="160" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">✓ ACK (SENT)</text>
+
+            <!-- Online path label -->
+            <text x="440" y="195" fill="#22c55e" font-family="Inter,sans-serif" font-size="11" font-weight="600">online path</text>
+            <!-- Step 5: Deliver via WebSocket -->
+            <line x1="255" y1="205" x2="610" y2="205" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="432" y="200" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">deliver via WebSocket</text>
+
+            <!-- Step 6: Read receipt -->
+            <line x1="610" y1="230" x2="260" y2="230" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-return)"/>
+            <text x="432" y="225" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">✓✓ read receipt (DELIVERED)</text>
+
+            <!-- Read receipt forwarded to sender -->
+            <line x1="255" y1="255" x2="80" y2="255" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-return)"/>
+            <text x="163" y="250" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">✓✓ status update (DELIVERED)</text>
+
+            <!-- Offline path -->
+            <line x1="0" y1="285" x2="700" y2="285" stroke="#475569" stroke-width="1" stroke-dasharray="2"/>
+            <text x="440" y="303" fill="#f59e0b" font-family="Inter,sans-serif" font-size="11" font-weight="600">offline path</text>
+            <line x1="255" y1="310" x2="430" y2="310" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="342" y="305" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">queue message (status=PENDING)</text>
+
+            <!-- Reconnect -->
+            <line x1="610" y1="345" x2="260" y2="345" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="432" y="340" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">recipient reconnects</text>
+
+            <!-- Flush queue -->
+            <line x1="255" y1="375" x2="610" y2="375" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="432" y="370" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">flush queued messages</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: WhatsApp message delivery sequence — online path (top) with read receipts, offline queue path (bottom) with flush on reconnect</p>
+
           <h3>Message Send (Both Users Online)</h3>
           <ol>
             <li>Alice sends message via <strong>WebSocket</strong> to her Chat Server (CS-A)</li>

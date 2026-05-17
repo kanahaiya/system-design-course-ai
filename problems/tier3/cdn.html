@@ -195,6 +195,71 @@ CacheRule {
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 600 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CDN two-tier cache hierarchy showing user browser to edge PoP to origin shield to origin server with hit rates">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- User Browser -->
+            <rect x="220" y="10" width="160" height="44" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="300" y="30" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">User Browser</text>
+            <text x="300" y="46" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Same IP, nearest PoP via BGP</text>
+
+            <!-- Anycast note -->
+            <rect x="420" y="18" width="160" height="28" fill="#0f172a" stroke="#475569" stroke-width="1" rx="6"/>
+            <text x="500" y="36" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Anycast routing: same IP,</text>
+
+            <!-- Arrow down to Edge Node -->
+            <line x1="300" y1="54" x2="300" y2="88" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+            <!-- Edge Node / PoP -->
+            <rect x="170" y="90" width="260" height="56" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="300" y="112" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Edge Node / PoP (L1 Cache)</text>
+            <text x="300" y="130" fill="#4ade80" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">~95% cache hit rate</text>
+
+            <!-- L1 hit path back -->
+            <line x1="165" y1="118" x2="130" y2="118" stroke="#4ade80" stroke-width="1.5"/>
+            <line x1="130" y1="118" x2="130" y2="32" stroke="#4ade80" stroke-width="1.5"/>
+            <line x1="130" y1="32" x2="218" y2="32" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="95" y="80" fill="#4ade80" font-family="Inter,sans-serif" font-size="10" text-anchor="middle" transform="rotate(-90,95,80)">cache HIT</text>
+
+            <!-- Arrow on L1 miss -->
+            <line x1="300" y1="146" x2="300" y2="180" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+            <text x="340" y="168" fill="#fbbf24" font-family="Inter,sans-serif" font-size="10">L1 miss (5%)</text>
+
+            <!-- Origin Shield -->
+            <rect x="170" y="182" width="260" height="56" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="300" y="204" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Origin Shield (L2 Cache)</text>
+            <text x="300" y="222" fill="#4ade80" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">~80% hit of remaining misses</text>
+
+            <!-- Thundering herd collapse note -->
+            <rect x="10" y="190" width="148" height="46" fill="#0f172a" stroke="#475569" stroke-width="1" rx="6"/>
+            <text x="84" y="207" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Thundering herd collapse:</text>
+            <text x="84" y="221" fill="#fbbf24" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">10,000 L1 misses</text>
+            <text x="84" y="235" fill="#fbbf24" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">→ 1 origin request</text>
+
+            <!-- L2 hit path -->
+            <line x1="165" y1="210" x2="130" y2="210" stroke="#4ade80" stroke-width="1.5"/>
+            <line x1="130" y1="210" x2="130" y2="118" stroke="#4ade80" stroke-width="1.5" stroke-dasharray="3,2"/>
+
+            <!-- Arrow on L2 miss -->
+            <line x1="300" y1="238" x2="300" y2="272" stroke="#f87171" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+            <text x="340" y="260" fill="#f87171" font-family="Inter,sans-serif" font-size="10">L2 miss (1% of total)</text>
+
+            <!-- Origin Server -->
+            <rect x="170" y="274" width="260" height="44" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="300" y="294" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Origin Server</text>
+            <text x="300" y="310" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Serves only cache misses</text>
+
+            <!-- Hit rate funnel summary -->
+            <text x="300" y="356" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Cache funnel: 100 requests → 5 reach L2 → ~1 reaches origin</text>
+            <text x="300" y="374" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">Origin protection factor: 100×</text>
+
+            <!-- BGP routing note (full) -->
+            <text x="500" y="48" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">nearest PoP selected by BGP</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: CDN two-tier cache hierarchy — L1 Edge PoP (95% hit) → L2 Origin Shield (80% of remaining) → Origin</p>
           <h3>CDN Topology</h3>
           <pre><code class="language-java">Internet Users
     │

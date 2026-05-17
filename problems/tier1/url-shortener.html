@@ -190,6 +190,55 @@ CREATE TABLE url_analytics (
           <span class="reshaded-step__letter">10 min</span>
         </h2>
         <div class="content-section__body">
+          <svg viewBox="0 0 760 260" role="img" aria-label="URL shortener architecture: Client through Load Balancer, App Server, Redis Cache, PostgreSQL, and CDN" style="width:100%;max-width:760px;display:block;margin:0 auto var(--space-4)">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/></marker></defs>
+            <!-- Nodes -->
+            <rect x="10" y="110" width="90" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="55" y="135" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Client</text>
+
+            <rect x="150" y="110" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="205" y="135" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">Load Balancer</text>
+
+            <rect x="320" y="110" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="375" y="135" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">App Server</text>
+
+            <!-- Redis (highlighted) -->
+            <rect x="490" y="40" width="110" height="40" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="8"/>
+            <text x="545" y="58" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">Redis Cache</text>
+            <text x="545" y="73" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">80% cache hit</text>
+
+            <!-- PostgreSQL -->
+            <rect x="490" y="180" width="110" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="545" y="205" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">PostgreSQL</text>
+
+            <!-- CDN -->
+            <rect x="640" y="110" width="100" height="40" fill="#1e293b" stroke="#6366f1" stroke-width="1.5" rx="8"/>
+            <text x="690" y="135" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle">CDN</text>
+
+            <!-- Arrows -->
+            <line x1="100" y1="130" x2="148" y2="130" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="260" y1="130" x2="318" y2="130" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <!-- App → Redis -->
+            <line x1="430" y1="118" x2="488" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="445" y="90" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">cache hit</text>
+            <!-- App → PostgreSQL -->
+            <line x1="430" y1="142" x2="488" y2="188" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="440" y="175" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">cache miss</text>
+            <!-- Redis → CDN -->
+            <line x1="600" y1="60" x2="680" y2="112" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <!-- PostgreSQL → CDN -->
+            <line x1="600" y1="195" x2="680" y2="148" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="615" y="185" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">populate cache</text>
+
+            <!-- CDN label -->
+            <text x="690" y="165" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">302 redirect</text>
+
+            <!-- Legend -->
+            <rect x="10" y="220" width="12" height="12" fill="#312e81" stroke="#818cf8" stroke-width="1.5" rx="2"/>
+            <text x="28" y="231" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11">Key component (Redis)</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: URL shortener read path — Client → Load Balancer → App Server → Redis (cache hit) → PostgreSQL (miss) → CDN → 302 redirect</p>
+
           <h3>Write Path (Shorten URL)</h3>
           <ol>
             <li>Client → API Gateway → <strong>URL Service</strong></li>
@@ -277,6 +326,43 @@ CREATE TABLE url_analytics (
           <p>Twitter's Snowflake algorithm produces a 64-bit ID = 41-bit timestamp (milliseconds) + 10-bit machine ID + 12-bit sequence. No coordination between nodes. No DB round-trip. Guarantee: 4,096 unique IDs per millisecond per machine.</p>
 
           <p>Base62 encode the 64-bit ID using characters <code>[0-9A-Za-z]</code>. A 64-bit number encodes to at most 11 base62 characters. We take the last 7 (still unique within our ID space for practical URL volumes).</p>
+
+          <div class="exercise-box" style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin-top:var(--space-6)">
+            <div style="font-weight:600;margin-bottom:var(--space-3)">⚡ Try it: Base62 Encoder</div>
+            <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap">
+              <label for="js-b62-input" style="font-size:var(--text-sm)">Enter a number (e.g. 123456789):</label>
+              <input id="js-b62-input" type="number" value="123456789" style="padding:var(--space-2) var(--space-3);background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);color:var(--color-text-primary);font-family:var(--font-mono);width:180px">
+            </div>
+            <div id="js-b62-output" style="margin-top:var(--space-3);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-primary)"></div>
+            <script>
+              (function() {
+                const BASE62_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                function toBase62(number) {
+                  if (number === 0) return '0';
+                  let encoded = '';
+                  let remaining = number;
+                  while (remaining > 0) {
+                    encoded = BASE62_CHARS[remaining % 62] + encoded;
+                    remaining = Math.floor(remaining / 62);
+                  }
+                  return encoded;
+                }
+                const inputElement = document.getElementById('js-b62-input');
+                const outputElement = document.getElementById('js-b62-output');
+                function updateBase62Output() {
+                  const parsedNumber = parseInt(inputElement.value, 10);
+                  if (isNaN(parsedNumber) || parsedNumber < 0) {
+                    outputElement.textContent = 'Enter a positive number';
+                    return;
+                  }
+                  const encodedString = toBase62(parsedNumber);
+                  outputElement.textContent = parsedNumber + ' → Base62: "' + encodedString + '" (length: ' + encodedString.length + ' chars)';
+                }
+                inputElement.addEventListener('input', updateBase62Output);
+                updateBase62Output();
+              })();
+            </script>
+          </div>
         </div>
       </section>
 

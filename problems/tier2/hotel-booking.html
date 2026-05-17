@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Hotel Booking System — RESHADED walkthrough covering double-booking prevention, optimistic locking, inventory management, and payment hold patterns for MAANG interviews.">
+  <meta name="description" content="Design a Hotel Booking System like Booking.com — RESHADED walkthrough covering double-booking prevention, two-phase booking, inventory bitset, dynamic pricing, and Redis SETNX for L6 interviews.">
   <title>Design Hotel Booking System — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -66,7 +66,7 @@
           <span class="tag">Inventory/Concurrency</span>
         </div>
         <h1 class="module-header__title">Design Hotel Booking System</h1>
-        <p class="module-header__desc">The hard problem: two users simultaneously book the last available room. Without proper concurrency control, both succeed — double booking. Optimistic locking with a version field is the standard production approach.</p>
+        <p class="module-header__desc">The hard problem: two users simultaneously book the last available room. Without proper concurrency control, both succeed — double booking. Optimistic locking with a version field is the standard production approach. The two-phase pattern (HOLD → CONFIRM) is the key L6 insight: separate the "claim" from the "commitment".</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Booking.com, Airbnb, Hotels.com</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
@@ -81,8 +81,9 @@
           <ul>
             <li>Search hotels by location, dates, guests — show availability and pricing</li>
             <li>Book a room: reserve specific room type for date range</li>
-            <li>View and cancel bookings</li>
+            <li>View and cancel bookings with cancellation policy enforcement</li>
             <li>Hotel management: add rooms, manage pricing, update availability</li>
+            <li>Dynamic pricing: prices change based on demand and occupancy rate</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
@@ -90,7 +91,11 @@
             <li><strong>Scale:</strong> 500M users, 1M bookings/day, 10M search queries/day</li>
             <li><strong>Latency:</strong> Search results &lt;1s; booking confirmation &lt;3s</li>
             <li><strong>Read/write ratio:</strong> 100:1 — search dominates; booking is the rare write</li>
+            <li><strong>Availability of hold:</strong> Room held for payment for max 10 minutes, then auto-released</li>
           </ul>
+          <div class="callout callout--tip">
+            <strong>L6 clarification to ask:</strong> "Should we support overbooking (airlines do this intentionally at ~10%)?" The answer shapes whether we need strict 1-to-1 inventory or allow a configurable overbook buffer. Airlines book 110 seats for a 100-seat plane.
+          </div>
         </div>
       </section>
 
@@ -98,9 +103,11 @@
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li>1M bookings/day = ~12 TPS average; spikes during sales → 500 TPS</li>
+            <li>1M bookings/day = ~12 TPS average; spikes during Black Friday / holiday → 500 TPS</li>
             <li>10M searches/day = ~115 search QPS; CDN/cache absorbs most repeated queries</li>
-            <li>Room inventory: 500K hotels × avg 100 rooms × 365 days = 18B availability records/year → ElasticSearch for search, PostgreSQL for booking</li>
+            <li>Room inventory: 500K hotels × avg 100 rooms × 365 days = 18B availability records/year → Elasticsearch for search, Cassandra for availability grid</li>
+            <li>Active holds at any moment: 500 TPS × 10 min hold window = 300,000 concurrent holds → Redis easily holds this</li>
+            <li>Pricing data: 500K hotels × 100 rooms × 365 days × 8 bytes = ~146GB — fits in Cassandra with replication</li>
           </ul>
         </div>
       </section>
@@ -109,39 +116,129 @@
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
         <div class="content-section__body">
           <pre><code class="language-java">// PostgreSQL — booking (ACID required for no double-booking)
-hotels: hotel_id, name, location, star_rating, amenities
-rooms: room_id, hotel_id, room_type, capacity, price_per_night
+hotels: hotel_id, name, location_geohash, star_rating, amenities_bitmask
+
+rooms: room_id, hotel_id, room_type, capacity, base_price_per_night
 
 // Key: version field enables optimistic locking
+// availability_bitmap: one bit per day offset from epoch (4096 bytes = 32,768 days ~90 years)
+// Checking if a room is free for nights [checkIn, checkOut):
+//   AND all bits in range = 0 means available
 room_inventory:
     room_id         UUID,
     date            DATE,
-    total_count     INT,  -- total rooms of this type available
-    booked_count    INT,  -- currently booked
-    version         BIGINT DEFAULT 0,  -- incremented on every update
+    total_count     INT,         -- total rooms of this type
+    booked_count    INT,         -- confirmed bookings
+    reserved_count  INT,         -- currently on hold (pending payment)
+    version         BIGINT DEFAULT 0,  -- CAS guard
+    dynamic_price   DECIMAL(10,2),     -- overrides base_price when set
     PRIMARY KEY (room_id, date)
 
 bookings:
-    booking_id   UUID PRIMARY KEY,
-    user_id      UUID,
-    room_id      UUID,
-    check_in     DATE,
-    check_out    DATE,
-    status       ENUM(pending, confirmed, cancelled),
-    total_price  DECIMAL(10,2),
-    created_at   TIMESTAMP</code></pre>
+    booking_id       UUID PRIMARY KEY,
+    user_id          UUID,
+    room_id          UUID,
+    check_in         DATE,
+    check_out        DATE,
+    status           ENUM(on_hold, confirmed, cancelled, expired),
+    hold_expires_at  TIMESTAMP,   -- 10 min from creation for on_hold status
+    total_price      DECIMAL(10,2),
+    payment_id       VARCHAR(255), -- stripe/paypal reference
+    created_at       TIMESTAMP
+
+// Cassandra — availability cache (read-heavy, partitioned by hotel for geo-queries)
+// Partition by hotel_id for efficient "show all availability for this hotel" queries
+hotel_availability:
+    hotel_id      UUID,
+    date          DATE,
+    room_type     TEXT,
+    available_qty INT,
+    PRIMARY KEY (hotel_id, date, room_type)</code></pre>
+
+          <h3>Inventory as a Bitset</h3>
+          <p>For efficient date-range availability queries, represent a room's booked status as a <strong>bitset</strong> — one bit per calendar day. Checking 30-night availability is a single bitwise AND operation across 30 bits rather than 30 individual row reads:</p>
+          <pre><code class="language-java">// Room available for [checkIn, checkOut) if bits[checkIn..checkOut-1] are all 0
+// Using Java's BitSet:
+BitSet bookedDays = loadFromCassandra(roomId);  // one bit per day
+BitSet requestedRange = new BitSet();
+requestedRange.set(checkInDayOffset, checkOutDayOffset); // set bits for requested nights
+
+// Available if the intersection is empty
+boolean isAvailable = !bookedDays.intersects(requestedRange);
+
+// Book: set bits for all requested nights atomically
+bookedDays.or(requestedRange);</code></pre>
+          <p>This is how Airbnb and Booking.com store availability at scale — the entire year of availability for a room fits in 365 bits (~46 bytes). A month's availability is a single 64-bit long comparison.</p>
         </div>
       </section>
 
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+
+          <svg viewBox="0 0 720 380" role="img" aria-label="Hotel booking system architecture: search path and booking two-phase flow" style="width:100%;max-width:720px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-hb" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <!-- Search path -->
+            <rect x="10" y="30" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="60" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+            <rect x="150" y="30" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="205" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Search Service</text>
+            <rect x="310" y="30" width="110" height="44" rx="8" fill="#312e81" stroke="#818cf8" rx="8"/>
+            <text x="365" y="56" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Elasticsearch</text>
+            <rect x="470" y="30" width="120" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="530" y="48" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Availability Cache</text>
+            <text x="530" y="64" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">(Redis / Cassandra)</text>
+            <line x1="110" y1="52" x2="148" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <line x1="260" y1="52" x2="308" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <line x1="420" y1="52" x2="468" y2="52" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <text x="360" y="20" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">SEARCH PATH (read-heavy, eventual consistency OK)</text>
+
+            <!-- Booking path -->
+            <rect x="10" y="160" width="100" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="60" y="186" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Client</text>
+            <rect x="150" y="160" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="205" y="178" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Booking Service</text>
+            <text x="205" y="194" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">(strong consistency)</text>
+            <rect x="310" y="160" width="110" height="44" rx="8" fill="#312e81" stroke="#818cf8"/>
+            <text x="365" y="178" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Redis Hold</text>
+            <text x="365" y="194" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">SETNX 10-min TTL</text>
+            <rect x="470" y="160" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="525" y="178" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">PostgreSQL</text>
+            <text x="525" y="194" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Optimistic Lock</text>
+            <rect x="630" y="160" width="80" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="670" y="178" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Payment</text>
+            <text x="670" y="194" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Service</text>
+            <line x1="110" y1="182" x2="148" y2="182" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <line x1="260" y1="182" x2="308" y2="182" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <line x1="420" y1="182" x2="468" y2="182" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <line x1="580" y1="182" x2="628" y2="182" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrow-hb)"/>
+            <text x="360" y="150" fill="#94a3b8" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">BOOKING PATH (strong consistency, two-phase)</text>
+
+            <!-- Services -->
+            <rect x="10" y="280" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="65" y="298" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Pricing Service</text>
+            <text x="65" y="314" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Dynamic + Redis cache</text>
+            <rect x="160" y="280" width="110" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="215" y="298" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Notification Svc</text>
+            <text x="215" y="314" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Kafka → Email/SMS</text>
+            <rect x="310" y="280" width="120" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="370" y="298" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="12" text-anchor="middle">Expiry Job</text>
+            <text x="370" y="314" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Release expired holds</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Hotel booking system — search path (eventual consistency) vs booking path (strong consistency via two-phase hold)</p>
+
           <ul>
-            <li><strong>Search Service:</strong> ElasticSearch indexed with hotel location, amenities, room types. Availability pre-computed and cached. Read-heavy, eventual consistency acceptable.</li>
-            <li><strong>Booking Service:</strong> Strong consistency required. PostgreSQL with optimistic locking. Checks availability, creates booking, decrements inventory in one transaction.</li>
-            <li><strong>Pricing Service:</strong> Dynamic pricing based on demand, season, competitor rates. Caches prices in Redis (TTL 5 min).</li>
-            <li><strong>Payment Service:</strong> Authorization hold on card during booking window. Capture on check-in. Release hold on cancellation.</li>
+            <li><strong>Search Service:</strong> Elasticsearch indexed with hotel location (geohash), amenities, room types. Availability pre-computed and cached in Redis. Read-heavy, eventual consistency acceptable.</li>
+            <li><strong>Booking Service:</strong> Strong consistency required. PostgreSQL with optimistic locking. Two-phase: HOLD → CONFIRM or RELEASE.</li>
+            <li><strong>Redis Hold Layer:</strong> SETNX with 10-minute TTL creates an atomic reservation hold. Room is "claimed" before payment completes.</li>
+            <li><strong>Pricing Service:</strong> Dynamic pricing based on occupancy rate (more bookings → higher price), competitor rates, season. Prices cached in Redis (TTL 5 min). On cache miss, computed from base_price × demand_multiplier.</li>
+            <li><strong>Payment Service:</strong> Authorization hold on card during booking window. Capture on booking confirmation. Release hold on cancel or expiry.</li>
             <li><strong>Notification Service:</strong> Email/SMS confirmation via event-driven (Kafka consumer).</li>
+            <li><strong>Expiry Job:</strong> Scheduled every minute. Scans for bookings with status=on_hold and hold_expires_at &lt; NOW(). Releases inventory and sends user notification.</li>
           </ul>
         </div>
       </section>
@@ -150,19 +247,139 @@ bookings:
         <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
           <pre><code class="language-java">GET  /v1/hotels/search?location={}&checkIn={}&checkOut={}&guests={}
-GET  /v1/hotels/{hotelId}/rooms?checkIn={}&checkOut={}   // availability for specific hotel
-POST /v1/bookings
-  Body: { roomId, checkIn, checkOut, paymentMethodId }
-  Returns: { bookingId, status, confirmationNumber }
+     &minPrice={}&maxPrice={}&amenities=pool,wifi,parking
+     // Returns: [{ hotelId, name, starRating, lowestPrice, availableRoomTypes }]
+
+GET  /v1/hotels/{hotelId}/rooms?checkIn={}&checkOut={}
+     // Returns availability + current dynamic price per room type
+
+// Two-phase booking
+POST /v1/bookings/hold
+  Body: { roomId, checkIn, checkOut, guestCount }
+  Returns: { holdId, roomId, totalPrice, holdExpiresAt }  // 10-min TTL
+
+POST /v1/bookings/confirm
+  Body: { holdId, paymentMethodId }
+  Returns: { bookingId, status: "confirmed", confirmationNumber }
+
+// Cancel (free cancellation window or with penalty)
+POST /v1/bookings/{bookingId}/cancel
+  Returns: { refundAmount, refundStatus }
+
 GET  /v1/bookings/{bookingId}
-POST /v1/bookings/{bookingId}/cancel</code></pre>
+GET  /v1/users/me/bookings?status=upcoming&limit=20</code></pre>
         </div>
       </section>
 
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Preventing Double-Booking<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Two-Phase Booking + Concurrency<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Three approaches, one winner:</strong></p>
+
+          <h3>The Two-Phase Booking Pattern</h3>
+          <p>Booking a hotel room involves a window of time between "user decides to book" and "payment completes." You must hold the room during this window without permanently committing it. Two-phase booking solves this:</p>
+
+          <svg viewBox="0 0 680 260" role="img" aria-label="Two-phase booking state machine: AVAILABLE → ON_HOLD → CONFIRMED or RELEASED → AVAILABLE" style="width:100%;max-width:680px;display:block;margin:0 auto var(--space-4)">
+            <defs>
+              <marker id="arrow-sm" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+              <marker id="arrow-sm-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#f87171"/>
+              </marker>
+              <marker id="arrow-sm-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#4ade80"/>
+              </marker>
+            </defs>
+            <!-- States -->
+            <rect x="20" y="100" width="120" height="50" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="2"/>
+            <text x="80" y="120" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">AVAILABLE</text>
+            <text x="80" y="137" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">reserved=0</text>
+
+            <rect x="250" y="100" width="120" height="50" rx="8" fill="#312e81" stroke="#818cf8" stroke-width="2"/>
+            <text x="310" y="120" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">ON_HOLD</text>
+            <text x="310" y="137" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Redis TTL 10 min</text>
+
+            <rect x="490" y="40" width="130" height="50" rx="8" fill="#14532d" stroke="#4ade80" stroke-width="2"/>
+            <text x="555" y="60" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">CONFIRMED</text>
+            <text x="555" y="77" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Payment captured</text>
+
+            <rect x="490" y="165" width="130" height="50" rx="8" fill="#7f1d1d" stroke="#f87171" stroke-width="2"/>
+            <text x="555" y="185" fill="#e2e8f0" font-family="Inter,sans-serif" font-size="13" text-anchor="middle" font-weight="600">RELEASED</text>
+            <text x="555" y="202" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">TTL expired / failed</text>
+
+            <!-- Arrows -->
+            <line x1="140" y1="125" x2="248" y2="125" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow-sm)"/>
+            <text x="194" y="117" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">POST /hold</text>
+            <text x="194" y="129" fill="#94a3b8" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Redis SETNX</text>
+
+            <line x1="370" y1="110" x2="488" y2="75" stroke="#4ade80" stroke-width="2" marker-end="url(#arrow-sm-green)"/>
+            <text x="440" y="85" fill="#4ade80" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">Payment OK</text>
+
+            <line x1="370" y1="140" x2="488" y2="175" stroke="#f87171" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrow-sm-red)"/>
+            <text x="440" y="170" fill="#f87171" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">TTL / cancel / fail</text>
+
+            <!-- Release back to available -->
+            <path d="M555 215 Q555 240 310 240 Q140 240 80 215" stroke="#f87171" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#arrow-sm-red)"/>
+            <text x="310" y="252" fill="#f87171" font-family="Inter,sans-serif" font-size="10" text-anchor="middle">inventory released → AVAILABLE again</text>
+          </svg>
+          <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">Figure: Two-phase booking state machine — green path = successful booking, red dashed = rollback to available</p>
+
+          <h3>Phase 1: HOLD — Redis SETNX</h3>
+          <pre><code class="language-java">// Atomic claim using Redis SETNX (set if not exists)
+// Key: "hold:{roomId}:{date}" for each night in range
+// TTL: 600 seconds (10 minutes)
+// Value: holdId + userId (to validate ownership on confirm)
+
+for (LocalDate night : getAllNightsInRange(checkIn, checkOut)) {
+    String holdKey = "hold:" + roomId + ":" + night;
+    // SETNX is atomic: only one caller can set this key
+    String result = jedis.set(holdKey, holdId + ":" + userId,
+        SetParams.setParams().nx().ex(600));
+    if (!"OK".equals(result)) {
+        // Another user holds this night — release all nights we already claimed
+        releasePartialHold(roomId, checkIn, night, holdId);
+        throw new RoomUnavailableException("Room held by another user on " + night);
+    }
+}
+// All nights claimed — create DB record
+insertHoldRecord(roomId, userId, checkIn, checkOut, holdId);</code></pre>
+
+          <h3>Phase 2a: CONFIRM — DB Transaction</h3>
+          <pre><code class="language-java">// On payment success:
+// 1. Validate hold ownership in Redis
+// 2. Write confirmed booking to PostgreSQL (optimistic lock)
+// 3. Delete Redis hold keys (DB is now source of truth)
+
+BEGIN TRANSACTION;
+  -- Decrement available count using optimistic lock
+  UPDATE room_inventory
+  SET booked_count = booked_count + 1, version = version + 1
+  WHERE room_id = ? AND date = ? AND version = ? AND booked_count < total_count;
+  -- If 0 rows: version mismatch (concurrent booking) → rollback + retry
+
+  UPDATE bookings SET status = 'confirmed', payment_id = ? WHERE booking_id = ?;
+COMMIT;
+
+// Delete Redis hold keys (cleanup)
+for (LocalDate night : nights) {
+    jedis.del("hold:" + roomId + ":" + night);
+}</code></pre>
+
+          <h3>Phase 2b: RELEASE — Timeout or Payment Failure</h3>
+          <pre><code class="language-java">// Scheduled job: runs every 60 seconds
+@Scheduled(fixedDelay = 60_000)
+public void releaseExpiredHolds() {
+    List&lt;Booking&gt; expiredHolds = bookingRepository.findExpiredHolds();
+    for (Booking expiredHold : expiredHolds) {
+        // Mark booking as expired in DB
+        bookingRepository.updateStatus(expiredHold.getBookingId(), BookingStatus.EXPIRED);
+        // Redis keys already expired via TTL — no cleanup needed
+        // Notify user
+        notificationService.sendHoldExpiredEmail(expiredHold.getUserId());
+    }
+}</code></pre>
+
+          <h3>Three Concurrency Approaches Compared</h3>
           <p><strong>Option A — Pessimistic locking (SELECT FOR UPDATE):</strong></p>
           <pre><code class="language-java">BEGIN;
 SELECT * FROM room_inventory WHERE room_id=? AND date BETWEEN ? AND ? FOR UPDATE;
@@ -170,7 +387,8 @@ SELECT * FROM room_inventory WHERE room_id=? AND date BETWEEN ? AND ? FOR UPDATE
 UPDATE room_inventory SET booked_count=booked_count+1 WHERE ...;
 INSERT INTO bookings ...;
 COMMIT;</code></pre>
-          <p>Problem: row-level lock blocks all concurrent bookings for that room. Under contention, threads queue up — poor throughput.</p>
+          <p>Problem: row-level lock blocks all concurrent bookings for that room. Under contention, threads queue up — poor throughput. Lock holder crash stalls all waiters.</p>
+
           <p><strong>Option B — Optimistic locking (version field + CAS):</strong></p>
           <pre><code class="language-java">// Read current state including version
 SELECT booked_count, total_count, version FROM room_inventory WHERE ...;
@@ -178,8 +396,86 @@ SELECT booked_count, total_count, version FROM room_inventory WHERE ...;
 UPDATE room_inventory SET booked_count=booked_count+1, version=version+1
 WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
 // If 0 rows updated: version changed → retry</code></pre>
-          <p>Winner for low contention (most rooms). No lock held; retry on conflict. For hot rooms during a sale (high contention), retry loops become expensive.</p>
-          <p><strong>Option C — Redis atomic decrement:</strong> Store available_count in Redis. DECR → if result &lt; 0, INCR back and reject. Fast but requires Redis→DB sync.</p>
+          <p>Winner for low contention (most rooms). No lock held; retry on conflict. For hot rooms during a sale (high contention), retry loops amplify DB load.</p>
+
+          <p><strong>Option C — Redis SETNX for reservation hold (production choice):</strong></p>
+          <pre><code class="language-java">// Redis SETNX is the fastest "first-mover wins" mechanism
+// Atomic at the Redis level — no DB involved for the hold phase
+String result = jedis.set("hold:" + roomId + ":" + date, holdId,
+    SetParams.setParams().nx().ex(600));
+boolean holdGranted = "OK".equals(result);</code></pre>
+          <p>Best of both worlds: Redis SETNX handles the hot-path atomically (no DB load during hold phase), then a single DB write on payment confirmation. Used in production at booking platforms.</p>
+
+          <h3>Dynamic Pricing</h3>
+          <p>Price increases with demand — the occupancy rate drives a multiplier:</p>
+          <pre><code class="language-java">/**
+ * Calculates the dynamic price for a room based on current occupancy.
+ * Uses tiered multipliers: higher occupancy = higher price.
+ * Cached in Redis with 5-minute TTL to avoid constant DB queries.
+ */
+public BigDecimal calculateDynamicPrice(UUID roomId, LocalDate date) {
+    String cacheKey = "price:" + roomId + ":" + date;
+    String cachedPrice = jedis.get(cacheKey);
+    if (cachedPrice != null) {
+        return new BigDecimal(cachedPrice);
+    }
+
+    InventoryRow inventory = inventoryRepository.findByRoomIdAndDate(roomId, date);
+    double occupancyRate = (double) inventory.getBookedCount() / inventory.getTotalCount();
+
+    double multiplier;
+    if (occupancyRate >= 0.90) {
+        multiplier = 2.5;       // 90%+ booked → 2.5× base price
+    } else if (occupancyRate >= 0.70) {
+        multiplier = 1.8;       // 70-90% booked → 1.8× base price
+    } else if (occupancyRate >= 0.50) {
+        multiplier = 1.3;       // 50-70% booked → 1.3× base price
+    } else if (occupancyRate < 0.20 && isWithin3Days(date)) {
+        multiplier = 0.7;       // last-minute discount: 30% off
+    } else {
+        multiplier = 1.0;       // base price
+    }
+
+    BigDecimal dynamicPrice = inventory.getBasePrice().multiply(BigDecimal.valueOf(multiplier));
+    jedis.setex(cacheKey, 300, dynamicPrice.toPlainString()); // 5-min TTL
+    return dynamicPrice;
+}
+
+private boolean isWithin3Days(LocalDate date) {
+    return date.isBefore(LocalDate.now().plusDays(3));
+}</code></pre>
+
+          <h3>Overbooking Strategy</h3>
+          <p>Airlines routinely overbook at 5–10%. Hotels can too. The key is defining <code>overbook_buffer</code> per room type:</p>
+          <pre><code class="language-java">// Allow bookings up to total_count * (1 + overbook_rate)
+// overbook_rate = 0.10 means allow 10% more bookings than physical rooms
+
+UPDATE room_inventory
+SET booked_count = booked_count + 1, version = version + 1
+WHERE room_id = ? AND date = ? AND version = ?
+  AND booked_count &lt; (total_count * (1 + overbook_rate));
+
+// When a room is overbooked: compensation policy
+// - Upgrade to higher room type (preferred)
+// - Move to partner hotel same category
+// - Refund + penalty payment to customer</code></pre>
+
+          <h3>Cancellation Policy Engine</h3>
+          <pre><code class="language-java">/**
+ * Calculates refund amount based on days until check-in.
+ * Most hotels: free cancellation >48h before check-in, penalty within 48h.
+ */
+public BigDecimal calculateCancellationRefund(Booking booking) {
+    long daysUntilCheckIn = ChronoUnit.DAYS.between(LocalDate.now(), booking.getCheckIn());
+
+    if (daysUntilCheckIn > 7) {
+        return booking.getTotalPrice();                          // full refund
+    } else if (daysUntilCheckIn > 2) {
+        return booking.getTotalPrice().multiply(new BigDecimal("0.50")); // 50% refund
+    } else {
+        return BigDecimal.ZERO;                                  // no refund
+    }
+}</code></pre>
         </div>
       </section>
 
@@ -187,8 +483,11 @@ WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
           <ul>
-            <li><strong>Hot room scenario (Black Friday):</strong> 1,000 concurrent requests for 1 room. Optimistic locking → 999 retries, 1 succeeds. Under extreme contention, consider Redis-based request queue to serialize access.</li>
-            <li><strong>Date range booking:</strong> Must check availability for every night in the range atomically. Optimistic lock all rows in the range; if any row update fails, rollback the whole booking.</li>
+            <li><strong>Hot room scenario (Black Friday):</strong> 1,000 concurrent requests for 1 room. Redis SETNX serializes: one caller gets "OK", 999 get null → instant "unavailable" response with no DB load. Superior to optimistic locking retry loops under extreme contention.</li>
+            <li><strong>Date range booking:</strong> Must hold all nights atomically. If Redis SETNX fails on night 5 of 7, roll back nights 1–4 (delete those Redis keys). Atomic at the night granularity.</li>
+            <li><strong>Hold expiry race:</strong> Expiry job + Redis TTL create a small window. DB hold_expires_at is the authoritative source. If Redis key expired but DB hold is still valid (within grace period), honor the DB.</li>
+            <li><strong>Redis failure:</strong> If Redis is down, fall back to PostgreSQL pessimistic locking (SELECT FOR UPDATE). Slower but correct. Redis is an optimization, not a correctness requirement.</li>
+            <li><strong>Search availability staleness:</strong> Elasticsearch availability may lag by 30–60 seconds (acceptable for search). Always confirm true availability via PostgreSQL on the booking path.</li>
           </ul>
         </div>
       </section>
@@ -196,7 +495,7 @@ WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a hotel booking system with zero double-booking tolerance. Key decisions: optimistic locking with version field for low-contention booking atomicity, ElasticSearch for availability search, Redis for pricing cache, and a payment authorization-hold pattern for risk management.</p>
+          <p>We designed a hotel booking system with zero double-booking tolerance. Key decisions: two-phase booking (HOLD via Redis SETNX → CONFIRM via PostgreSQL transaction) separates "claiming" from "committing"; optimistic locking with version field prevents concurrent booking of the same physical room; Elasticsearch for geo+amenity search with 30s eventual consistency; dynamic pricing with demand multiplier cached in Redis; and a scheduled expiry job releases stale holds every 60 seconds.</p>
         </div>
       </section>
 
@@ -207,10 +506,36 @@ WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
             <table>
               <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
               <tbody>
-                <tr><td>Double-booking prevention</td><td>Optimistic locking (version CAS)</td><td>Pessimistic locking (SELECT FOR UPDATE)</td><td>Most bookings have low contention. Optimistic avoids holding locks, scales better. Pessimistic only better when contention is consistently high.</td></tr>
-                <tr><td>Search storage</td><td>ElasticSearch</td><td>PostgreSQL full-text</td><td>Geo-search, faceted filtering, full-text search on amenities — ElasticSearch excels. PostgreSQL FTS is weaker for geo-spatial queries.</td></tr>
-                <tr><td>Payment timing</td><td>Authorize on booking, capture on check-in</td><td>Charge immediately</td><td>Authorization holds funds without charging. If booking is cancelled before check-in, the hold releases automatically — no refund needed.</td></tr>
-                <tr><td>Availability data</td><td>Separate room_inventory table</td><td>Query bookings table to compute availability</td><td>Pre-materialized availability avoids expensive COUNT queries across bookings on every search.</td></tr>
+                <tr>
+                  <td>Hold mechanism</td>
+                  <td>Redis SETNX (TTL-based hold)</td>
+                  <td>DB pessimistic lock (SELECT FOR UPDATE)</td>
+                  <td>Redis hold is non-blocking: 999 concurrent requests get instant rejection rather than queuing. DB lock serializes all requests. Redis degrades gracefully to DB lock on failure.</td>
+                </tr>
+                <tr>
+                  <td>Confirm locking</td>
+                  <td>Optimistic locking (version CAS)</td>
+                  <td>Pessimistic locking</td>
+                  <td>Confirm phase has low contention (one booking per hold). Optimistic avoids holding locks, scales better under normal load. Redis hold already filtered out 99.9% of concurrent attempts.</td>
+                </tr>
+                <tr>
+                  <td>Availability storage</td>
+                  <td>Bitset per room (one bit/day)</td>
+                  <td>Row per room+date in PostgreSQL</td>
+                  <td>Bitset enables O(N) range queries (N = number of nights) with a single bitwise AND. Row-per-date requires N individual reads or a range scan. Bitset: ~365 bytes vs ~365 rows per room/year.</td>
+                </tr>
+                <tr>
+                  <td>Search index</td>
+                  <td>Elasticsearch</td>
+                  <td>PostgreSQL full-text + PostGIS</td>
+                  <td>Geo-search, faceted filtering, full-text on amenities — Elasticsearch excels. PostgreSQL FTS is weaker for complex geo-spatial + filter combinations. ES scales read-horizontally.</td>
+                </tr>
+                <tr>
+                  <td>Availability replica</td>
+                  <td>Cassandra for availability grid</td>
+                  <td>PostgreSQL for everything</td>
+                  <td>Cassandra partitions by hotel_id: "available rooms for hotel X over dates" is a single partition read. PostgreSQL range scans across 18B records would need careful sharding.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -221,57 +546,120 @@ WHERE room_id=? AND date=? AND version=? AND booked_count &lt; total_count;
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * BookingService — prevents double-booking via optimistic locking.
- * The version field acts as a compare-and-swap guard:
- * only the first concurrent transaction to update wins; others retry.
+ * @file BookingService.java
+ * @description Orchestrates the two-phase hotel booking: HOLD via Redis SETNX,
+ *              CONFIRM via PostgreSQL optimistic lock, RELEASE on expiry/failure.
+ *
+ * Public API:
+ *   tryHold(roomId, userId, checkIn, checkOut) — claims room via Redis, returns holdId
+ *   confirmBooking(holdId, paymentId) — converts hold to confirmed booking in DB
+ *   releaseExpiredHolds() — scheduled job, releases stale holds
  */
 public class BookingService {
 
+    private static final String HOLD_KEY_PREFIX = "hold:";
+    private static final int HOLD_TTL_SECONDS = 600;    // 10-minute hold window
     private static final int MAX_RETRY_ATTEMPTS = 3;
-    private final DataSource dataSource;
 
-    public BookingService(DataSource dataSource) {
+    private final JedisPool jedisPool;
+    private final DataSource dataSource;
+    private final NotificationService notificationService;
+
+    public BookingService(JedisPool jedisPool, DataSource dataSource,
+                          NotificationService notificationService) {
+        this.jedisPool = jedisPool;
         this.dataSource = dataSource;
+        this.notificationService = notificationService;
     }
+
+    // ── Phase 1: HOLD via Redis SETNX ────────────────────────────────
 
     /**
-     * Creates a booking for a room over a date range.
-     * Uses optimistic locking to prevent double-booking under concurrent requests.
+     * Attempts to place a hold on a room for all nights in the date range.
+     * Uses Redis SETNX atomically — exactly one concurrent caller succeeds per night.
      *
-     * @throws BookingConflictException if room unavailable or all retries exhausted
+     * @param roomId   target room
+     * @param userId   user placing the hold
+     * @param checkIn  first night
+     * @param checkOut exclusive end date (night before checkout)
+     * @return holdId if successful
+     * @throws RoomUnavailableException if any night in the range is already held
      */
-    public Booking createBooking(UUID roomId, UUID userId, LocalDate checkIn, LocalDate checkOut) {
-        for (int attempt = 0; attempt &lt; MAX_RETRY_ATTEMPTS; attempt++) {
-            try {
-                return attemptBooking(roomId, userId, checkIn, checkOut);
-            } catch (OptimisticLockException lockException) {
-                if (attempt == MAX_RETRY_ATTEMPTS - 1) {
-                    throw new BookingConflictException("Room no longer available after " + MAX_RETRY_ATTEMPTS + " attempts");
+    public String tryHold(UUID roomId, UUID userId, LocalDate checkIn, LocalDate checkOut) {
+        String holdId = UUID.randomUUID().toString();
+        List&lt;LocalDate&gt; requestedNights = getAllNights(checkIn, checkOut);
+        List&lt;LocalDate&gt; claimedNights = new ArrayList&lt;&gt;();
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            for (LocalDate night : requestedNights) {
+                String holdKey = buildHoldKey(roomId, night);
+                String holdValue = holdId + ":" + userId;
+
+                // SET NX EX — atomic: set only if key doesn't exist, with TTL
+                String redisResult = jedis.set(holdKey, holdValue,
+                    SetParams.setParams().nx().ex(HOLD_TTL_SECONDS));
+
+                if (!"OK".equals(redisResult)) {
+                    // This night is already claimed — release nights we already set
+                    releaseHoldKeys(jedis, roomId, claimedNights);
+                    throw new RoomUnavailableException("Room unavailable on " + night);
                 }
-                // Brief pause before retry to reduce thundering herd
-                sleepBriefly(50 * (attempt + 1));
+                claimedNights.add(night);
             }
         }
-        throw new BookingConflictException("Booking failed after retries");
+
+        // All nights claimed — persist hold record to DB
+        persistHoldRecord(roomId, userId, holdId, checkIn, checkOut);
+        return holdId;
     }
 
-    private Booking attemptBooking(UUID roomId, UUID userId, LocalDate checkIn, LocalDate checkOut) {
+    // ── Phase 2a: CONFIRM via DB transaction ─────────────────────────
+
+    /**
+     * Converts a Redis hold to a confirmed booking in PostgreSQL.
+     * Uses optimistic locking to guard against concurrent confirmations.
+     * Deletes Redis hold keys after successful DB commit.
+     *
+     * @param holdId    returned from tryHold()
+     * @param paymentId Stripe/PayPal charge reference
+     * @return confirmed Booking
+     * @throws BookingConflictException if concurrent modification detected after retries
+     */
+    public Booking confirmBooking(String holdId, String paymentId) {
+        HoldRecord holdRecord = loadHoldRecord(holdId);
+        validateHoldNotExpired(holdRecord);
+
+        for (int attempt = 0; attempt &lt; MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                Booking confirmed = executeConfirmTransaction(holdRecord, paymentId);
+                cleanupHoldKeys(holdRecord);
+                return confirmed;
+            } catch (OptimisticLockException lockException) {
+                if (attempt == MAX_RETRY_ATTEMPTS - 1) {
+                    throw new BookingConflictException("Booking conflict after " + MAX_RETRY_ATTEMPTS + " retries");
+                }
+                sleepBriefly(50L * (attempt + 1));
+            }
+        }
+        throw new BookingConflictException("Booking failed");
+    }
+
+    private Booking executeConfirmTransaction(HoldRecord holdRecord, String paymentId) {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                // Step 1: Read current inventory with version for all nights in date range
-                List&lt;InventoryRow&gt; inventoryRows = readInventoryWithVersion(connection, roomId, checkIn, checkOut);
-                validateAvailability(inventoryRows);
+                List&lt;InventoryRow&gt; inventoryRows = readInventoryRows(
+                    connection, holdRecord.getRoomId(), holdRecord.getCheckIn(), holdRecord.getCheckOut());
 
-                // Step 2: Optimistic update — only succeeds if version unchanged
-                int updatedRowCount = updateInventoryWithVersionCheck(connection, inventoryRows);
-                if (updatedRowCount != inventoryRows.size()) {
+                validateAvailability(inventoryRows);
+                int updatedRows = applyOptimisticLockUpdate(connection, inventoryRows);
+
+                if (updatedRows != inventoryRows.size()) {
                     connection.rollback();
-                    throw new OptimisticLockException("Concurrent modification detected");
+                    throw new OptimisticLockException("Version mismatch on inventory update");
                 }
 
-                // Step 3: Create booking record
-                Booking booking = insertBooking(connection, roomId, userId, checkIn, checkOut);
+                Booking booking = insertConfirmedBooking(connection, holdRecord, paymentId);
                 connection.commit();
                 return booking;
 
@@ -280,32 +668,75 @@ public class BookingService {
                 throw exception;
             }
         } catch (SQLException sqlException) {
-            throw new RuntimeException("[BookingService.attemptBooking] DB error", sqlException);
+            throw new RuntimeException("[BookingService.confirmBooking] DB error", sqlException);
         }
     }
 
-    private int updateInventoryWithVersionCheck(Connection connection, List&lt;InventoryRow&gt; inventoryRows)
+    private int applyOptimisticLockUpdate(Connection connection, List&lt;InventoryRow&gt; rows)
             throws SQLException {
+        String sql = "UPDATE room_inventory " +
+                     "SET booked_count = booked_count + 1, version = version + 1 " +
+                     "WHERE room_id = ? AND date = ? AND version = ? AND booked_count &lt; total_count";
         int totalUpdated = 0;
-        String updateSql = "UPDATE room_inventory SET booked_count = booked_count + 1, version = version + 1 " +
-                           "WHERE room_id = ? AND date = ? AND version = ? AND booked_count &lt; total_count";
-
-        try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
-            for (InventoryRow row : inventoryRows) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (InventoryRow row : rows) {
                 statement.setObject(1, row.getRoomId());
                 statement.setDate(2, Date.valueOf(row.getDate()));
-                statement.setLong(3, row.getVersion()); // CAS: only update if version matches
+                statement.setLong(3, row.getVersion());
                 totalUpdated += statement.executeUpdate();
             }
         }
-        return totalUpdated; // If &lt; inventoryRows.size(), a version mismatch occurred
+        return totalUpdated;
     }
 
-    private void validateAvailability(List&lt;InventoryRow&gt; inventoryRows) {
-        for (InventoryRow row : inventoryRows) {
-            if (row.getBookedCount() &gt;= row.getTotalCount()) {
-                throw new RoomUnavailableException("Room fully booked on " + row.getDate());
-            }
+    // ── Phase 2b: RELEASE on expiry ──────────────────────────────────
+
+    /**
+     * Scheduled every 60 seconds. Finds bookings with status=ON_HOLD
+     * whose hold_expires_at has passed. Marks them EXPIRED.
+     * Redis TTL handles key cleanup automatically.
+     */
+    @Scheduled(fixedDelay = 60_000)
+    public void releaseExpiredHolds() {
+        List&lt;Booking&gt; expiredHolds = loadExpiredHolds();
+        for (Booking expiredHold : expiredHolds) {
+            markBookingExpired(expiredHold.getBookingId());
+            notificationService.sendHoldExpiredNotification(expiredHold.getUserId());
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    private String buildHoldKey(UUID roomId, LocalDate night) {
+        return HOLD_KEY_PREFIX + roomId + ":" + night;
+    }
+
+    private List&lt;LocalDate&gt; getAllNights(LocalDate checkIn, LocalDate checkOut) {
+        List&lt;LocalDate&gt; nights = new ArrayList&lt;&gt;();
+        LocalDate current = checkIn;
+        while (current.isBefore(checkOut)) {
+            nights.add(current);
+            current = current.plusDays(1);
+        }
+        return nights;
+    }
+
+    private void releaseHoldKeys(Jedis jedis, UUID roomId, List&lt;LocalDate&gt; nights) {
+        for (LocalDate night : nights) {
+            jedis.del(buildHoldKey(roomId, night));
+        }
+    }
+
+    private void cleanupHoldKeys(HoldRecord holdRecord) {
+        List&lt;LocalDate&gt; nights = getAllNights(holdRecord.getCheckIn(), holdRecord.getCheckOut());
+        try (Jedis jedis = jedisPool.getResource()) {
+            releaseHoldKeys(jedis, holdRecord.getRoomId(), nights);
+        }
+    }
+
+    private void validateHoldNotExpired(HoldRecord holdRecord) {
+        if (holdRecord.getHoldExpiresAt().isBefore(Instant.now())) {
+            throw new HoldExpiredException("Hold " + holdRecord.getHoldId() + " has expired");
         }
     }
 
@@ -316,9 +747,8 @@ public class BookingService {
             Thread.currentThread().interrupt();
         }
     }
-
-    // InventoryRow, Booking, BookingConflictException, OptimisticLockException,
-    // RoomUnavailableException are value objects / domain exceptions (not shown for brevity)
+    // readInventoryRows, persistHoldRecord, loadHoldRecord, loadExpiredHolds,
+    // markBookingExpired, insertConfirmedBooking — standard JDBC, omitted for brevity
 }</code></pre>
         </div>
       </section>
@@ -331,15 +761,16 @@ public class BookingService {
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Two users simultaneously try to book the last available room. With optimistic locking, what happens?" data-options='["Both bookings succeed because optimistic locking allows concurrent writes","Both bookings read the same version, both attempt UPDATE WHERE version=X. Only one UPDATE matches (version still X); the other gets 0 rows updated, detects the conflict, and retries — by which time booked_count >= total_count and the retry is rejected.","The database locks both rows until both transactions complete","The second request is queued and waits for the first to finish"]' data-correct="1" data-explanation="Optimistic locking uses the version number as a compare-and-swap: 'UPDATE … WHERE version = X' succeeds only if version is still X. Concurrent transactions race; one wins, one gets 0 updated rows and handles the conflict. No lock is held between read and write — this is why it scales better than pessimistic locking under low contention." style="display:none"></div>
-          <div data-question="Why is a pre-materialized room_inventory table preferred over computing availability by counting existing bookings?" data-options='["Counting bookings is not possible in SQL","Pre-materialized availability avoids an expensive COUNT/JOIN query across bookings on every search request. At 115 QPS, recomputing from bookings table would cause full table scans under load.","Pre-materialized tables provide stronger consistency than computed values","The bookings table doesn't store room type information"]' data-correct="1" data-explanation="Availability is read 100× more than written. Pre-materializing the booked_count means availability reads are a simple index lookup (room_id, date). Computing from bookings requires scanning potentially millions of rows per query. Materialization is a classic read-optimization pattern." style="display:none"></div>
-          <div data-question="Why authorize a credit card on booking rather than charging immediately?" data-options='["Authorization is required by Visa/Mastercard for online transactions","Authorization holds funds without charging. If the guest cancels, the hold releases automatically with no refund needed. This avoids charging-then-refunding friction and eliminates chargeback risk for cancellations.","Immediate charging is technically impossible through payment APIs","Authorization allows the hotel to set a higher price than initially shown"]' data-correct="1" data-explanation="The authorize-then-capture pattern is standard for travel and hospitality. Authorize = reserve funds (no money moves). Capture = charge (on check-in). Release = let the hold expire (on cancellation). This prevents: holding customer money for cancelled bookings, refund processing delays, and chargeback disputes for no-shows." style="display:none"></div>
-          <div data-question="Under a high-contention scenario (1,000 users trying to book the last room), what are the downsides of optimistic locking?" data-options='["Optimistic locking cannot handle more than 10 concurrent users","Under high contention, most transactions read an available room, then find the version has changed on update — causing cascading retries. With 1,000 concurrent requests, 999 will retry multiple times, creating significant DB load. Pessimistic locking or a Redis-based queue serializes access more efficiently in this scenario.","Optimistic locking requires more memory than pessimistic locking","The version number can overflow under high contention"]' data-correct="1" data-explanation="Optimistic locking shines at low contention (most bookings). At high contention, the retry-and-recheck loop amplifies DB load — each retry requires a read + attempted write. For extreme cases (flash sales), a Redis-based request queue (serialize first-come-first-served) or pessimistic locking is more appropriate." style="display:none"></div>
+          <div data-question="Two users simultaneously try to book the last available room for the same nights. With Redis SETNX hold, what happens?" data-options='["Both SETNX calls succeed because Redis is eventually consistent","Redis SETNX is atomic: only one SET NX call succeeds (returns OK). The other returns null — room is unavailable. The winner proceeds to payment; the loser gets instant rejection with no DB load.","Both users are queued and processed sequentially","Redis SETNX requires a Lua script for atomic multi-key operations"]' data-correct="1" data-explanation="SET NX (set if not exists) is atomic at the Redis command level — no Lua needed for single keys. Two concurrent SETNX for the same key: one gets OK (wins), one gets nil (loses). The loser gets an instant rejection without touching the database. This is why Redis SETNX outperforms pessimistic DB locking under high contention." style="display:none"></div>
+          <div data-question="A user holds a room for payment, then their browser tab closes. The room should become available again. How does the system handle this?" data-options='["The room is permanently lost until manual admin intervention","Redis SETNX keys have a 10-minute TTL — they expire automatically. The scheduled releaseExpiredHolds() job detects expired hold records in the DB and marks them EXPIRED. Both mechanisms ensure the room returns to available status within 10 minutes.","The user must explicitly cancel the hold within the app","A WebSocket connection monitors browser close events and releases immediately"]' data-correct="1" data-explanation="Two-layer expiry: (1) Redis TTL ensures hold keys auto-delete after 10 minutes. (2) A scheduled DB job finds hold records past their hold_expires_at and marks them EXPIRED. The double protection handles cases where Redis and DB might be briefly out of sync. Redis TTL is the primary mechanism; DB job is the authoritative fallback." style="display:none"></div>
+          <div data-question="Why is availability stored as a bitset (one bit per calendar day) rather than a row per room+date in PostgreSQL?" data-options='["PostgreSQL cannot store date ranges natively","A bitset enables O(1) range availability checks via bitwise AND. Checking 30-night availability = one AND operation across 30 bits. Row-per-date requires 30 reads or a range scan. A room's full year of availability fits in 365 bits (~46 bytes) — vs 365 rows.","Bitsets are only useful for rooms with more than 1000 bookings","PostgreSQL rows have a 8KB overhead that makes row-per-date impractical"]' data-correct="1" data-explanation="Bitwise AND is implemented in hardware — checking availability for a 30-night range is a single CPU instruction. Row-per-date requires a range scan or 30 point lookups. At 500K hotels × 100 rooms × 365 days = 18 billion rows in PostgreSQL vs a much smaller bitset store in Cassandra." style="display:none"></div>
+          <div data-question="A hotel room is 85% booked for a weekend. What dynamic price should the system return?" data-options='["Base price — dynamic pricing only applies to fully-booked rooms","1.8× base price — the 70-90% occupancy tier. Demand-based pricing: more booked = scarcer = higher price. This is the same model airlines use for seat pricing.","0.7× base price — high occupancy triggers last-minute discounts","Dynamic pricing is computed by the hotel directly, not the booking platform"]' data-correct="1" data-explanation="85% occupancy falls in the 70-90% tier → 1.8× multiplier. The demand curve: &lt;50% = base, 50-70% = 1.3×, 70-90% = 1.8×, 90%+ = 2.5×. Last-minute discount (0.7×) applies when occupancy is LOW and check-in is within 3 days — empty rooms are worse than discounted rooms. This is revenue management 101." style="display:none"></div>
+          <div data-question="Under a high-contention scenario (1,000 users trying to book the last room simultaneously), why is Redis SETNX better than PostgreSQL optimistic locking for the hold phase?" data-options='["PostgreSQL cannot handle 1,000 concurrent connections","Redis SETNX provides O(1) atomic rejection with no DB load: 999 users get nil instantly and are rejected before touching PostgreSQL. Optimistic locking requires each of those 999 to read DB state, attempt an UPDATE, get 0 rows, and retry — amplifying DB load 3-9× under retries.","Redis SETNX uses less memory than PostgreSQL row locks","Both approaches are equivalent under high contention"]' data-correct="1" data-explanation="Under 1,000 concurrent requests for 1 room: Redis SETNX = 1 successful write + 999 immediate rejections (no DB touched). PostgreSQL optimistic locking = 1,000 DB reads + 1,000 UPDATE attempts + 999 failures + potentially 999 × 3 retries = 4,000 DB operations. The Redis approach cuts DB load by ~99.9% for the hot path." style="display:none"></div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>
