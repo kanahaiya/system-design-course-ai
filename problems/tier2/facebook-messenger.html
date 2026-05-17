@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Facebook Messenger — RESHADED walkthrough covering WebSocket message delivery, group fan-out at 250 members, read receipts, Snowflake IDs, and Redis presence for MAANG interviews.">
+  <title>Design Facebook Messenger — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-fb-messenger" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=fb-messenger" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Real-time messaging</span>
+        </div>
+        <h1 class="module-header__title">Design Facebook Messenger</h1>
+        <p class="module-header__desc">Messenger = three distinct sub-problems: message delivery (WebSocket + durable store), group chat fan-out (N recipients in &lt;500ms), and presence (who's online right now). Each sub-problem has a different scale challenge and a different right answer.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, WhatsApp, Telegram, Signal</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">💬</span> 1B+ DAU, 40B messages/day</div>
+        </div>
+      </header>
+
+      <!-- Mental Model Box -->
+      <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-5);border-radius:var(--radius-md);margin-bottom:var(--space-6)">
+        <div style="font-weight:700;font-size:1.05rem;margin-bottom:var(--space-2)">🧠 The Mental Model: Three Sub-Problems</div>
+        <p style="margin:0;line-height:1.8">Messenger is actually <strong>three separate systems</strong> that share data. Most candidates try to solve it as one monolith and get lost. Decompose it explicitly:<br>
+        <strong>(1) Message Delivery:</strong> WebSocket + message store → how does a message get from A to B?<br>
+        <strong>(2) Group Fan-out:</strong> how do you push one message to 250 members in &lt;500ms?<br>
+        <strong>(3) Presence:</strong> how do you know who's online right now across 150M concurrent users?<br>
+        Each has a different scale challenge. Name the three sub-problems first, then solve each one. Interviewers love this structure.</p>
+      </div>
+
+      <!-- vs WhatsApp callout -->
+      <div class="insight-box" style="background:var(--color-warning-bg,#fffbeb);border-left:4px solid var(--color-warning,#f59e0b);padding:var(--space-5);border-radius:var(--radius-md);margin-bottom:var(--space-6)">
+        <div style="font-weight:700;margin-bottom:var(--space-2)">📌 Messenger vs WhatsApp — Key Differences</div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+          <thead><tr><th style="text-align:left;padding:var(--space-2);color:var(--color-text-secondary)">Feature</th><th style="text-align:left;padding:var(--space-2);color:var(--color-text-secondary)">Facebook Messenger</th><th style="text-align:left;padding:var(--space-2);color:var(--color-text-secondary)">WhatsApp</th></tr></thead>
+          <tbody>
+            <tr><td style="padding:var(--space-1) var(--space-2)">Group size</td><td style="padding:var(--space-1) var(--space-2)">Up to 250 members</td><td style="padding:var(--space-1) var(--space-2)">Up to 1024 members</td></tr>
+            <tr><td style="padding:var(--space-1) var(--space-2)">Read receipts</td><td style="padding:var(--space-1) var(--space-2)">"Seen by 43" (count shown)</td><td style="padding:var(--space-1) var(--space-2)">Double-tick, no count in groups</td></tr>
+            <tr><td style="padding:var(--space-1) var(--space-2)">Encryption</td><td style="padding:var(--space-1) var(--space-2)">Optional E2E (opt-in)</td><td style="padding:var(--space-1) var(--space-2)">Mandatory E2E for all messages</td></tr>
+            <tr><td style="padding:var(--space-1) var(--space-2)">Presence</td><td style="padding:var(--space-1) var(--space-2)">Online/Active status (prominent)</td><td style="padding:var(--space-1) var(--space-2)">Last seen only (user-controllable)</td></tr>
+            <tr><td style="padding:var(--space-1) var(--space-2)">Search</td><td style="padding:var(--space-1) var(--space-2)">Full-text search within conversations</td><td style="padding:var(--space-1) var(--space-2)">Basic local search only</td></tr>
+          </tbody>
+        </table>
+        <p style="margin:var(--space-2) 0 0;font-size:0.85rem;color:var(--color-text-secondary)">This page focuses on Messenger. The key differences: group read receipts, prominent presence, and optional E2E change the architecture significantly.</p>
+      </div>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><strong>1:1 messaging:</strong> send/receive text, images, video, GIFs, reactions</li>
+            <li><strong>Group messaging:</strong> up to 250 members, group admin controls</li>
+            <li><strong>Read receipts:</strong> "Seen by 43 people" on group messages</li>
+            <li><strong>Online presence:</strong> green dot showing who's online, last active time</li>
+            <li><strong>Message search:</strong> search within a conversation by keyword</li>
+            <li><strong>Message threading:</strong> reply to specific messages, create threads</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 1B+ daily active users, 150M concurrent users at peak, 40B messages/day</li>
+            <li><strong>Delivery latency:</strong> &lt;100ms for online recipients, best-effort push notification for offline</li>
+            <li><strong>Ordering:</strong> messages in a conversation must always appear in correct send order</li>
+            <li><strong>Group fan-out:</strong> message to 250-person group delivered to all online members in &lt;500ms</li>
+            <li><strong>Presence accuracy:</strong> online/offline status should update within 30 seconds of change</li>
+            <li><strong>Durability:</strong> 99.99% message delivery — no lost messages even during server failures</li>
+          </ul>
+          <div class="insight-box" style="background:var(--color-warning-bg,#fffbeb);border-left:4px solid var(--color-warning,#f59e0b);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4)">
+            <strong>⚡ Clarifying Questions to Ask</strong>
+            <ul style="margin:var(--space-2) 0 0">
+              <li>"Should messages be end-to-end encrypted?" → No (or optional) → simplifies architecture, allows server-side search</li>
+              <li>"What's the maximum group size?" → 250 → sizes your fan-out strategy (different from 10K-member broadcast groups)</li>
+              <li>"Do we need message search?" → Yes → requires Elasticsearch or similar; E2E encryption makes this impossible</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <table class="tradeoff-table">
+            <thead><tr><th>Metric</th><th>Calculation</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td>Messages per second</td><td>40B/day ÷ 86400s (peak 4×)</td><td><strong>~465K/sec (peak ~2M/sec)</strong></td></tr>
+              <tr><td>Message storage</td><td>465K msg/sec × 1KB avg</td><td><strong>~40TB/day new messages</strong></td></tr>
+              <tr><td>Group fan-out operations</td><td>465K group msg/sec × 249 recipients</td><td><strong>~116M fan-out ops/sec</strong></td></tr>
+              <tr><td>Presence heartbeats</td><td>150M concurrent × 1 heartbeat/20s</td><td><strong>~7.5M heartbeats/sec</strong></td></tr>
+              <tr><td>Read receipt writes</td><td>465K msg/sec × 250 readers avg</td><td><strong>~116M receipt writes/sec</strong></td></tr>
+              <tr><td>WebSocket servers</td><td>150M connections ÷ 50K per server</td><td><strong>~3,000 servers</strong></td></tr>
+              <tr><td>Media uploads</td><td>10% of messages × 465K/sec × 100KB avg</td><td><strong>~4.65 GB/sec to CDN/S3</strong></td></tr>
+            </tbody>
+          </table>
+          <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4)">
+            <strong>📌 The scary number:</strong> 116M fan-out operations per second. This is the number interviewers want to see you address. The answer: Kafka parallelism + targeted WebSocket routing. You don't need one central broker — you need many parallel fan-out workers, each responsible for a subset of conversations.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ── messages ─────────────────────────────────────────────────────────────
+// Cassandra: partitioned by (conversation_id, bucket_month)
+// High write throughput (40TB/day), time-range queries for conversation history.
+// Snowflake ID as PK: time-sortable, globally unique, no DB auto-increment needed.
+CREATE TABLE messages (
+    conversation_id  UUID,
+    bucket_month     TEXT,           -- partition key: "2024-01"
+    message_id       BIGINT,         -- Snowflake ID: sortable by time
+    sender_id        BIGINT,
+    content_type     TEXT,           -- TEXT | IMAGE | VIDEO | REACTION | THREAD
+    content          TEXT,
+    replied_to_id    BIGINT,         -- nullable — for threading
+    created_at       TIMESTAMP,
+    is_deleted       BOOLEAN,
+    PRIMARY KEY ((conversation_id, bucket_month), message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+
+// ── conversations ─────────────────────────────────────────────────────────
+// MySQL/Postgres: low volume, needs transactions (e.g., add/remove member)
+CREATE TABLE conversations (
+    conversation_id   UUID PRIMARY KEY,
+    type              ENUM('DIRECT', 'GROUP'),
+    name              VARCHAR(255),  -- nullable (1:1 has no name)
+    created_at        TIMESTAMP,
+    last_message_id   BIGINT,        -- for conversation list preview
+    last_activity_at  TIMESTAMP
+);
+
+// ── conversation_members ─────────────────────────────────────────────────
+// MySQL: low write volume, needs joins with conversations
+CREATE TABLE conversation_members (
+    conversation_id     UUID,
+    user_id             BIGINT,
+    joined_at           TIMESTAMP,
+    role                ENUM('ADMIN', 'MEMBER'),
+    last_read_message_id BIGINT,     -- critical: source of read receipts
+    PRIMARY KEY (conversation_id, user_id)
+);
+
+// ── message_receipts ──────────────────────────────────────────────────────
+// Cassandra: very high write throughput (1B users can read = 1B receipt writes)
+CREATE TABLE message_receipts (
+    message_id    BIGINT,
+    user_id       BIGINT,
+    delivered_at  TIMESTAMP,
+    read_at       TIMESTAMP,
+    PRIMARY KEY (message_id, user_id)
+);
+-- "Seen by N" = COUNT(*) WHERE message_id = ? AND read_at IS NOT NULL
+-- Optimization: also maintain seen_count COUNTER in messages table (see deep dive)
+
+// ── presence ─────────────────────────────────────────────────────────────
+// Redis: in-memory TTL-based. Key expires = user is offline.
+// SETEX presence:{user_id} 60 "ONLINE"
+// Client sends heartbeat every 20s → refreshes TTL → key survives
+// No heartbeat for 60s → key expires → user appears offline
+// GET presence:{user_id} → "ONLINE" (if key exists) | nil (offline)</code></pre>
+
+          <h3>Storage Choice Rationale</h3>
+          <table class="tradeoff-table">
+            <thead><tr><th>Table</th><th>Store</th><th>Why</th></tr></thead>
+            <tbody>
+              <tr><td>messages</td><td>Cassandra</td><td>40TB/day append-only writes; time-range queries by (conversation, date)</td></tr>
+              <tr><td>conversations + members</td><td>MySQL</td><td>Low volume, needs ACID transactions for group operations</td></tr>
+              <tr><td>message_receipts</td><td>Cassandra</td><td>High write throughput; partitioned by message_id for receipt lookups</td></tr>
+              <tr><td>presence</td><td>Redis</td><td>In-memory, TTL auto-expiry for heartbeat pattern; sub-ms read</td></tr>
+              <tr><td>WebSocket routing</td><td>Redis</td><td>user_id → ws_server_id mapping; O(1) lookup per message delivery</td></tr>
+              <tr><td>Media files</td><td>S3 + CDN</td><td>Blob storage + edge caching; pre-signed upload URLs bypass app servers</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <!-- SVG: 3 subsystems diagram -->
+          <h3>Three Subsystems Architecture</h3>
+          <div style="overflow-x:auto;margin-bottom:var(--space-5)">
+            <svg viewBox="0 0 860 420" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;display:block;margin:0 auto;font-family:Inter,sans-serif" role="img" aria-label="Facebook Messenger three subsystems: message delivery, read receipts, and presence">
+
+              <rect width="860" height="420" fill="#0f172a" rx="12"/>
+
+              <!-- Title -->
+              <text x="430" y="26" fill="#94a3b8" font-size="12" text-anchor="middle" font-weight="600">Facebook Messenger: Three Independent Subsystems</text>
+
+              <!-- ────────────────────────────────── SUBSYSTEM 1: MESSAGE DELIVERY -->
+              <rect x="14" y="38" width="830" height="106" rx="8" fill="#0d1f0d" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="24" y="57" fill="#86efac" font-size="10" font-weight="700">SUBSYSTEM 1 — MESSAGE DELIVERY</text>
+
+              <!-- Sender -->
+              <rect x="24" y="64" width="80" height="36" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="64" y="78" fill="#93c5fd" font-size="9" text-anchor="middle" font-weight="600">SENDER</text>
+              <text x="64" y="91" fill="#60a5fa" font-size="8" text-anchor="middle">WebSocket</text>
+              <!-- Arrow -->
+              <path d="M104 82 L124 82" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- Message Service -->
+              <rect x="124" y="64" width="100" height="36" rx="6" fill="#1a2a1a" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="174" y="79" fill="#86efac" font-size="9" text-anchor="middle" font-weight="600">MESSAGE</text>
+              <text x="174" y="92" fill="#4ade80" font-size="8" text-anchor="middle">SERVICE + Cassandra</text>
+              <!-- Arrow -->
+              <path d="M224 82 L244 82" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- Kafka -->
+              <rect x="244" y="64" width="80" height="36" rx="6" fill="#1a2a1a" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="284" y="79" fill="#86efac" font-size="9" text-anchor="middle" font-weight="600">KAFKA</text>
+              <text x="284" y="92" fill="#4ade80" font-size="8" text-anchor="middle">messages topic</text>
+              <!-- Arrow -->
+              <path d="M324 82 L344 82" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- Fan-out Service -->
+              <rect x="344" y="64" width="110" height="36" rx="6" fill="#2a1a10" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="399" y="79" fill="#fcd34d" font-size="9" text-anchor="middle" font-weight="600">FAN-OUT</text>
+              <text x="399" y="92" fill="#fbbf24" font-size="8" text-anchor="middle">SERVICE (parallel)</text>
+              <!-- Arrow online -->
+              <path d="M454 76 L484 66" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- Arrow offline -->
+              <path d="M454 88 L484 98" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- WS Servers -->
+              <rect x="484" y="56" width="100" height="24" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="534" y="66" fill="#93c5fd" font-size="9" text-anchor="middle" font-weight="600">WS SERVERS</text>
+              <text x="534" y="77" fill="#60a5fa" font-size="8" text-anchor="middle">3,000 × 50K conn</text>
+              <!-- APNS/FCM -->
+              <rect x="484" y="88" width="100" height="24" rx="6" fill="#2a1a2a" stroke="#a855f7" stroke-width="1.5"/>
+              <text x="534" y="98" fill="#d8b4fe" font-size="9" text-anchor="middle" font-weight="600">APNS / FCM</text>
+              <text x="534" y="109" fill="#c084fc" font-size="8" text-anchor="middle">offline push</text>
+              <!-- Arrow WS → Receivers -->
+              <path d="M584 68 L614 68" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <!-- Receivers -->
+              <rect x="614" y="56" width="80" height="24" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="654" y="66" fill="#93c5fd" font-size="9" text-anchor="middle" font-weight="600">RECIPIENTS</text>
+              <text x="654" y="77" fill="#60a5fa" font-size="8" text-anchor="middle">online users</text>
+              <!-- Redis routing -->
+              <rect x="700" y="64" width="96" height="36" rx="6" fill="#1a1010" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="748" y="79" fill="#fca5a5" font-size="9" text-anchor="middle" font-weight="600">REDIS</text>
+              <text x="748" y="92" fill="#f87171" font-size="8" text-anchor="middle">user_id → ws_server</text>
+              <!-- dashed line from fan-out to redis -->
+              <path d="M454 82 L700 82" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,2"/>
+              <text x="577" y="120" fill="#475569" font-size="8" text-anchor="middle">lookup which WS server hosts each recipient</text>
+
+              <!-- ────────────────────────────────── SUBSYSTEM 2: READ RECEIPTS -->
+              <rect x="14" y="158" width="830" height="100" rx="8" fill="#1a1000" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="24" y="177" fill="#fcd34d" font-size="10" font-weight="700">SUBSYSTEM 2 — READ RECEIPTS ("Seen by 43")</text>
+
+              <rect x="24" y="184" width="80" height="36" rx="6" fill="#2e1a00" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="64" y="198" fill="#fcd34d" font-size="9" text-anchor="middle" font-weight="600">READER</text>
+              <text x="64" y="211" fill="#fbbf24" font-size="8" text-anchor="middle">opens message</text>
+              <path d="M104 202 L124 202" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="124" y="184" width="100" height="36" rx="6" fill="#2e1a00" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="174" y="199" fill="#fcd34d" font-size="9" text-anchor="middle" font-weight="600">RECEIPT</text>
+              <text x="174" y="212" fill="#fbbf24" font-size="8" text-anchor="middle">SERVICE (async)</text>
+              <path d="M224 202 L244 202" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="244" y="184" width="110" height="36" rx="6" fill="#2e1a00" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="299" y="199" fill="#fcd34d" font-size="9" text-anchor="middle" font-weight="600">BATCH AGGREGATOR</text>
+              <text x="299" y="212" fill="#fbbf24" font-size="8" text-anchor="middle">every 5s: count reads</text>
+              <path d="M354 202 L374 202" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="374" y="184" width="100" height="36" rx="6" fill="#1a1010" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="424" y="199" fill="#fca5a5" font-size="9" text-anchor="middle" font-weight="600">Cassandra</text>
+              <text x="424" y="212" fill="#f87171" font-size="8" text-anchor="middle">message_receipts</text>
+              <path d="M474 202 L494 202" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="494" y="184" width="110" height="36" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="549" y="199" fill="#93c5fd" font-size="9" text-anchor="middle" font-weight="600">WS PUSH</text>
+              <text x="549" y="212" fill="#60a5fa" font-size="8" text-anchor="middle">to sender → "Seen by 43"</text>
+              <text x="310" y="248" fill="#78350f" font-size="8" text-anchor="middle">Batch every 5s — not per-read. Reduces 250 write spikes to one batched update per group message.</text>
+
+              <!-- ────────────────────────────────── SUBSYSTEM 3: PRESENCE -->
+              <rect x="14" y="272" width="830" height="100" rx="8" fill="#0d0d1a" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="24" y="291" fill="#a5b4fc" font-size="10" font-weight="700">SUBSYSTEM 3 — PRESENCE (who's online)</text>
+
+              <rect x="24" y="298" width="80" height="36" rx="6" fill="#1a1a2e" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="64" y="312" fill="#a5b4fc" font-size="9" text-anchor="middle" font-weight="600">CLIENT</text>
+              <text x="64" y="325" fill="#818cf8" font-size="8" text-anchor="middle">heartbeat / 20s</text>
+              <path d="M104 316 L124 316" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="124" y="298" width="110" height="36" rx="6" fill="#1a1a2e" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="179" y="312" fill="#a5b4fc" font-size="9" text-anchor="middle" font-weight="600">PRESENCE SERVICE</text>
+              <text x="179" y="325" fill="#818cf8" font-size="8" text-anchor="middle">SETEX user TTL=60s</text>
+              <path d="M234 316 L254 316" stroke="#475569" stroke-width="1.5" marker-end="url(#a1)"/>
+              <rect x="254" y="298" width="100" height="36" rx="6" fill="#1a1010" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="304" y="312" fill="#fca5a5" font-size="9" text-anchor="middle" font-weight="600">REDIS</text>
+              <text x="304" y="325" fill="#f87171" font-size="8" text-anchor="middle">TTL auto-expires</text>
+              <!-- Lazy pull arrow -->
+              <path d="M354 316 L374 316" stroke="#475569" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#a1)"/>
+              <rect x="374" y="298" width="120" height="36" rx="6" fill="#1a1a2e" stroke="#6366f1" stroke-width="1"/>
+              <text x="434" y="312" fill="#818cf8" font-size="9" text-anchor="middle" font-weight="600">LAZY PULL</text>
+              <text x="434" y="325" fill="#6366f1" font-size="8" text-anchor="middle">friend opens chat → check Redis</text>
+              <!-- No heartbeat -->
+              <rect x="620" y="298" width="120" height="36" rx="6" fill="#1a1010" stroke="#6b7280" stroke-width="1" stroke-dasharray="4,2"/>
+              <text x="680" y="312" fill="#9ca3af" font-size="9" text-anchor="middle">No heartbeat for 60s</text>
+              <text x="680" y="325" fill="#6b7280" font-size="8" text-anchor="middle">→ key expires → OFFLINE</text>
+              <text x="310" y="362" fill="#4f46e5" font-size="8" text-anchor="middle">No fan-out on status change. Friends pull presence lazily when they open a conversation. Avoids 150M × 500 friends = 75B push events.</text>
+
+              <!-- Arrow defs -->
+              <defs>
+                <marker id="a1" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0 0 L6 3 L0 6 z" fill="#475569"/>
+                </marker>
+              </defs>
+
+              <!-- Bottom label -->
+              <text x="430" y="408" fill="#475569" font-size="9" text-anchor="middle">3 subsystems share Cassandra (messages) and Redis (routing + presence). Each is independently scalable.</text>
+            </svg>
+          </div>
+
+          <h3>Group Fan-out Strategy</h3>
+          <table class="tradeoff-table">
+            <thead><tr><th>Group Size</th><th>Strategy</th><th>Reason</th></tr></thead>
+            <tbody>
+              <tr><td>1:1 (2 members)</td><td>Fan-out on write — push to both immediately</td><td>Trivial, always real-time</td></tr>
+              <tr><td>Small (2–50 members)</td><td>Fan-out on write — push to all online members immediately</td><td>Low recipient count, affordable</td></tr>
+              <tr><td>Large (50–250 members)</td><td>Hybrid — push to online members, batch-notify offline</td><td>250 × 465K group msg/sec still manageable via Kafka parallelism</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ── Send a message ────────────────────────────────────────────────────────
+POST /v1/conversations/{conversation_id}/messages
+Body: { "content_type": "TEXT", "content": "Hey, are we meeting tomorrow?",
+        "replied_to_message_id": null }
+Response 201: { "message_id": 1705312800000123456, "created_at": "2024-01-15T10:00:00Z" }
+// message_id is a Snowflake ID — time-sortable, globally unique
+
+// ── Load conversation history (cursor pagination) ─────────────────────────
+GET /v1/conversations/{conversation_id}/messages?before_message_id=1705312800000&amp;limit=50
+Response: { "messages": [...], "has_more": true, "oldest_message_id": "..." }
+// Cassandra query: WHERE conversation_id = ? AND message_id < ? ORDER BY message_id DESC LIMIT 50
+
+// ── Submit read receipt (async — returns 202 immediately) ─────────────────
+POST /v1/messages/{message_id}/receipts
+Body: { "read_at": "2024-01-15T10:01:30Z" }
+Response 202: {} (accepted, processed asynchronously)
+
+// ── Get receipt details (tap "Seen by 43") ────────────────────────────────
+GET /v1/messages/{message_id}/receipts
+Response: { "delivered_count": 248, "read_count": 43, "read_by": [{ "user_id": 12345, "read_at": "..." }] }
+// Two separate queries: seen_count counter (fast) + full receipt list (paginated)
+
+// ── Check user presence ────────────────────────────────────────────────────
+GET /v1/users/{user_id}/presence
+Response: { "status": "ONLINE", "last_active_at": "2024-01-15T10:00:55Z" }
+// Redis: GET presence:{user_id} → exists = ONLINE, nil = OFFLINE
+
+// ── WebSocket — persistent real-time connection ────────────────────────────
+WS  /v1/ws
+// Client → Server: { "type": "HEARTBEAT" } every 20s (keeps presence alive)
+// Client → Server: { "type": "READ", "message_id": 123, "read_at": "..." }
+// Server → Client: { "type": "NEW_MESSAGE", "message": {...} }
+// Server → Client: { "type": "RECEIPT_UPDATE", "message_id": 123, "seen_count": 43 }
+// Server → Client: { "type": "PRESENCE_CHANGE", "user_id": 456, "status": "OFFLINE" }</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deepdive-title">
+        <h2 class="content-section__title" id="deepdive-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">10–15 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Snowflake IDs — Why Database Auto-Increment Doesn't Work Here</h3>
+          <p>With 40B messages/day across many Cassandra nodes, a central auto-increment ID has a single point of failure and a write bottleneck. Snowflake IDs are distributed ID generation that gives you:</p>
+          <ul>
+            <li><strong>Global uniqueness:</strong> datacenter + machine bits prevent collision across all servers</li>
+            <li><strong>Time-sortable:</strong> 41-bit millisecond timestamp prefix → IDs sort naturally by time → <code>ORDER BY message_id</code> = correct message ordering</li>
+            <li><strong>No coordination needed:</strong> each server generates its own IDs without talking to a central service (epoch + machine_id makes them unique)</li>
+          </ul>
+
+          <h3>2. The Read Receipt Scale Problem</h3>
+          <p>Naive approach: when each of 250 members reads a message → INSERT into <code>message_receipts</code> → query <code>COUNT(*)</code> on every render. Problems:</p>
+          <ul>
+            <li>250 receipt writes per group message × 465K group msg/sec = 116M writes/sec to Cassandra</li>
+            <li>COUNT(*) query on every message render = thousands of Cassandra reads per second per active conversation</li>
+          </ul>
+          <p><strong>Solution — two-layer design:</strong></p>
+          <ol>
+            <li>Maintain <code>seen_count COUNTER</code> on the messages table. Atomically incremented per read. <code>SELECT seen_count</code> is a single column read — O(1).</li>
+            <li>Full receipt list (who exactly saw it) in separate <code>message_receipts</code> table. Only queried when user taps "Seen by 43".</li>
+            <li>Batch receipt writes: client sends <code>{ message_ids_read: [1,2,3,...] }</code> every 5 seconds, not on each individual read. Reduces write throughput 5×.</li>
+          </ol>
+
+          <h3>3. Presence — Why Not Push to All Friends?</h3>
+          <p>When a user comes online, why not push their "online" status to all 500 friends immediately? The math kills this:</p>
+          <pre><code class="language-java">// Naive push-to-all approach:
+// 150M users × avg 500 friends × 1 status change every 30 min
+// = 150M × 500 / 1800 = 41.7M push events per second
+// For a "nice-to-have" feature (green dot), this is unacceptable.
+
+// Solution: Lazy pull
+// Friends only check presence when they open a conversation.
+// GET presence:{user_id} from Redis → O(1), sub-ms.
+// If 5M users are actively chatting, they each make maybe 10 presence
+// checks per minute = 50M Redis reads/minute = trivially small.
+// Redis can handle 1M+ reads/sec on a single node.</code></pre>
+
+          <h3>4. Message Search with Elasticsearch</h3>
+          <p>Full-text search in Cassandra is not possible — it's a columnar store, not an inverted index. Architecture:</p>
+          <ul>
+            <li>Messages written to Cassandra → change data capture → Debezium streams inserts to Kafka → Elasticsearch consumer indexes each message with <code>conversation_id</code> as a filter field</li>
+            <li>Search query: <code>GET /search?q=birthday party&amp;conversation_id=xxx</code> → Elasticsearch full-text search filtered by <code>conversation_id</code></li>
+            <li><strong>Privacy:</strong> Elasticsearch access is authenticated and checked against <code>conversation_members</code> — you can only search conversations you're in</li>
+            <li><strong>E2E encrypted messages:</strong> cannot be indexed or searched server-side. Search is disabled for encrypted conversations (WhatsApp limitation)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">⚠️</span>E — Evaluate<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Failure Modes &amp; Mitigations</h3>
+          <ul>
+            <li><strong>Hot Cassandra partition:</strong> One very active group (250 members, high-frequency) generates many messages in one month → hot (conversation_id, bucket_month) partition. Mitigation: smaller time buckets (weekly instead of monthly) for active conversations; monitor partition size and alert.</li>
+            <li><strong>WebSocket server goes down:</strong> 50K connections drop. Users reconnect within seconds (client retry logic). The message_id of their last received message is stored client-side. On reconnect, they fetch missed messages via REST pagination: <code>GET /messages?after_message_id={last_id}</code>. Durability guaranteed — messages are in Cassandra.</li>
+            <li><strong>Fan-out worker bottleneck:</strong> One conversation (250 members all online) sends 100 messages/second = 25K fan-out ops/sec for one conversation. Kafka partitioning by <code>conversation_id</code> means one partition handles this. Mitigation: partition key = <code>hash(conversation_id) % num_partitions</code> with num_partitions &gt; max_workers to allow scaling.</li>
+            <li><strong>Presence false-positive:</strong> A user's phone loses network silently (no disconnect event). The Redis TTL of 60s means they appear online for up to 60s after going offline. Mitigation: on WebSocket disconnect event, proactively delete the Redis key (but rely on TTL as safety net for silent disconnects).</li>
+            <li><strong>Race condition in seen_count:</strong> 250 users read simultaneously → 250 concurrent increments. Mitigation: Cassandra counters are CRDTs — designed for concurrent increment, eventually consistent. Slight undercount during high concurrency is acceptable (counter will converge).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title"><span class="content-section__title-icon">✅</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-5);border-radius:var(--radius-md)">
+            <strong>📣 Your Closing Statement (memorize this structure):</strong>
+            <p style="margin:var(--space-3) 0 0;line-height:1.8"><strong>Facebook Messenger = 3 subsystems:</strong> (1) <strong>Message Delivery:</strong> Kafka-backed WebSocket fan-out, Cassandra for message storage (partitioned by conversation+month), Snowflake IDs for ordering. Write to Cassandra first (durability), then push — message is never lost. (2) <strong>Group Fan-out:</strong> push to online members immediately via parallel fan-out workers; batch read receipts (seen_count COUNTER for display + receipt table for detail, batched writes every 5s). (3) <strong>Presence:</strong> Redis TTL heartbeat (SETEX 60s), lazy pull by friends on conversation open — avoids 150M × 500 friends push storm. The hardest part is group fan-out at 250 members × 465K group msgs/sec = 116M fan-out ops/sec — Kafka parallelism + targeted WebSocket routing by (user_id → ws_server_id) in Redis makes this tractable.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs<span class="reshaded-step__letter">Key decisions</span></h2>
+        <div class="content-section__body">
+          <div style="overflow-x:auto">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner &amp; Why</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Message storage</strong></td>
+                  <td>MySQL (relational, joins)</td>
+                  <td>Cassandra (wide column, time-series)</td>
+                  <td>✅ <strong>Cassandra</strong> — 40TB/day write throughput; time-range queries (load last 50 messages) are natural</td>
+                </tr>
+                <tr>
+                  <td><strong>Message ordering</strong></td>
+                  <td>DB auto-increment ID (single bottleneck)</td>
+                  <td>Snowflake ID (distributed, time-sortable)</td>
+                  <td>✅ <strong>Snowflake</strong> — no single point of failure, globally unique, natural sort order by time</td>
+                </tr>
+                <tr>
+                  <td><strong>Read receipts display</strong></td>
+                  <td>COUNT(*) on receipts table per render</td>
+                  <td>Dedicated seen_count COUNTER column</td>
+                  <td>✅ <strong>Counter</strong> — O(1) read for display; full list only on demand (tap to see who)</td>
+                </tr>
+                <tr>
+                  <td><strong>Read receipt writes</strong></td>
+                  <td>Write on each individual read event</td>
+                  <td>Batch every 5 seconds from client</td>
+                  <td>✅ <strong>Batched</strong> — 5× write reduction; 100ms delivery latency acceptable for "seen" acknowledgement</td>
+                </tr>
+                <tr>
+                  <td><strong>Presence updates</strong></td>
+                  <td>Push status to all friends on change</td>
+                  <td>Lazy pull when friend opens conversation</td>
+                  <td>✅ <strong>Lazy</strong> — avoids 41M push events/sec; Redis read is sub-ms, friend gets fresh status anyway</td>
+                </tr>
+                <tr>
+                  <td><strong>Group fan-out strategy</strong></td>
+                  <td>Fan-out on write (always push to all)</td>
+                  <td>Hybrid: push online, pull offline</td>
+                  <td>✅ <strong>Hybrid</strong> — offline users don't need realtime; reduces unnecessary work; Kafka handles the online path</td>
+                </tr>
+                <tr>
+                  <td><strong>Message search</strong></td>
+                  <td>Cassandra ALLOW FILTERING (no index)</td>
+                  <td>Elasticsearch with conversation_id filter</td>
+                  <td>✅ <strong>Elasticsearch</strong> — inverted index purpose-built for text search; Cassandra cannot do full-text</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * SnowflakeIdGenerator — distributed time-sortable unique ID generator.
+ *
+ * Bit layout of the 64-bit long:
+ *   [63]     sign bit — always 0 (positive)
+ *   [62–22]  41 bits — milliseconds since custom epoch (2021-01-01)
+ *   [21–17]   5 bits — datacenter ID (0–31)
+ *   [16–12]   5 bits — machine ID (0–31)
+ *   [11–0]   12 bits — sequence number per millisecond (0–4095)
+ *
+ * Why this layout?
+ * - 41-bit timestamp = ~69 years of IDs before overflow
+ * - 5+5 bits for datacenter+machine = 1024 unique generators
+ * - 12-bit sequence = 4096 IDs per millisecond per machine = 4M/sec max
+ * - Total: 32 × 32 × 4096 = ~4.3B IDs/millisecond system-wide
+ *
+ * The ID naturally sorts by time because the timestamp occupies the
+ * most significant bits. ORDER BY message_id = ORDER BY created_at.
+ */
+public class SnowflakeIdGenerator {
+    private static final long EPOCH_MS = 1609459200000L; // 2021-01-01 00:00:00 UTC
+
+    private static final long DATACENTER_ID_BITS = 5L;
+    private static final long MACHINE_ID_BITS    = 5L;
+    private static final long SEQUENCE_BITS      = 12L;
+
+    private static final long MAX_DATACENTER_ID = (1L &lt;&lt; DATACENTER_ID_BITS) - 1; // 31
+    private static final long MAX_MACHINE_ID    = (1L &lt;&lt; MACHINE_ID_BITS) - 1;    // 31
+    private static final long SEQUENCE_MASK     = (1L &lt;&lt; SEQUENCE_BITS) - 1;      // 4095
+
+    private static final long MACHINE_SHIFT    = SEQUENCE_BITS;
+    private static final long DATACENTER_SHIFT = SEQUENCE_BITS + MACHINE_ID_BITS;
+    private static final long TIMESTAMP_SHIFT  = SEQUENCE_BITS + MACHINE_ID_BITS + DATACENTER_ID_BITS;
+
+    private final long datacenterId;
+    private final long machineId;
+    private long lastTimestampMs = -1L;
+    private long sequence        = 0L;
+
+    public SnowflakeIdGenerator(long datacenterId, long machineId) {
+        if (datacenterId &gt; MAX_DATACENTER_ID || datacenterId &lt; 0) {
+            throw new IllegalArgumentException("datacenterId must be 0–31, got: " + datacenterId);
+        }
+        if (machineId &gt; MAX_MACHINE_ID || machineId &lt; 0) {
+            throw new IllegalArgumentException("machineId must be 0–31, got: " + machineId);
+        }
+        this.datacenterId = datacenterId;
+        this.machineId    = machineId;
+    }
+
+    /**
+     * Generates the next Snowflake ID.
+     * Synchronized to prevent race conditions within one JVM instance.
+     * At peak (4096 IDs/ms), spins until next millisecond — brief and bounded.
+     */
+    public synchronized long nextId() {
+        long currentMs = System.currentTimeMillis();
+
+        if (currentMs == lastTimestampMs) {
+            sequence = (sequence + 1) & SEQUENCE_MASK;
+            if (sequence == 0L) {
+                // All 4096 sequence slots used this millisecond — wait for next
+                currentMs = waitForNextMillisecond(lastTimestampMs);
+            }
+        } else {
+            sequence = 0L; // new millisecond — reset sequence
+        }
+
+        if (currentMs &lt; lastTimestampMs) {
+            // Clock moved backwards (NTP adjustment) — throw rather than generate duplicate
+            throw new IllegalStateException(
+                "Clock moved backwards. Refusing to generate ID for " +
+                (lastTimestampMs - currentMs) + " ms."
+            );
+        }
+
+        lastTimestampMs = currentMs;
+
+        return ((currentMs - EPOCH_MS) &lt;&lt; TIMESTAMP_SHIFT)
+             | (datacenterId &lt;&lt; DATACENTER_SHIFT)
+             | (machineId    &lt;&lt; MACHINE_SHIFT)
+             | sequence;
+    }
+
+    private long waitForNextMillisecond(long lastMs) {
+        long currentMs = System.currentTimeMillis();
+        while (currentMs &lt;= lastMs) {
+            currentMs = System.currentTimeMillis();
+        }
+        return currentMs;
+    }
+}
+
+/**
+ * PresenceService — Redis TTL-based online/offline tracking.
+ *
+ * Protocol:
+ *   - Client sends WebSocket HEARTBEAT every 20 seconds
+ *   - Server calls refreshPresence(userId) → SETEX key 60 seconds
+ *   - If no heartbeat for 60s, key expires → user is OFFLINE
+ *   - On explicit disconnect: delete key immediately for faster offline detection
+ *
+ * Why TTL=60, heartbeat=20?
+ *   - 20s heartbeat interval gives 3 missed heartbeats before TTL expires
+ *   - Tolerates brief network interruptions (elevator, tunnel) without false offline
+ *   - 60s is the max time a friend appears "online" after actual disconnect
+ *   - Most messaging apps: Slack 30s, WhatsApp 30s, Messenger ~60s
+ */
+public class PresenceService {
+    private static final int PRESENCE_TTL_SECONDS   = 60;
+    private static final String PRESENCE_KEY_PREFIX = "presence:";
+
+    private final JedisPool jedisPool;
+
+    public PresenceService(JedisPool jedisPool) {
+        this.jedisPool = jedisPool;
+    }
+
+    /**
+     * Called on each HEARTBEAT WebSocket message from the client.
+     * Refreshes (or creates) the presence key with a fresh 60-second TTL.
+     */
+    public void refreshPresence(long userId) {
+        String key = buildPresenceKey(userId);
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.setex(key, PRESENCE_TTL_SECONDS, "ONLINE");
+        }
+    }
+
+    /**
+     * Called on explicit WebSocket disconnect event.
+     * Deletes key immediately — friend sees OFFLINE without waiting for TTL.
+     * TTL expiry remains as a safety net for silent disconnects.
+     */
+    public void markOffline(long userId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.del(buildPresenceKey(userId));
+        }
+    }
+
+    /**
+     * Returns the presence status for a user.
+     * Called lazily when a friend opens a conversation (NOT proactively pushed).
+     * O(1) Redis GET — sub-millisecond.
+     *
+     * @return ONLINE if key exists, OFFLINE if key is absent or expired
+     */
+    public PresenceStatus getPresence(long userId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            String status = jedis.get(buildPresenceKey(userId));
+            return status != null ? PresenceStatus.ONLINE : PresenceStatus.OFFLINE;
+        }
+    }
+
+    /**
+     * Bulk presence check for all members of a group conversation.
+     * Used by the fan-out worker to decide: WebSocket push vs APNS/FCM.
+     * Uses Redis MGET for O(1) network round-trip regardless of group size.
+     */
+    public Map&lt;Long, PresenceStatus&gt; getBulkPresence(List&lt;Long&gt; userIds) {
+        String[] keys = userIds.stream()
+            .map(this::buildPresenceKey)
+            .toArray(String[]::new);
+
+        Map&lt;Long, PresenceStatus&gt; result = new HashMap&lt;&gt;();
+        try (Jedis jedis = jedisPool.getResource()) {
+            List&lt;String&gt; values = jedis.mget(keys);
+            for (int i = 0; i &lt; userIds.size(); i++) {
+                result.put(userIds.get(i),
+                    values.get(i) != null ? PresenceStatus.ONLINE : PresenceStatus.OFFLINE);
+            }
+        }
+        return result;
+    }
+
+    private String buildPresenceKey(long userId) {
+        return PRESENCE_KEY_PREFIX + userId;
+    }
+
+    public enum PresenceStatus { ONLINE, OFFLINE }
+}
+
+/**
+ * MessageFanoutService — delivers a message to all members of a conversation.
+ *
+ * Flow:
+ *   1. Load conversation members from MySQL (cached in local memory, TTL 5min)
+ *   2. Bulk-check presence for all members via Redis MGET (one round-trip)
+ *   3. For ONLINE members: look up their WS server from Redis, push message
+ *   4. For OFFLINE members: send APNS/FCM push notification
+ *
+ * The scary number: 250 members × 465K group msg/sec = 116M operations/sec.
+ * Solution: many parallel MessageFanoutService instances, each processing
+ * a subset of Kafka partitions. Kafka partition key = conversation_id → all
+ * messages for one conversation go to the same partition/consumer instance,
+ * guaranteeing ordering per conversation.
+ */
+public class MessageFanoutService {
+    private final PresenceService presenceService;
+    private final WebSocketRouter webSocketRouter;
+    private final PushNotificationService pushNotificationService;
+    private final ConversationMemberCache memberCache; // local cache, TTL 5min
+
+    public MessageFanoutService(
+        PresenceService presenceService,
+        WebSocketRouter webSocketRouter,
+        PushNotificationService pushNotificationService,
+        ConversationMemberCache memberCache
+    ) {
+        this.presenceService       = presenceService;
+        this.webSocketRouter       = webSocketRouter;
+        this.pushNotificationService = pushNotificationService;
+        this.memberCache           = memberCache;
+    }
+
+    /**
+     * Fans out a message to all conversation members.
+     * Called by Kafka consumer on each message event.
+     *
+     * @param message the persisted message to deliver
+     */
+    public void fanOut(Message message) {
+        List&lt;Long&gt; memberUserIds = memberCache.getMembers(message.getConversationId());
+
+        // Exclude the sender — they already see their own message optimistically
+        List&lt;Long&gt; recipientIds = memberUserIds.stream()
+            .filter(userId -&gt; userId != message.getSenderId())
+            .collect(java.util.stream.Collectors.toList());
+
+        // One Redis MGET round-trip for all presence checks (not N individual GETs)
+        Map&lt;Long, PresenceService.PresenceStatus&gt; presenceMap =
+            presenceService.getBulkPresence(recipientIds);
+
+        for (long recipientId : recipientIds) {
+            if (presenceMap.get(recipientId) == PresenceService.PresenceStatus.ONLINE) {
+                // Real-time delivery via WebSocket
+                webSocketRouter.pushMessageToUser(recipientId, message);
+            } else {
+                // Offline — send push notification to wake the app
+                pushNotificationService.sendPushNotification(recipientId, message);
+            }
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-fb-messenger-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+
+          <div data-question="Facebook Messenger has 250 members in a group. When User A sends a message, how many fan-out operations are required, and what system handles this at scale?" data-options='["1 operation — broadcast via multicast to all 250 simultaneously","249 individual push operations — one per recipient. At 465K group messages per second times 249 recipients = 115M fan-out operations per second. Kafka handles this: message published once to Kafka, fan-out workers consume in parallel and push to each recipient WebSocket server. WebSocket servers know which of their 50K connections belong to group members.","250 database writes — one per member to track delivery","No fan-out needed — members pull messages by polling the server every few seconds"]' data-correct="1" data-explanation="Fan-out is inherently N operations for N recipients — you cannot avoid the work, only parallelize it. The key is Kafka as the fan-out layer: Message Service writes once to Kafka, fan-out workers consume and push in parallel across many servers. Each WebSocket server only receives pushes for users it is hosting. At 115M fan-out ops/second, you need roughly 1,000 fan-out workers in parallel. This is the central scaling challenge of group messaging and is why it is always discussed in interviews." style="display:none"></div>
+
+          <div data-question="How does Facebook Messenger display 'Seen by 43 people' for a group message without making 43 individual DB queries?" data-options='["Store a JSON array of all user IDs who have seen the message — parse the length on render","Maintain a seen_count COUNTER column on the messages table (atomically incremented when each member reads) alongside a message_receipts table for the detailed list. Displaying Seen by 43 reads one counter field — O(1). Tapping it to see WHO saw it fetches the receipts list separately. Two different queries for two different UX needs.","Recalculate the count from the message_receipts table on every page render using COUNT(*)","Only show Seen or Not Seen as a binary — no exact count"]' data-correct="1" data-explanation="The two-query design matches the UX: 99% of users see the count (43), 1% tap to see the full list. The counter is a single integer read — O(1). The receipts list is a separate expensive query only executed on demand. Incrementing the counter uses a Cassandra COUNTER type which handles concurrent increments as a CRDT — designed for this exact pattern. The NOT EXISTS check (to prevent double-counting) is handled by making the receipt write idempotent using message_id + user_id as the composite primary key." style="display:none"></div>
+
+          <div data-question="Messenger uses Redis with TTL-based presence: SETEX presence:{user_id} 60 ONLINE. A user phone loses internet for exactly 45 seconds, then reconnects. What does another user see during those 45 seconds?" data-options='["The user appears offline immediately when internet drops, since the heartbeat stops","The user appears ONLINE for up to 60 seconds (the Redis TTL). Since the last heartbeat was under 60 seconds ago, the Redis key has not expired. When the phone reconnects within 60 seconds, a new heartbeat refreshes the key, and the user appears continuously online. The brief network blip is invisible to other users by design.","The user status switches rapidly between online and offline during the 45 seconds","Redis immediately detects the TCP connection drop and sets the key to OFFLINE"]' data-correct="1" data-explanation="The 60-second TTL is specifically designed to absorb brief network interruptions — elevator, tunnel, brief WiFi drop. From other users perspective, the person remains online for up to 60 seconds after their last heartbeat. If reconnect happens within that window, it is seamless. This is the standard tradeoff: slower offline detection (60s) vs resilience to transient disconnects. WhatsApp uses roughly 30 seconds, Slack uses roughly 30 seconds, most messaging apps are in the 30 to 120 second range." style="display:none"></div>
+
+          <div data-question="A user sends a message to a 250-person group while 180 members are online and 70 are offline. How does message delivery differ for online vs offline members?" data-options='["All 250 members receive the message identically via the same delivery path","Online members (180): Fan-out worker looks up each members WebSocket server in Redis → pushes message frame directly. Message appears in chat in under 100ms. Offline members (70): APNS or FCM push notification sent to their registered device token. When they open the app, their client connects WebSocket and fetches missed messages using cursor pagination (messages since last_read_message_id). The message is durably stored in Cassandra, so it is never lost.","Only online members receive the message — offline members miss it entirely","Use a single message queue per user — both online and offline members read from their personal queue"]' data-correct="1" data-explanation="Online vs offline delivery is a fundamentally different code path. Online: real-time WebSocket push in under 100ms. Offline: best-effort push notification which may be delayed by APNS or FCM and may not wake the app. The critical guarantee: message is written to Cassandra BEFORE either delivery path executes. Cassandra is the source of truth. Even if WebSocket push fails, the online user can pull on reconnect. Even if push notification fails, the message is waiting in Cassandra when the offline user opens the app. Delivery is guaranteed by durable storage, not by the push mechanism." style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="google-docs.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Google Docs →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="trending-topics.html" class="btn btn--outline">← Trending Topics</a>
+        <a href="google-docs.html" class="btn btn--primary">Next: Google Docs →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

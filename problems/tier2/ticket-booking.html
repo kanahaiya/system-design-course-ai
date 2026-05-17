@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Ticket Booking System like BookMyShow or Ticketmaster — RESHADED walkthrough covering seat locking, Redis SETNX, two-phase reservation, WebSocket seat maps, and double-booking prevention for MAANG interviews.">
+  <title>Design Ticket Booking System — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-ticket-booking" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=ticket-booking" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Inventory Contention</span>
+        </div>
+        <h1 class="module-header__title">Design Ticket Booking System</h1>
+        <p class="module-header__desc">The real problem isn't booking tickets — it's selling the last seat to exactly ONE person when 10,000 people click Buy simultaneously. Inventory contention at flash-sale scale.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> BookMyShow, Ticketmaster, Amazon, Airbnb</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎟️</span> Concurrency / flash-sale</div>
+        </div>
+      </header>
+
+      <!-- MENTAL MODEL -->
+      <div class="insight-box" style="margin-bottom:var(--space-6)">
+        <div class="insight-box__title">🧠 The One Mental Model That Wins This Interview</div>
+        <p><strong>Ticket booking = the INVENTORY CONTENTION problem.</strong> Every other piece of the system (event catalog, user accounts, payment, email) is standard CRUD you've built a dozen times. The interview is really asking: <em>how do you sell the last seat to exactly ONE person when 10,000 people click Buy simultaneously?</em></p>
+        <p style="margin-top:var(--space-3)">Think of it like a parking garage with one space left. 10,000 cars pull up at once. Your system is the attendant. You need to let exactly one car in and turn away the other 9,999 — instantly, without confusion, and without accidentally letting two cars into the same space.</p>
+        <p style="margin-top:var(--space-3)"><strong>The answer:</strong> Two-phase reservation — Redis SETNX as fast rejection layer (turns away 9,950 cars in microseconds before they even reach the DB), then a DB write for the ~50 that pass. Seats hold 3 states: <code>AVAILABLE → RESERVED (10-min TTL) → BOOKED</code>.</p>
+      </div>
+
+      <!-- REQUIREMENTS -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Browse events (movies, concerts, sports) with available seats and pricing tiers</li>
+            <li>Select seats from a visual seat map showing real-time availability</li>
+            <li>Reserve seats for a <strong>10-minute checkout window</strong> (soft lock — no payment yet)</li>
+            <li>Complete payment within the window → confirm booking → send QR code ticket via email</li>
+            <li>Cancel booking (up to 24 hours before event) → immediately release seats back to AVAILABLE</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Zero double-booking:</strong> Each physical seat sold to exactly one person — the primary correctness constraint</li>
+            <li><strong>Scale:</strong> 5M DAU; 500K concurrent users during flash events (Taylor Swift on-sale)</li>
+            <li><strong>Reservation TTL:</strong> Seats auto-release after exactly 10 minutes if checkout not completed</li>
+            <li><strong>Latency:</strong> Seat map &lt;1s; seat selection confirmation &lt;500ms</li>
+            <li><strong>Availability:</strong> 99.99% — booking service never goes down mid-sale</li>
+            <li><strong>Real-time seat map:</strong> When User A grabs seat 15A, User B sees it gray out within ~500ms</li>
+          </ul>
+          <div class="insight-box" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">🎯 What to Clarify in the Interview</div>
+            <ul style="margin:0">
+              <li><strong>Seat map granularity:</strong> Individual seats (concerts) or sections (standing areas)? — affects locking strategy</li>
+              <li><strong>Group booking atomicity:</strong> If user selects 4 seats, must all 4 succeed together? Yes — partial booking is worse UX than rejection.</li>
+              <li><strong>Flash sale fairness:</strong> First-come-first-served or virtual waiting room? Matters for extremely high-demand events.</li>
+              <li><strong>Payment retry:</strong> If payment fails, release reservation immediately or wait for TTL?</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ESTIMATION -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Event scale:</strong> 100K active events; 50K seats per large venue = 5 billion seat records total</li>
+            <li><strong>Peak load (Taylor Swift on-sale):</strong> 1M users simultaneously trying to book → ~1M reservation requests/minute at peak</li>
+            <li><strong>Seat write throughput:</strong> During booking rush, every selection triggers a status write — 1M writes/min = ~17K writes/sec. Postgres handles ~5K TPS comfortably; Redis handles 1M+ ops/sec. This is why Redis is the front-line filter.</li>
+            <li><strong>Seat map reads:</strong> 1M users viewing seat map simultaneously → millions of reads/sec. Must be served from Redis cache, never from DB.</li>
+            <li><strong>Reservation records:</strong> At any moment, at most 500K active reservations (one per seat being held). Tiny dataset.</li>
+            <li><strong>Booking storage:</strong> 50M bookings/year × 2KB = 100GB/year. Trivially managed in Postgres.</li>
+            <li><strong>Kafka throughput:</strong> Every seat status change → 1 event. Peak: 17K events/sec, well within Kafka's 1M+/sec capacity.</li>
+          </ul>
+          <p><strong>Key insight from estimation:</strong> The DB cannot handle 1M concurrent writes. Redis can. The architecture follows from this math — Redis as a fast filter, DB as a durable store.</p>
+        </div>
+      </section>
+
+      <!-- SCHEMA -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">-- Core tables (PostgreSQL)
+
+events (
+  event_id      UUID PRIMARY KEY,
+  title         VARCHAR(255),
+  venue_id      UUID REFERENCES venues(venue_id),
+  event_at      TIMESTAMP WITH TIME ZONE,
+  total_seats   INT,
+  available_seats INT,           -- denormalized counter for fast reads
+  status        VARCHAR(20) CHECK (status IN ('UPCOMING','ON_SALE','SOLD_OUT','CANCELLED'))
+)
+
+venues (
+  venue_id      UUID PRIMARY KEY,
+  name          VARCHAR(255),
+  address       TEXT,
+  seat_map_config JSONB           -- describes rows, sections, seat positions for visual rendering
+)
+
+seats (
+  seat_id       UUID PRIMARY KEY,
+  event_id      UUID REFERENCES events(event_id),
+  section       VARCHAR(50),      -- e.g., "FLOOR", "SECTION_A", "VIP"
+  row           VARCHAR(10),      -- e.g., "A", "B", "15"
+  number        INT,              -- e.g., seat 15 in row A
+  category      VARCHAR(20) CHECK (category IN ('VIP','REGULAR','FLOOR')),
+  price         DECIMAL(10,2),
+  status        VARCHAR(20) CHECK (status IN ('AVAILABLE','RESERVED','BOOKED'))
+)
+-- Critical index: covers the seat map query (get all seats for an event with status)
+CREATE INDEX idx_seats_event_status ON seats(event_id, status);
+
+seat_reservations (
+  reservation_id  UUID PRIMARY KEY,
+  seat_id         UUID REFERENCES seats(seat_id),
+  user_id         UUID,
+  expires_at      TIMESTAMP WITH TIME ZONE,   -- NOW() + 10 minutes
+  payment_session_id VARCHAR(255)             -- idempotency key for payment
+)
+-- Index for the TTL sweeper job
+CREATE INDEX idx_reservations_expires ON seat_reservations(expires_at);
+
+bookings (
+  booking_id    UUID PRIMARY KEY,
+  user_id       UUID,
+  event_id      UUID REFERENCES events(event_id),
+  seat_ids      UUID[],           -- array of confirmed seat IDs
+  total_price   DECIMAL(10,2),
+  status        VARCHAR(20) CHECK (status IN ('CONFIRMED','CANCELLED')),
+  qr_code       TEXT,             -- base64-encoded QR image or secure URL
+  email_sent    BOOLEAN DEFAULT FALSE,  -- for idempotent retry of notifications
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+)</code></pre>
+          <div class="insight-box" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">💡 Why This Schema</div>
+            <p>The <code>status</code> field on <code>seats</code> is the critical state machine: <code>AVAILABLE → RESERVED → BOOKED</code>. The <code>seat_reservations</code> table is ephemeral — records only exist during the 10-minute window. The composite index on <code>(event_id, status)</code> makes the seat map query (get all seats for event X, show which are available) a fast index range scan instead of a full table scan.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- HIGH-LEVEL DESIGN -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>Three Critical Subsystems</h3>
+
+          <!-- SVG: Seat State Machine -->
+          <div style="background:var(--color-bg-secondary);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;overflow-x:auto">
+            <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;display:block;margin:0 auto" role="img" aria-label="Seat state machine diagram showing AVAILABLE, RESERVED, and BOOKED states">
+              <!-- Background -->
+              <rect width="760" height="320" fill="#0f172a" rx="12"/>
+
+              <!-- Title -->
+              <text x="380" y="30" text-anchor="middle" fill="#94a3b8" font-size="13" font-family="Inter,sans-serif">Seat State Machine — The Core of Double-Booking Prevention</text>
+
+              <!-- AVAILABLE state -->
+              <rect x="40" y="110" width="140" height="60" rx="10" fill="#166534" stroke="#22c55e" stroke-width="2"/>
+              <text x="110" y="136" text-anchor="middle" fill="#86efac" font-size="14" font-weight="600" font-family="Inter,sans-serif">AVAILABLE</text>
+              <text x="110" y="155" text-anchor="middle" fill="#4ade80" font-size="11" font-family="JetBrains Mono,monospace">status = AVAILABLE</text>
+
+              <!-- RESERVED state -->
+              <rect x="300" y="80" width="160" height="80" rx="10" fill="#713f12" stroke="#eab308" stroke-width="2"/>
+              <text x="380" y="108" text-anchor="middle" fill="#fde68a" font-size="14" font-weight="600" font-family="Inter,sans-serif">RESERVED</text>
+              <text x="380" y="128" text-anchor="middle" fill="#fcd34d" font-size="11" font-family="JetBrains Mono,monospace">status = RESERVED</text>
+              <text x="380" y="148" text-anchor="middle" fill="#fbbf24" font-size="10" font-family="Inter,sans-serif">TTL: 10 min</text>
+
+              <!-- BOOKED state -->
+              <rect x="570" y="110" width="140" height="60" rx="10" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+              <text x="640" y="136" text-anchor="middle" fill="#93c5fd" font-size="14" font-weight="600" font-family="Inter,sans-serif">BOOKED</text>
+              <text x="640" y="155" text-anchor="middle" fill="#60a5fa" font-size="11" font-family="JetBrains Mono,monospace">status = BOOKED</text>
+
+              <!-- Arrow: AVAILABLE → RESERVED -->
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/>
+                </marker>
+                <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#22c55e"/>
+                </marker>
+                <marker id="arrowhead-yellow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#eab308"/>
+                </marker>
+                <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+                </marker>
+                <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+                </marker>
+              </defs>
+
+              <!-- AVAILABLE → RESERVED (user selects) -->
+              <path d="M 180 130 L 300 115" stroke="#22c55e" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)"/>
+              <text x="230" y="110" text-anchor="middle" fill="#22c55e" font-size="10" font-family="Inter,sans-serif">User selects</text>
+              <text x="230" y="123" text-anchor="middle" fill="#22c55e" font-size="10" font-family="JetBrains Mono,monospace">SET NX + DB write</text>
+
+              <!-- RESERVED → BOOKED (payment success) -->
+              <path d="M 460 120 L 570 130" stroke="#3b82f6" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+              <text x="510" y="112" text-anchor="middle" fill="#3b82f6" font-size="10" font-family="Inter,sans-serif">Payment success</text>
+              <text x="510" y="125" text-anchor="middle" fill="#3b82f6" font-size="10" font-family="JetBrains Mono,monospace">DELETE reservation</text>
+
+              <!-- RESERVED → AVAILABLE (TTL expired or payment failed) -->
+              <path d="M 380 160 C 380 220 110 220 110 170" stroke="#ef4444" stroke-width="2" fill="none" marker-end="url(#arrowhead-red)"/>
+              <text x="245" y="242" text-anchor="middle" fill="#ef4444" font-size="10" font-family="Inter,sans-serif">TTL expired / payment failed</text>
+              <text x="245" y="255" text-anchor="middle" fill="#ef4444" font-size="10" font-family="JetBrains Mono,monospace">Quartz sweeper runs every 30s</text>
+
+              <!-- Conflict box: two users same seat -->
+              <rect x="40" y="270" width="680" height="38" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
+              <text x="380" y="286" text-anchor="middle" fill="#a5b4fc" font-size="11" font-family="Inter,sans-serif">Concurrency: User A and User B both click seat 15A simultaneously →</text>
+              <text x="380" y="300" text-anchor="middle" fill="#818cf8" font-size="11" font-family="Inter,sans-serif">Redis SETNX: one returns true (User A wins), one returns false (User B gets 409 Conflict instantly)</text>
+            </svg>
+          </div>
+
+          <h3>Subsystem 1 — Seat Map Service</h3>
+          <ul>
+            <li>Returns all seats for an event with current status (<code>AVAILABLE / RESERVED / BOOKED</code>)</li>
+            <li><strong>Redis Hash</strong> per event: <code>seats:{event_id}</code> → field per seat_id → value is status. Cache is served to all seat map requests; DB is never hit directly.</li>
+            <li><strong>WebSocket push:</strong> When any seat changes status, push <code>{seat_id, status}</code> to all users viewing that event's seat map. Users see seats gray out in real-time without polling.</li>
+            <li>Cache invalidated on every seat status change (reservation, payment, cancellation, TTL expiry)</li>
+          </ul>
+
+          <h3>Subsystem 2 — Reservation Service (the hard part)</h3>
+          <ul>
+            <li>User selects seats → Reservation Request arrives</li>
+            <li><strong>Phase 1 (Redis):</strong> For each selected seat_id, attempt <code>SET seat:{seat_id} {userId} NX PX 600000</code>. If ANY seat fails (returns nil), undo all successfully set keys and return 409.</li>
+            <li><strong>Phase 2 (DB):</strong> All Redis locks acquired → INSERT reservation record with <code>expires_at = NOW() + 10min</code>, UPDATE seat status to RESERVED.</li>
+            <li><strong>Atomicity for multi-seat:</strong> Acquire all Redis locks before writing to DB. Process seat_ids in sorted order (ascending) to prevent deadlocks.</li>
+            <li><strong>TTL Sweeper:</strong> Quartz job every 30 seconds: <code>DELETE FROM seat_reservations WHERE expires_at &lt; NOW()</code> → UPDATE released seats back to AVAILABLE → publish Kafka events.</li>
+            <li><strong>Seat status → Kafka</strong> topic <code>seat-status-changes</code> → fan-out to WebSocket servers → push to connected users.</li>
+          </ul>
+
+          <h3>Subsystem 3 — Payment &amp; Confirmation Service</h3>
+          <ul>
+            <li>User completes payment within 10-minute window via Stripe/Razorpay</li>
+            <li><strong>On success:</strong> UPDATE seat status → BOOKED, DELETE reservation record, INSERT booking, generate QR code, set <code>email_sent=false</code></li>
+            <li><strong>On failure:</strong> Release reservation immediately (don't wait for TTL — better UX for others)</li>
+            <li><strong>Idempotency:</strong> <code>payment_session_id</code> on reservation prevents double-charging if user submits payment form twice</li>
+            <li><strong>Outbox pattern:</strong> Email notification is a side effect. If email service crashes, <code>email_sent=false</code> records are retried by background job. Booking is durable; notification is eventually consistent.</li>
+          </ul>
+
+          <!-- SVG: SFU Architecture -->
+          <div style="background:var(--color-bg-secondary);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;overflow-x:auto">
+            <svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;display:block;margin:0 auto" role="img" aria-label="Full system architecture diagram for ticket booking">
+              <rect width="760" height="400" fill="#0f172a" rx="12"/>
+              <text x="380" y="28" text-anchor="middle" fill="#94a3b8" font-size="13" font-family="Inter,sans-serif">Ticket Booking — Full Architecture (Taylor Swift On-Sale)</text>
+
+              <!-- Clients -->
+              <rect x="20" y="55" width="100" height="40" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+              <text x="70" y="71" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="Inter,sans-serif">1M Users</text>
+              <text x="70" y="85" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter,sans-serif">clicking Buy</text>
+
+              <!-- API Gateway -->
+              <rect x="160" y="55" width="110" height="40" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="215" y="71" text-anchor="middle" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif">API Gateway</text>
+              <text x="215" y="85" text-anchor="middle" fill="#818cf8" font-size="9" font-family="Inter,sans-serif">Rate limit per user</text>
+
+              <!-- Reservation Service -->
+              <rect x="320" y="40" width="130" height="55" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+              <text x="385" y="58" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600" font-family="Inter,sans-serif">Reservation</text>
+              <text x="385" y="72" text-anchor="middle" fill="#60a5fa" font-size="10" font-family="Inter,sans-serif">Service</text>
+              <text x="385" y="86" text-anchor="middle" fill="#3b82f6" font-size="9" font-family="Inter,sans-serif">Phase 1 Redis, Phase 2 DB</text>
+
+              <!-- Redis Cluster -->
+              <rect x="490" y="40" width="110" height="55" rx="6" fill="#3b0764" stroke="#a855f7" stroke-width="2"/>
+              <text x="545" y="60" text-anchor="middle" fill="#d8b4fe" font-size="11" font-weight="600" font-family="Inter,sans-serif">Redis Cluster</text>
+              <text x="545" y="75" text-anchor="middle" fill="#c084fc" font-size="9" font-family="Inter,sans-serif">SETNX seat locks</text>
+              <text x="545" y="88" text-anchor="middle" fill="#c084fc" font-size="9" font-family="Inter,sans-serif">Seat map cache</text>
+
+              <!-- PostgreSQL -->
+              <rect x="630" y="40" width="110" height="55" rx="6" fill="#1a2a1a" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="685" y="60" text-anchor="middle" fill="#86efac" font-size="11" font-weight="600" font-family="Inter,sans-serif">PostgreSQL</text>
+              <text x="685" y="75" text-anchor="middle" fill="#4ade80" font-size="9" font-family="Inter,sans-serif">seats, reservations</text>
+              <text x="685" y="88" text-anchor="middle" fill="#4ade80" font-size="9" font-family="Inter,sans-serif">bookings (source of truth)</text>
+
+              <!-- Arrows: clients → gateway → reservation → redis → db -->
+              <line x1="120" y1="75" x2="160" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <line x1="270" y1="75" x2="320" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <line x1="450" y1="67" x2="490" y2="67" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <line x1="600" y1="67" x2="630" y2="67" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+              <!-- Stats boxes below arrows -->
+              <text x="140" y="108" text-anchor="middle" fill="#475569" font-size="9" font-family="Inter,sans-serif">1M req/s</text>
+              <text x="295" y="108" text-anchor="middle" fill="#6366f1" font-size="9" font-family="Inter,sans-serif">~1M/s (rate limited)</text>
+              <text x="470" y="108" text-anchor="middle" fill="#a855f7" font-size="9" font-family="Inter,sans-serif">1M SETNX/s</text>
+              <text x="615" y="108" text-anchor="middle" fill="#22c55e" font-size="9" font-family="Inter,sans-serif">~50K writes/s</text>
+
+              <!-- Filter label -->
+              <text x="545" y="125" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="600" font-family="Inter,sans-serif">⚡ Redis filters 95% of requests</text>
+              <text x="545" y="138" text-anchor="middle" fill="#78716c" font-size="9" font-family="Inter,sans-serif">950K users get instant 409 · Only 50K proceed to DB</text>
+
+              <!-- Kafka -->
+              <rect x="300" y="165" width="170" height="45" rx="6" fill="#1c1a11" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="385" y="183" text-anchor="middle" fill="#fde68a" font-size="11" font-weight="600" font-family="Inter,sans-serif">Kafka</text>
+              <text x="385" y="198" text-anchor="middle" fill="#fbbf24" font-size="9" font-family="Inter,sans-serif">topic: seat-status-changes</text>
+              <text x="385" y="210" text-anchor="middle" fill="#92400e" font-size="9" font-family="Inter,sans-serif">17K events/sec at peak</text>
+
+              <!-- Reservation → Kafka -->
+              <line x1="385" y1="95" x2="385" y2="165" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+              <text x="398" y="135" fill="#f59e0b" font-size="9" font-family="Inter,sans-serif">publish</text>
+
+              <!-- WebSocket Farm -->
+              <rect x="490" y="165" width="120" height="45" rx="6" fill="#1e293b" stroke="#0ea5e9" stroke-width="1.5"/>
+              <text x="550" y="183" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="600" font-family="Inter,sans-serif">WebSocket</text>
+              <text x="550" y="197" text-anchor="middle" fill="#38bdf8" font-size="10" font-family="Inter,sans-serif">Farm</text>
+              <text x="550" y="209" text-anchor="middle" fill="#0369a1" font-size="9" font-family="Inter,sans-serif">1 WS per connected user</text>
+
+              <!-- Kafka → WebSocket -->
+              <line x1="470" y1="187" x2="490" y2="187" stroke="#0ea5e9" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+              <!-- WebSocket → Users (fan-out) -->
+              <line x1="550" y1="210" x2="200" y2="300" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowhead)"/>
+              <text x="350" y="268" fill="#0ea5e9" font-size="9" font-family="Inter,sans-serif" text-anchor="middle">push seat status update to</text>
+              <text x="350" y="280" fill="#0ea5e9" font-size="9" font-family="Inter,sans-serif" text-anchor="middle">all users watching this event</text>
+
+              <!-- Payment Service -->
+              <rect x="20" y="165" width="130" height="45" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5"/>
+              <text x="85" y="183" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="600" font-family="Inter,sans-serif">Payment</text>
+              <text x="85" y="197" text-anchor="middle" fill="#34d399" font-size="10" font-family="Inter,sans-serif">Service</text>
+              <text x="85" y="209" text-anchor="middle" fill="#065f46" font-size="9" font-family="Inter,sans-serif">Stripe · Razorpay</text>
+
+              <!-- Quartz Sweeper -->
+              <rect x="160" y="245" width="150" height="45" rx="6" fill="#1a0f0f" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="235" y="263" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="600" font-family="Inter,sans-serif">Quartz Sweeper</text>
+              <text x="235" y="278" text-anchor="middle" fill="#f87171" font-size="9" font-family="Inter,sans-serif">every 30s: release expired</text>
+              <text x="235" y="290" text-anchor="middle" fill="#f87171" font-size="9" font-family="Inter,sans-serif">reservations → AVAILABLE</text>
+
+              <!-- Sweeper → DB -->
+              <line x1="310" y1="267" x2="630" y2="90" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrowhead)"/>
+
+              <!-- Email/QR Service -->
+              <rect x="490" y="245" width="120" height="45" rx="6" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5"/>
+              <text x="550" y="263" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600" font-family="Inter,sans-serif">Email / QR</text>
+              <text x="550" y="278" text-anchor="middle" fill="#a78bfa" font-size="10" font-family="Inter,sans-serif">Service</text>
+              <text x="550" y="290" text-anchor="middle" fill="#6d28d9" font-size="9" font-family="Inter,sans-serif">outbox pattern retry</text>
+
+              <!-- Legend -->
+              <rect x="20" y="345" width="720" height="40" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+              <text x="380" y="362" text-anchor="middle" fill="#64748b" font-size="10" font-family="Inter,sans-serif" font-weight="600">Read path: User → API Gateway → Redis (seat map cache) · Write path: User → API Gateway → Reservation Service → Redis SETNX → PostgreSQL → Kafka → WebSocket</text>
+              <text x="380" y="378" text-anchor="middle" fill="#475569" font-size="9" font-family="Inter,sans-serif">Redis absorbs 95% of peak load before it reaches the database</text>
+            </svg>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- APIS -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// GET /v1/events/{id}/seats
+// Returns all seats with current status — served from Redis cache
+Response: {
+  "event_id": "uuid",
+  "seats": [
+    { "seat_id": "uuid", "section": "FLOOR", "row": "A", "number": 15,
+      "category": "VIP", "price": 299.00, "status": "AVAILABLE" },
+    { "seat_id": "uuid", "section": "FLOOR", "row": "A", "number": 16,
+      "category": "VIP", "price": 299.00, "status": "RESERVED" }
+  ],
+  "cached_at": "2024-01-15T20:00:00Z"
+}
+
+// POST /v1/reservations — reserve seats (Phase 1: Redis lock + Phase 2: DB write)
+Request:  { "event_id": "uuid", "seat_ids": ["uuid-15A", "uuid-15B"], "payment_session_id": "stripe_pi_xxx" }
+Response 200: { "reservation_id": "uuid", "seat_ids": [...], "expires_at": "2024-01-15T20:10:00Z" }
+Response 409: { "error": "SEAT_NOT_AVAILABLE", "unavailable_seat_ids": ["uuid-15A"] }
+
+// DELETE /v1/reservations/{id} — explicit cancel (user changes mind before payment)
+Response: 204 No Content
+
+// POST /v1/bookings/confirm — complete purchase within 10-minute window
+Request:  { "reservation_id": "uuid", "payment_token": "stripe_payment_method_xxx" }
+Response 200: { "booking_id": "uuid", "qr_code": "https://cdn.example.com/qr/uuid.png", "confirmation_email": "user@example.com" }
+Response 408: { "error": "RESERVATION_EXPIRED", "message": "Your reservation expired. Please select seats again." }
+Response 402: { "error": "PAYMENT_FAILED", "message": "Payment declined. Seats released." }
+
+// GET /v1/bookings/{id} — retrieve confirmed booking + QR code
+Response: { "booking_id": "uuid", "event": {...}, "seats": [...], "qr_code": "...", "status": "CONFIRMED" }
+
+// WebSocket: /v1/events/{id}/seat-updates (client subscribes on seat map page open)
+// Server pushes: { "type": "SEAT_STATUS_CHANGE", "seat_id": "uuid", "status": "RESERVED" }
+// Client JS: update seat map visual without page refresh</code></pre>
+        </div>
+      </section>
+
+      <!-- DEEP DIVE -->
+      <section class="content-section" id="deepdive" aria-labelledby="deepdive-title">
+        <h2 class="content-section__title" id="deepdive-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">15 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Three Approaches to Preventing Double-Booking</h3>
+          <p>Know all three — interviewers ask you to compare them:</p>
+
+          <h4>Approach A — Pessimistic Locking (SELECT FOR UPDATE)</h4>
+          <pre><code class="language-java">/**
+ * Pessimistic locking: holds a DB row lock for the entire reservation transaction.
+ * Simple and ACID-correct, but creates DB lock contention under high load.
+ * Suitable for low-concurrency bookings; collapses under Taylor Swift load.
+ */
+@Transactional
+public Reservation reserveSeats(List&lt;UUID&gt; seatIds, UUID userId) {
+    // Sort by seat_id BEFORE locking — prevents deadlocks from opposite-order acquisition
+    // Without this: Thread A locks seatId=100 then tries 200; Thread B locks 200 then tries 100 → deadlock
+    List&lt;UUID&gt; sortedSeatIds = seatIds.stream()
+        .sorted()
+        .collect(Collectors.toList());
+
+    // SELECT FOR UPDATE: acquires row-level exclusive lock on each seat record
+    List&lt;Seat&gt; lockedSeats = seatRepository.findByIdsForUpdate(sortedSeatIds);
+
+    for (Seat seat : lockedSeats) {
+        if (seat.getStatus() != SeatStatus.AVAILABLE) {
+            // Lock released when transaction rolls back
+            throw new SeatNotAvailableException(seat.getSeatId());
+        }
+    }
+
+    lockedSeats.forEach(seat -&gt; seat.setStatus(SeatStatus.RESERVED));
+    seatRepository.saveAll(lockedSeats);
+
+    Instant expiresAt = Instant.now().plus(10, ChronoUnit.MINUTES);
+    return reservationRepository.save(
+        Reservation.of(sortedSeatIds, userId, expiresAt)
+    );
+    // Lock released on transaction commit
+}</code></pre>
+
+          <h4>Approach B — Optimistic Locking (version CAS)</h4>
+          <pre><code class="language-java">/**
+ * Optimistic locking: no lock held. Race is detected at write time via version field.
+ * Better than pessimistic for low contention (most bookings). Retry loop under high contention.
+ */
+public Reservation reserveSeatOptimistic(UUID seatId, UUID userId) {
+    for (int attempt = 0; attempt &lt; MAX_RETRY_ATTEMPTS; attempt++) {
+        // Read current version — no lock acquired
+        SeatWithVersion seat = seatRepository.findWithVersion(seatId);
+        if (seat.getStatus() != SeatStatus.AVAILABLE) {
+            throw new SeatNotAvailableException(seatId);
+        }
+
+        // UPDATE ... WHERE seat_id = ? AND status = 'AVAILABLE' AND version = ?
+        // This is the CAS (compare-and-swap): only succeeds if version unchanged
+        int updatedRows = seatRepository.updateStatusIfVersionMatches(
+            seatId,
+            SeatStatus.RESERVED,
+            SeatStatus.AVAILABLE,
+            seat.getVersion()          // if another thread changed this seat, version won't match → 0 rows
+        );
+
+        if (updatedRows == 1) {
+            // Won the race — create reservation record
+            Instant expiresAt = Instant.now().plus(10, ChronoUnit.MINUTES);
+            return reservationRepository.save(Reservation.of(seatId, userId, expiresAt));
+        }
+        // Lost the race → retry. Another thread changed the seat between our read and write.
+    }
+    throw new SeatNotAvailableException("Seat unavailable after " + MAX_RETRY_ATTEMPTS + " attempts");
+}</code></pre>
+
+          <h4>Approach C — Redis Atomic SETNX (Recommended for Flash Sales)</h4>
+          <pre><code class="language-java">/**
+ * Redis SETNX (SET if Not eXists): atomic, O(1), handles 1M+ ops/sec.
+ * Used as the fast-rejection layer before any DB interaction.
+ * The 10-minute TTL (PX 600000) is the safety net: if server crashes after
+ * Redis lock but before DB write, the key auto-expires and seat becomes available.
+ */
+public class ReservationService {
+
+    private static final Duration SEAT_HOLD_DURATION = Duration.ofMinutes(10);
+
+    private final StringRedisTemplate redisTemplate;
+    private final SeatRepository seatRepository;
+    private final ReservationRepository reservationRepository;
+    private final KafkaTemplate&lt;String, SeatStatusEvent&gt; kafkaTemplate;
+
+    /**
+     * Two-phase reservation: Redis SETNX (fast filter) + DB write (durable record).
+     *
+     * @param seatIds    seats to reserve — sorted ascending to prevent deadlock
+     * @param userId     user claiming these seats
+     * @param sessionId  idempotency key — prevents double-reservation on retry
+     * @returns          Reservation with expires_at
+     * @throws SeatNotAvailableException if any seat already locked
+     */
+    public Reservation reserveSeats(List&lt;UUID&gt; seatIds, UUID userId, String sessionId) {
+        // Sort seat IDs for consistent acquisition order (deadlock prevention)
+        List&lt;UUID&gt; sortedSeatIds = seatIds.stream().sorted().collect(Collectors.toList());
+        List&lt;String&gt; acquiredKeys = new ArrayList&lt;&gt;();
+
+        try {
+            // Phase 1: Acquire Redis locks for all seats atomically
+            for (UUID seatId : sortedSeatIds) {
+                String redisKey = "seat:" + seatId;
+                Boolean locked = redisTemplate.opsForValue()
+                    .setIfAbsent(redisKey, userId.toString(), SEAT_HOLD_DURATION);
+
+                if (!Boolean.TRUE.equals(locked)) {
+                    // Seat already locked by someone else — release all acquired keys and reject
+                    releaseRedisLocks(acquiredKeys);
+                    throw new SeatNotAvailableException(seatId);
+                }
+                acquiredKeys.add(redisKey);
+            }
+
+            // Phase 2: All seats locked in Redis — persist to DB as source of truth
+            return persistReservation(sortedSeatIds, userId, sessionId);
+
+        } catch (SeatNotAvailableException exception) {
+            // acquiredKeys already released inside the loop above
+            throw exception;
+        } catch (Exception databaseException) {
+            // DB write failed after Redis locks acquired — release Redis locks
+            releaseRedisLocks(acquiredKeys);
+            throw new RuntimeException("[ReservationService.reserveSeats] DB write failed", databaseException);
+        }
+    }
+
+    @Transactional
+    private Reservation persistReservation(List&lt;UUID&gt; seatIds, UUID userId, String sessionId) {
+        // Update seat status in DB (source of truth)
+        seatRepository.updateStatusBatch(seatIds, SeatStatus.RESERVED);
+
+        Instant expiresAt = Instant.now().plus(10, ChronoUnit.MINUTES);
+        Reservation reservation = reservationRepository.save(
+            Reservation.of(seatIds, userId, expiresAt, sessionId)
+        );
+
+        // Publish status change events for WebSocket fan-out
+        seatIds.forEach(seatId -&gt;
+            kafkaTemplate.send("seat-status-changes",
+                new SeatStatusEvent(seatId, SeatStatus.RESERVED, userId))
+        );
+
+        return reservation;
+    }
+
+    private void releaseRedisLocks(List&lt;String&gt; redisKeys) {
+        if (!redisKeys.isEmpty()) {
+            redisTemplate.delete(redisKeys);
+        }
+    }
+}</code></pre>
+
+          <h3>2. The TTL Sweeper — Releasing Expired Reservations</h3>
+          <pre><code class="language-java">/**
+ * Quartz job runs every 30 seconds to release expired reservations.
+ * Belt-and-suspenders: Redis TTL auto-expires the lock, but the DB record
+ * must also be cleaned up, and seats must be set back to AVAILABLE in DB.
+ */
+@Component
+public class ReservationExpiryJob {
+
+    private static final int SWEEP_INTERVAL_SECONDS = 30;
+
+    private final ReservationRepository reservationRepository;
+    private final SeatRepository seatRepository;
+    private final KafkaTemplate&lt;String, SeatStatusEvent&gt; kafkaTemplate;
+
+    @Scheduled(fixedDelay = SWEEP_INTERVAL_SECONDS * 1000)
+    public void releaseExpiredReservations() {
+        List&lt;Reservation&gt; expiredReservations =
+            reservationRepository.findAllExpiredBefore(Instant.now());
+
+        if (expiredReservations.isEmpty()) {
+            return;
+        }
+
+        List&lt;UUID&gt; expiredSeatIds = expiredReservations.stream()
+            .flatMap(reservation -&gt; reservation.getSeatIds().stream())
+            .collect(Collectors.toList());
+
+        // Bulk update: AVAILABLE seats back (idempotent — safe if run twice)
+        seatRepository.updateStatusBatch(expiredSeatIds, SeatStatus.AVAILABLE);
+        reservationRepository.deleteAll(expiredReservations);
+
+        // Notify WebSocket clients that these seats are available again
+        expiredSeatIds.forEach(seatId -&gt;
+            kafkaTemplate.send("seat-status-changes",
+                new SeatStatusEvent(seatId, SeatStatus.AVAILABLE, null))
+        );
+
+        // Lazy check: when reading seat status, also check if reservation is expired
+        // (belt-and-suspenders with the sweeper — seat is treated as AVAILABLE if
+        // reservation.expires_at < NOW(), even before sweeper runs)
+    }
+}</code></pre>
+
+          <h3>3. Real-Time Seat Map — WebSocket Fan-Out</h3>
+          <p>The real-time seat map update pipeline:</p>
+          <ol>
+            <li>Reservation Service publishes <code>SeatStatusEvent</code> to Kafka topic <code>seat-status-changes</code></li>
+            <li>Fan-out worker consumes Kafka events → publishes to Redis Pub/Sub channel <code>event:{event_id}:seats</code></li>
+            <li>WebSocket servers subscribe to Redis channel → receive published message</li>
+            <li>WebSocket server pushes <code>{seat_id, status}</code> to all connected users viewing that event</li>
+            <li>Client JavaScript receives WebSocket message → updates that seat's visual state (gray out if RESERVED)</li>
+          </ol>
+          <p>Why Kafka between Reservation Service and WebSocket farm? Decoupling. The Reservation Service doesn't know how many WebSocket servers exist. Kafka fan-out handles distribution. Also: Kafka buffers events during WebSocket server restart — no missed updates.</p>
+
+        </div>
+      </section>
+
+      <!-- EVALUATE -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Thundering herd (Taylor Swift):</strong> 1M users → Redis absorbs instantly (SET NX is O(1), Redis handles 1M+ ops/sec single-threaded). ~950K get immediate 409. Only ~50K (actual seat count) proceed to DB. DB sees 50K writes/sec instead of 1M — a 95% load reduction.</li>
+            <li><strong>Redis single point of failure:</strong> Run Redis Sentinel (3-node: 1 primary + 2 replicas + sentinel monitors) or Redis Cluster (shards across nodes). If Redis is down, fall back to DB pessimistic locking (slower but correct).</li>
+            <li><strong>Redis/DB divergence:</strong> Server crashes after Redis SETNX but before DB write → Redis TTL expires in 10 min, seat becomes available. No orphaned DB record. Self-healing.</li>
+            <li><strong>Fairness at extreme demand:</strong> For Beyoncé-tier demand, add a virtual waiting room. Users enter a queue instead of hitting the booking system directly. Queue position shown. Server admits N users per minute. Perceived fairness reduces rage; prevents thundering herd entirely at the source.</li>
+            <li><strong>Group booking partial failure:</strong> If user selects 4 seats and only 3 are available → reject entire request (all-or-nothing). Partial booking (3 of 4 seats) is a terrible UX — user is in the venue without their friend.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- DELIVER -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <div class="insight-box">
+            <div class="insight-box__title">🎤 Your 60-Second Closing Summary</div>
+            <p>"Ticket booking is the inventory contention problem. The entire design flows from one insight: the database cannot handle 1M concurrent writes, but Redis can. So we use a two-phase reservation: Redis SETNX as a fast rejection layer that turns away 95% of requests in microseconds, then a DB write for the confirmed reservations.</p>
+            <p style="margin-top:var(--space-3)">Seats have three states: AVAILABLE → RESERVED (10-minute TTL) → BOOKED. The TTL is not just convenience — it's a correctness guarantee. If anything goes wrong after the Redis lock, the key expires and the seat self-heals back to AVAILABLE.</p>
+            <p style="margin-top:var(--space-3)">For multi-seat atomicity: acquire all Redis locks before any DB write, sorted by seat_id to prevent deadlocks. Real-time seat map via WebSocket + Kafka fan-out. For extreme demand (Taylor Swift): virtual waiting room queues users before they ever hit the booking system."</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TRADE-OFFS -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner &amp; Why</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Seat locking strategy</strong></td>
+                  <td>Pessimistic (SELECT FOR UPDATE)</td>
+                  <td>Redis SETNX + DB optimistic write</td>
+                  <td><strong>Redis first</strong> — absorbs 95% at Redis layer before DB sees any load. Pessimistic holds DB row locks; collapses at 1M concurrent users.</td>
+                </tr>
+                <tr>
+                  <td><strong>Reservation TTL</strong></td>
+                  <td>Redis key TTL only (auto-expire → Keyspace Notification)</td>
+                  <td>Quartz sweeper job every 30s</td>
+                  <td><strong>Both</strong> — Redis TTL for fast lock release; Quartz for DB cleanup. Belt and suspenders.</td>
+                </tr>
+                <tr>
+                  <td><strong>Seat map delivery</strong></td>
+                  <td>REST polling every 5s</td>
+                  <td>WebSocket push on status change</td>
+                  <td><strong>WebSocket</strong> — 1M users polling every 5s = 200K req/s of unnecessary read traffic. WebSocket pushes only on change events.</td>
+                </tr>
+                <tr>
+                  <td><strong>Failed payment</strong></td>
+                  <td>Keep reservation until TTL expires</td>
+                  <td>Immediately release on payment failure</td>
+                  <td><strong>Immediate release</strong> — better availability for other buyers; better UX (they can retry with seats still visible).</td>
+                </tr>
+                <tr>
+                  <td><strong>Multi-seat atomicity</strong></td>
+                  <td>One seat at a time (sequential locks)</td>
+                  <td>All seats or none (atomic batch)</td>
+                  <td><strong>All-or-nothing</strong> — partial booking (3 of 4 seats in a group) is unusable. Batch lock in sorted order.</td>
+                </tr>
+                <tr>
+                  <td><strong>Flash sale queue</strong></td>
+                  <td>First-come-first-served, no queue</td>
+                  <td>Virtual waiting room</td>
+                  <td><strong>Waiting room for extreme demand</strong> — prevents thundering herd at the source; perceived fairness reduces user frustration.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- JAVA IMPLEMENTATION -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * @file BookingConfirmationService.java
+ * @description Handles payment processing and booking confirmation.
+ * Separates the idempotent booking record creation from the side-effect email dispatch.
+ *
+ * Key pattern: booking is ACID (seats + booking record updated atomically).
+ * Email is eventually consistent (retried until email_sent = true).
+ */
+@Service
+public class BookingConfirmationService {
+
+    private static final String LOG_PREFIX = "[BookingConfirmationService]";
+
+    private final ReservationRepository reservationRepository;
+    private final SeatRepository seatRepository;
+    private final BookingRepository bookingRepository;
+    private final PaymentGateway paymentGateway;
+    private final QrCodeGenerator qrCodeGenerator;
+    private final KafkaTemplate&lt;String, SeatStatusEvent&gt; kafkaTemplate;
+    private final StringRedisTemplate redisTemplate;
+
+    /**
+     * Confirms a booking: processes payment, atomically transitions seats to BOOKED,
+     * and creates the booking record. Email sending is a separate retryable step.
+     *
+     * @param reservationId  active reservation (must not be expired)
+     * @param paymentToken   Stripe payment method token
+     * @returns              confirmed Booking with QR code URL
+     * @throws ReservationExpiredException  if reservation TTL has elapsed
+     * @throws PaymentFailedException       if payment is declined
+     */
+    @Transactional
+    public Booking confirmBooking(UUID reservationId, String paymentToken) {
+        // Step 1: Validate reservation is not expired (lazy check — belt-and-suspenders with sweeper)
+        Reservation reservation = reservationRepository.findById(reservationId)
+            .orElseThrow(() -&gt; new ReservationNotFoundException(reservationId));
+
+        if (reservation.getExpiresAt().isBefore(Instant.now())) {
+            throw new ReservationExpiredException(reservationId);
+        }
+
+        // Step 2: Process payment via gateway
+        PaymentResult paymentResult = processPaymentSafely(
+            paymentToken,
+            reservation.getTotalPrice(),
+            reservation.getPaymentSessionId()  // idempotency key — safe to retry
+        );
+
+        if (!paymentResult.isSuccessful()) {
+            // Release reservation immediately — don't make other buyers wait for TTL
+            releaseReservationOnFailure(reservation);
+            throw new PaymentFailedException(paymentResult.getDeclineReason());
+        }
+
+        // Step 3: Transition seats from RESERVED → BOOKED (atomic with booking creation)
+        seatRepository.updateStatusBatch(reservation.getSeatIds(), SeatStatus.BOOKED);
+
+        // Step 4: Create durable booking record (email_sent=false — retried separately)
+        String qrCodeUrl = qrCodeGenerator.generate(reservationId);
+        Booking booking = bookingRepository.save(Booking.builder()
+            .bookingId(UUID.randomUUID())
+            .userId(reservation.getUserId())
+            .eventId(reservation.getEventId())
+            .seatIds(reservation.getSeatIds())
+            .totalPrice(reservation.getTotalPrice())
+            .status(BookingStatus.CONFIRMED)
+            .qrCodeUrl(qrCodeUrl)
+            .emailSent(false)    // outbox pattern: background job retries until true
+            .createdAt(Instant.now())
+            .build());
+
+        // Step 5: Remove reservation record (seat is now permanently BOOKED)
+        reservationRepository.delete(reservation);
+
+        // Step 6: Release Redis locks (seats are BOOKED, no longer need TTL guard)
+        releaseRedisSeatlocks(reservation.getSeatIds());
+
+        // Step 7: Publish BOOKED status events for WebSocket fan-out
+        reservation.getSeatIds().forEach(seatId -&gt;
+            kafkaTemplate.send("seat-status-changes",
+                new SeatStatusEvent(seatId, SeatStatus.BOOKED, reservation.getUserId()))
+        );
+
+        return booking;
+    }
+
+    /**
+     * Releases a reservation when payment fails.
+     * Sets seats back to AVAILABLE, deletes reservation record, clears Redis locks.
+     */
+    private void releaseReservationOnFailure(Reservation reservation) {
+        seatRepository.updateStatusBatch(reservation.getSeatIds(), SeatStatus.AVAILABLE);
+        reservationRepository.delete(reservation);
+        releaseRedisSeatlocks(reservation.getSeatIds());
+
+        reservation.getSeatIds().forEach(seatId -&gt;
+            kafkaTemplate.send("seat-status-changes",
+                new SeatStatusEvent(seatId, SeatStatus.AVAILABLE, null))
+        );
+    }
+
+    private PaymentResult processPaymentSafely(String paymentToken, BigDecimal amount, String idempotencyKey) {
+        try {
+            return paymentGateway.charge(paymentToken, amount, idempotencyKey);
+        } catch (PaymentGatewayException gatewayException) {
+            // Log full error internally — never expose internal details to user
+            log.error("{} Payment gateway error for idempotency key {}: {}",
+                LOG_PREFIX, idempotencyKey, gatewayException.getMessage());
+            return PaymentResult.failed("Payment service unavailable. Please try again.");
+        }
+    }
+
+    private void releaseRedisSeatlocks(List&lt;UUID&gt; seatIds) {
+        List&lt;String&gt; redisKeys = seatIds.stream()
+            .map(seatId -&gt; "seat:" + seatId)
+            .collect(Collectors.toList());
+        redisTemplate.delete(redisKeys);
+    }
+}
+
+/**
+ * EmailRetryJob — retries email delivery for bookings where email_sent=false.
+ * Runs every 60 seconds. Safe to run concurrently (UPDATE ... WHERE email_sent=false).
+ */
+@Component
+public class BookingEmailRetryJob {
+
+    private static final int RETRY_BATCH_SIZE = 100;
+    private static final int RETRY_INTERVAL_SECONDS = 60;
+
+    private final BookingRepository bookingRepository;
+    private final EmailService emailService;
+
+    @Scheduled(fixedDelay = RETRY_INTERVAL_SECONDS * 1000)
+    public void retryPendingEmailNotifications() {
+        List&lt;Booking&gt; pendingEmailBookings =
+            bookingRepository.findByEmailSentFalseOrderByCreatedAtAsc(
+                PageRequest.of(0, RETRY_BATCH_SIZE)
+            );
+
+        for (Booking booking : pendingEmailBookings) {
+            try {
+                emailService.sendBookingConfirmation(booking);
+                // Only mark sent after successful delivery
+                bookingRepository.markEmailSent(booking.getBookingId());
+            } catch (EmailDeliveryException emailException) {
+                // Log and continue — will retry next iteration
+                log.warn("{} Email retry failed for booking {}: {}",
+                    "[BookingEmailRetryJob]", booking.getBookingId(), emailException.getMessage());
+            }
+        }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- QUIZ -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+
+        <div class="quiz" data-quiz-id="p-ticket-booking-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+
+          <div data-question="You use Redis SETNX to reserve seat 15A. Your API server sets the key with a 10-minute TTL (PX 600000), then crashes before writing the reservation to PostgreSQL. What happens?" data-options='["The seat is permanently stuck as reserved — the Redis key exists with no expiry","The Redis key auto-expires after 10 minutes (PX 600000ms TTL). The seat becomes bookable again. No orphaned DB record exists because the DB write never happened. The system self-heals without any manual intervention.","The database detects the missing write and automatically creates the reservation record","The user who set the Redis key owns the seat forever and can complete the booking after a server restart"]' data-correct="1" data-explanation="The PX 600000 TTL is the correctness guarantee, not just a convenience. Even if the server crashes between the Redis lock and the DB write, the key expires in 10 minutes and the seat self-heals to AVAILABLE. The DB never had a reservation record, so there is nothing to clean up on the DB side. This is why the TTL is mandatory in the SETNX command — it converts a potential permanent stuck-state into a temporary one." style="display:none"></div>
+
+          <div data-question="A user selects seats 15A and 15B. You need to acquire Redis locks for both. Why must you acquire locks in sorted order by seat_id?" data-options='["Sorted order enables better Redis memory layout and faster key lookup","To prevent deadlocks: if User A locks seat_id=100 then tries seat_id=200, while User B locks seat_id=200 then tries seat_id=100, both are blocked waiting for each other — a circular deadlock. By always locking in ascending seat_id order, both users try seat_id=100 first. One wins and proceeds to lock 200. The other waits. No circular dependency, no deadlock.","Sorted order is required by the Redis SETNX specification for batch operations","To ensure seats appear in the correct order on the printed ticket"]' data-correct="1" data-explanation="Deadlocks arise from circular lock dependencies. The classic fix is global ordering: if every thread acquires locks in the same order, no cycle can form. Thread A holds 100, waiting for 200. Thread B also needs 100 first — it waits for A to finish with 100, then gets both 100 and 200 in sequence. No cycle means no deadlock. This principle applies everywhere resources are locked in batches: database rows, Redis keys, file handles." style="display:none"></div>
+
+          <div data-question="During a Taylor Swift ticket sale, 1 million users click Buy simultaneously for 50,000 available seats. How does your two-phase Redis + DB design prevent the database from collapsing?" data-options='["You need to scale the database to 1,000 nodes to handle 1 million concurrent write connections","Redis SETNX is the filter: 1 million requests hit Redis (O(1), sub-millisecond per operation). Only ~50,000 succeed — one per available seat. The remaining ~950,000 get an immediate SET NX failure (nil response) and receive a 409 Conflict response without ever touching the database. The DB handles 50,000 writes instead of 1,000,000 — a 95% load reduction. Redis can sustain 1M+ ops/sec on a single node.","Use eventual consistency — show all seats as available and resolve conflicts asynchronously after purchase","Queue all 1 million requests through a single worker to serialize access and prevent DB overload"]' data-correct="1" data-explanation="This is the 'Redis as fast rejection layer' pattern. Redis is single-threaded with no lock contention; SETNX is O(1) and handles over 1 million operations per second. It rejects 950,000 users in microseconds. The 50,000 who pass the Redis filter represent actual available seats — only they proceed to the DB write path. This pattern is used in flash sales, inventory management, and any high-contention reservation scenario where raw DB throughput is the bottleneck." style="display:none"></div>
+
+          <div data-question="A user reserves 4 seats and completes payment successfully. Your confirmation service crashes after charging the user but before sending the confirmation email. The payment is captured. How do you handle this?" data-options='["Automatically refund the payment and ask the user to book again — data integrity requires a clean retry","The booking record was committed to the database before the email service was called (seats=BOOKED, booking record created). Email sending is tracked with email_sent=false in the booking record. A background job (runs every 60 seconds) retries all bookings where email_sent=false. The user receives their email when the service recovers — no data loss, no double charge, no manual support needed.","The user must contact customer support to verify their booking and get a resent confirmation","Roll back the entire transaction including the Stripe charge since the flow did not complete fully"]' data-correct="1" data-explanation="This is the outbox pattern: separate durable state (booking record) from side effects (email, notifications). The booking is committed atomically to the DB — money and seat assignment are permanent. Email is a best-effort side effect tracked with a boolean flag. A background job retries idempotently until email_sent flips to true. This is exactly how Stripe, Booking.com, and every payment system handles partial failures: the money and core data are ACID; notifications are eventually consistent." style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="zoom.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="hotel-booking.html" class="btn btn--outline">← Hotel Booking</a>
+        <a href="zoom.html" class="btn btn--primary">Next: Design Zoom →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

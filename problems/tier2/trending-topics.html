@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Trending Topics system like Twitter/X — RESHADED walkthrough covering Count-Min Sketch, sliding windows, stream processing with Flink, and Redis Sorted Sets for MAANG interviews.">
+  <title>Design Trending Topics — MAANG System Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema / Data Structures</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-trending-topics" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=trending-topics" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Stream processing</span>
+        </div>
+        <h1 class="module-header__title">Design Trending Topics</h1>
+        <p class="module-header__desc">Trending = count events in a sliding time window, rank by frequency, serve fast. The entire problem is about doing this at massive scale without exact counting. The answer is always approximation algorithms.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Twitter/X, Google, TikTok, Meta, LinkedIn</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📊</span> 40K hashtag events/sec</div>
+        </div>
+      </header>
+
+      <!-- Mental Model Box -->
+      <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-5);border-radius:var(--radius-md);margin-bottom:var(--space-6)">
+        <div style="font-weight:700;font-size:1.05rem;margin-bottom:var(--space-2)">🧠 The Mental Model</div>
+        <p style="margin:0;font-size:1rem;line-height:1.6"><strong>Trending = count events in a sliding time window, rank by frequency, serve fast.</strong> The entire problem is about doing this at massive scale without exact counting. A HashMap of all 1B hashtags needs 50GB per node — impossible. The answer is always <strong>approximation algorithms</strong>: Count-Min Sketch gives you near-exact counts in 32KB. The interviewer expects you to know this trade-off exists and name it.</p>
+      </div>
+
+      <!-- ANALOGY -->
+      <div class="insight-box" style="background:var(--color-success-bg,#f0fdf4);border-left:4px solid var(--color-success,#22c55e);padding:var(--space-5);border-radius:var(--radius-md);margin-bottom:var(--space-6)">
+        <div style="font-weight:700;margin-bottom:var(--space-2)">☕ Real-World Analogy: The Coffee Shop Tally</div>
+        <p style="margin:0;line-height:1.6">Imagine a busy coffee shop with 1,000 drink orders per hour. You want to know the top-3 most popular drinks right now. You could write every single order in a notebook (exact counting — uses lots of paper). Or you could use a <em>tally sheet with 20 boxes</em>: each drink gets hashed to a box, and you increment that box. Multiple drinks share boxes (hash collision), so box counts are <em>slightly inflated</em> — but the minimum across 4 independent tally sheets gives you a very accurate estimate with tiny paper. That's Count-Min Sketch. For "what's trending?", 98% accuracy in 32KB beats 100% accuracy in 50GB.</p>
+      </div>
+
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><strong>Real-time trending topics:</strong> Top-10 hashtags/topics trending RIGHT NOW (last 1 hour, sliding window)</li>
+            <li><strong>Geo-trending:</strong> Trending in NYC, in India, globally — separate ranked lists per region</li>
+            <li><strong>Time windows:</strong> Trending in last 1 hour, last 24 hours, this week</li>
+            <li><strong>Hashtag search:</strong> "Is #SystemDesign trending?" → current rank + trend line (graph of count over last 24h)</li>
+            <li><strong>Trend velocity:</strong> A topic trending UP fast is ranked higher than one slowly declining</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 500M tweets/day = 6,000 tweets/second; 5–10 hashtags per tweet = 30–60K hashtag events/second</li>
+            <li><strong>Freshness:</strong> Trending topics must reflect activity from the last 5 minutes (not 30 minutes stale)</li>
+            <li><strong>Approximate is OK:</strong> Top-10 can miss the 11th most trending topic — that's acceptable</li>
+            <li><strong>Query latency:</strong> &lt; 50ms for "what's trending right now"</li>
+            <li><strong>NOT required:</strong> Exact counts (approximation acceptable — this is a key clarifying question)</li>
+          </ul>
+          <div class="insight-box" style="background:var(--color-warning-bg,#fffbeb);border-left:4px solid var(--color-warning,#f59e0b);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4)">
+            <strong>⚡ Clarifying Questions to Ask</strong>
+            <ul style="margin-top:var(--space-2);margin-bottom:0">
+              <li>"Can the top-10 be approximate, or do we need exactly the top-10?" → Approximate is fine → <strong>opens the door to Count-Min Sketch</strong></li>
+              <li>"How fresh does trending need to be?" → 5 minutes → stream processing (not batch)</li>
+              <li>"Do we need geo-specific trending?" → Yes → multiply data structures by 200 regions (still tiny)</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <table class="tradeoff-table">
+            <thead><tr><th>Metric</th><th>Calculation</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td>Hashtag events/sec</td><td>500M tweets/day × 7 avg hashtags / 86400s</td><td><strong>~40,000/sec</strong></td></tr>
+              <tr><td>Exact HashMap memory</td><td>1B unique hashtags × 50 bytes avg key+value</td><td><strong>50 GB — too much</strong></td></tr>
+              <tr><td>Count-Min Sketch (d=4, w=2048)</td><td>4 × 2048 counters × 4 bytes</td><td><strong>32 KB — 100,000× reduction</strong></td></tr>
+              <tr><td>Top-K heap (K=1000)</td><td>1000 entries × 8 bytes</td><td><strong>8 KB</strong></td></tr>
+              <tr><td>Geo: 200 regions</td><td>200 × (32KB sketch + 8KB heap)</td><td><strong>8 MB total — trivial</strong></td></tr>
+              <tr><td>Sliding window: 60 buckets</td><td>60 × 32KB per sketch</td><td><strong>~2 MB per region</strong></td></tr>
+              <tr><td>Redis Sorted Sets (serving)</td><td>10K unique hashtags × 200 regions × 100 bytes</td><td><strong>200 MB Redis</strong></td></tr>
+            </tbody>
+          </table>
+          <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4)">
+            <strong>📌 Key Insight:</strong> The entire "what's trending" data structure (for ALL regions, ALL time windows, sliding window with 60 buckets) fits in a few hundred MB. This is why streaming approximation + Redis is the right answer — not Cassandra queries on every request.
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema / Data Structures<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <p>This problem is unusual: the <strong>in-memory data structures are the schema</strong>. The persistent DB is just for audit/archival. Start with the in-memory structures.</p>
+
+          <h3>In-Memory Data Structures (the real schema)</h3>
+
+          <h4>1. Count-Min Sketch — Approximate Frequency Counting</h4>
+          <p>A 2D array: <code>int[d][w]</code> where d = hash functions (rows), w = counters per row (columns).</p>
+          <ul>
+            <li><strong>increment(hashtag):</strong> For each of d rows, compute hash(hashtag) % w → increment that cell</li>
+            <li><strong>estimate(hashtag):</strong> For each of d rows, read the cell → return the MINIMUM across all rows (minimum = least overestimated)</li>
+            <li><strong>Why minimum?</strong> Each cell may count multiple hashtags (hash collisions → overestimation). The true count is always ≤ any cell's value. Minimum is closest to truth.</li>
+            <li><strong>Space:</strong> d=4, w=2048 → 32KB total (vs 50GB for exact HashMap)</li>
+          </ul>
+
+          <h4>2. Min-Heap of Size K (Top-K Candidates)</h4>
+          <p><code>PriorityQueue&lt;(count, hashtag)&gt;</code> of size K. When a hashtag's estimated count exceeds the heap's minimum → replace minimum with this hashtag. Maintains top-K in O(log K) per update.</p>
+
+          <h4>3. Circular Bucket Buffer (Sliding Window)</h4>
+          <p>60 one-minute buckets (for 1-hour window). Each bucket is an independent Count-Min Sketch. On each new minute: oldest bucket is zeroed out and becomes the current bucket. Current window count = sum across all 60 buckets.</p>
+
+          <h3>Persistent Storage (Trend Graphs + Archival)</h3>
+          <pre><code class="language-java">// Cassandra — write-heavy, time-series queries
+// hashtag_counts: (hashtag TEXT, time_bucket TIMESTAMP, count BIGINT, region VARCHAR)
+// Partition key: hashtag | Clustering: time_bucket DESC
+// Supports: "give me count of #SystemDesign for last 24h" for sparkline charts
+
+// Redis — serving layer
+// ZADD trending:global:1h &lt;score&gt; &lt;hashtag&gt;       → Sorted Set per region/window
+// ZADD trending:US:1h &lt;score&gt; &lt;hashtag&gt;
+// ZADD trending:velocity:global &lt;velocity&gt; &lt;hashtag&gt; → Velocity-ranked set
+// Key TTL: 2 hours (refreshed every 5 minutes by Flink aggregator)</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <!-- SVG Pipeline Diagram -->
+          <h3>Pipeline Architecture</h3>
+          <div style="overflow-x:auto;margin-bottom:var(--space-5)">
+            <svg viewBox="0 0 860 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;display:block;margin:0 auto;font-family:Inter,sans-serif" role="img" aria-label="Trending topics stream processing pipeline">
+
+              <!-- Background -->
+              <rect width="860" height="320" fill="#0f172a" rx="12"/>
+
+              <!-- Step 1: Tweets -->
+              <rect x="16" y="110" width="100" height="56" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="66" y="132" fill="#93c5fd" font-size="10" text-anchor="middle" font-weight="600">TWEETS</text>
+              <text x="66" y="148" fill="#60a5fa" font-size="9" text-anchor="middle">500M/day</text>
+              <text x="66" y="160" fill="#60a5fa" font-size="9" text-anchor="middle">6K tweets/s</text>
+
+              <!-- Arrow 1 -->
+              <path d="M116 138 L142 138" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Step 2: Kafka tweet-events -->
+              <rect x="142" y="96" width="116" height="84" rx="8" fill="#1a2a1a" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="200" y="118" fill="#86efac" font-size="10" text-anchor="middle" font-weight="600">KAFKA</text>
+              <text x="200" y="132" fill="#4ade80" font-size="9" text-anchor="middle">tweet-events</text>
+              <text x="200" y="146" fill="#4ade80" font-size="8" text-anchor="middle">partitioned by</text>
+              <text x="200" y="158" fill="#4ade80" font-size="8" text-anchor="middle">user_id</text>
+              <text x="200" y="172" fill="#6b7280" font-size="8" text-anchor="middle">{tweet_id, hashtags[], geo}</text>
+
+              <!-- Arrow 2 -->
+              <path d="M258 138 L284 138" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Step 3: Hashtag Extractor -->
+              <rect x="284" y="110" width="110" height="56" rx="8" fill="#2a1a2a" stroke="#a855f7" stroke-width="1.5"/>
+              <text x="339" y="132" fill="#d8b4fe" font-size="10" text-anchor="middle" font-weight="600">HASHTAG</text>
+              <text x="339" y="147" fill="#c084fc" font-size="9" text-anchor="middle">EXTRACTOR</text>
+              <text x="339" y="160" fill="#9333ea" font-size="8" text-anchor="middle">1 event per tag</text>
+
+              <!-- Arrow 3 -->
+              <path d="M394 138 L420 138" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Step 4: Kafka hashtag-events -->
+              <rect x="420" y="96" width="116" height="84" rx="8" fill="#1a2a1a" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="478" y="118" fill="#86efac" font-size="10" text-anchor="middle" font-weight="600">KAFKA</text>
+              <text x="478" y="132" fill="#4ade80" font-size="9" text-anchor="middle">hashtag-events</text>
+              <text x="478" y="146" fill="#4ade80" font-size="8" text-anchor="middle">partitioned by</text>
+              <text x="478" y="158" fill="#4ade80" font-size="8" text-anchor="middle">hashtag</text>
+              <text x="478" y="172" fill="#6b7280" font-size="8" text-anchor="middle">40K events/sec</text>
+
+              <!-- Arrow 4 -->
+              <path d="M536 138 L562 138" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Step 5: Flink with CMS -->
+              <rect x="562" y="80" width="130" height="120" rx="8" fill="#2a1a10" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="627" y="102" fill="#fcd34d" font-size="10" text-anchor="middle" font-weight="600">FLINK</text>
+              <text x="627" y="116" fill="#fbbf24" font-size="9" text-anchor="middle">Stream Processing</text>
+              <!-- Mini CMS grid -->
+              <rect x="572" y="124" width="50" height="36" rx="3" fill="#1c1c10" stroke="#78350f" stroke-width="1"/>
+              <text x="597" y="136" fill="#fbbf24" font-size="7" text-anchor="middle">Count-Min</text>
+              <text x="597" y="147" fill="#fbbf24" font-size="7" text-anchor="middle">Sketch</text>
+              <text x="597" y="158" fill="#d97706" font-size="7" text-anchor="middle">4 × 2048</text>
+              <!-- Mini heap -->
+              <rect x="630" y="124" width="50" height="36" rx="3" fill="#1c1c10" stroke="#78350f" stroke-width="1"/>
+              <text x="655" y="136" fill="#fbbf24" font-size="7" text-anchor="middle">Min-Heap</text>
+              <text x="655" y="147" fill="#fbbf24" font-size="7" text-anchor="middle">K = 1000</text>
+              <text x="655" y="158" fill="#d97706" font-size="7" text-anchor="middle">top-K</text>
+              <text x="627" y="192" fill="#92400e" font-size="8" text-anchor="middle">1-min tumbling windows</text>
+
+              <!-- Arrow 5 -->
+              <path d="M692 138 L718 138" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Step 6: Redis Sorted Set -->
+              <rect x="718" y="96" width="118" height="84" rx="8" fill="#1a1010" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="777" y="118" fill="#fca5a5" font-size="10" text-anchor="middle" font-weight="600">REDIS</text>
+              <text x="777" y="132" fill="#f87171" font-size="9" text-anchor="middle">Sorted Sets</text>
+              <text x="777" y="146" fill="#f87171" font-size="8" text-anchor="middle">trending:global:1h</text>
+              <text x="777" y="159" fill="#6b7280" font-size="8" text-anchor="middle">ZADD O(log N)</text>
+              <text x="777" y="172" fill="#6b7280" font-size="8" text-anchor="middle">ZREVRANGE O(K)</text>
+
+              <!-- Down arrow to API -->
+              <path d="M777 240 L777 268" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+              <!-- Trending API box -->
+              <rect x="718" y="240" width="118" height="40" rx="8" fill="#1a1a2a" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="777" y="256" fill="#a5b4fc" font-size="10" text-anchor="middle" font-weight="600">TRENDING API</text>
+              <text x="777" y="270" fill="#818cf8" font-size="8" text-anchor="middle">&lt; 50ms latency</text>
+
+              <!-- Bucket buffer below Flink -->
+              <rect x="562" y="232" width="130" height="48" rx="6" fill="#1c1c10" stroke="#78350f" stroke-width="1" stroke-dasharray="4,2"/>
+              <text x="627" y="248" fill="#fbbf24" font-size="8" text-anchor="middle">Circular Buffer</text>
+              <text x="627" y="260" fill="#d97706" font-size="8" text-anchor="middle">60 × 1-min buckets</text>
+              <text x="627" y="272" fill="#92400e" font-size="7" text-anchor="middle">oldest zeroed on rotate</text>
+              <path d="M627 200 L627 232" stroke="#78350f" stroke-width="1" stroke-dasharray="3,2"/>
+
+              <!-- Arrow defs -->
+              <defs>
+                <marker id="arr" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0 0 L6 3 L0 6 z" fill="#475569"/>
+                </marker>
+              </defs>
+
+              <!-- Labels -->
+              <text x="430" y="30" fill="#94a3b8" font-size="11" text-anchor="middle" font-weight="600">Trending Topics: Stream Processing Pipeline</text>
+              <text x="66" y="200" fill="#475569" font-size="8" text-anchor="middle">STEP 1: INGEST</text>
+              <text x="200" y="200" fill="#475569" font-size="8" text-anchor="middle">STEP 2: QUEUE</text>
+              <text x="339" y="190" fill="#475569" font-size="8" text-anchor="middle">STEP 3: EXTRACT</text>
+              <text x="478" y="200" fill="#475569" font-size="8" text-anchor="middle">STEP 4: QUEUE</text>
+              <text x="627" y="298" fill="#475569" font-size="8" text-anchor="middle">STEP 5: COUNT</text>
+              <text x="777" y="298" fill="#475569" font-size="8" text-anchor="middle">STEP 6: SERVE</text>
+            </svg>
+          </div>
+
+          <h3>Pipeline Steps — Explained</h3>
+          <ol>
+            <li><strong>INGEST:</strong> Tweet events published to Kafka topic <code>tweet-events</code>, partitioned by <code>user_id</code>. Each event: <code>{tweet_id, user_id, hashtags[], timestamp, geo_region}</code>.</li>
+            <li><strong>EXTRACT:</strong> Hashtag Extractor Service consumes from Kafka, emits one event per hashtag. Output to topic <code>hashtag-events</code>, partitioned by <code>hashtag</code> (ensures same hashtag always hits same Flink task — locality for accurate counting).</li>
+            <li><strong>COUNT (Flink):</strong> Each Flink task maintains Count-Min Sketch + Min-Heap in memory. Tumbling 1-minute windows: emit <code>(hashtag, window_start, count)</code> at end of each minute. Also maintains global sketch per time window (1h, 24h, week).</li>
+            <li><strong>AGGREGATE (top-K merge):</strong> Multiple Flink tasks → each produces local top-K. Aggregator merges local top-K lists → global top-K. Stored in Redis: <code>ZADD trending:global:1h &lt;score&gt; &lt;hashtag&gt;</code>.</li>
+            <li><strong>SERVE:</strong> Trending API reads from Redis Sorted Set: <code>ZREVRANGE trending:global:1h 0 9</code> → top-10 in O(K). Response cached 1 minute at API layer.</li>
+          </ol>
+
+          <div class="insight-box" style="background:var(--color-success-bg,#f0fdf4);border-left:4px solid var(--color-success,#22c55e);padding:var(--space-4);border-radius:var(--radius-md);margin-top:var(--space-4)">
+            <strong>🔑 Why partition hashtag-events by hashtag?</strong>
+            <p style="margin:var(--space-2) 0 0">If the same hashtag hits different Flink tasks, each task has a partial count. You'd need to merge them, which is expensive. By partitioning by hashtag, all events for <code>#SystemDesign</code> go to the same Flink task → one complete count, no merge needed. The Count-Min Sketch stays accurate.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Get trending topics for a region and time window
+GET /v1/trending?window=1h&amp;region=global&amp;limit=10
+// Response:
+{
+  "topics": [
+    { "hashtag": "#WorldCup", "count": 1284500, "velocity": 0.34, "rank": 1 },
+    { "hashtag": "#AI", "count": 984200, "velocity": -0.05, "rank": 2 }
+  ],
+  "computed_at": "2024-01-15T14:32:00Z",
+  "window": "1h",
+  "region": "global"
+}
+
+// Geo-specific trending
+GET /v1/trending?window=1h&amp;region=US
+GET /v1/trending?window=24h&amp;region=IN
+
+// Trend line for sparkline chart (last 24h, one data point per hour)
+GET /v1/hashtags/%23SystemDesign/trend?window=24h
+// Response: { "points": [{ "timestamp": "...", "count": 12400 }, ...] }
+
+// Check if a specific hashtag is currently trending
+GET /v1/hashtags/%23BreakingNews/rank?window=1h
+// Response: { "rank": 3, "count": 284500, "is_trending": true, "velocity": 4.92 }</code></pre>
+          <p style="margin-top:var(--space-3)">The trend line API reads historical counts from Cassandra (24 data points = 24 hourly queries). The rank API does a Redis <code>ZREVRANK</code> lookup — O(log N), sub-millisecond.</p>
+        </div>
+      </section>
+
+      <section class="content-section" id="deepdive" aria-labelledby="deepdive-title">
+        <h2 class="content-section__title" id="deepdive-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">10–15 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Count-Min Sketch — How It Actually Works</h3>
+          <p>The core algorithm. Interviewers expect you to explain this clearly, not just name it.</p>
+
+          <!-- CMS Visual Diagram -->
+          <div style="overflow-x:auto;margin:var(--space-4) 0">
+            <svg viewBox="0 0 620 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:620px;display:block;margin:0 auto" role="img" aria-label="Count-Min Sketch diagram showing 4 hash functions mapping to counter array">
+              <rect width="620" height="220" fill="#0f172a" rx="10"/>
+              <text x="310" y="24" fill="#94a3b8" font-size="12" text-anchor="middle" font-weight="600">Count-Min Sketch: increment("#SystemDesign")</text>
+
+              <!-- Hash function labels -->
+              <text x="30" y="54" fill="#fbbf24" font-size="10" font-weight="600">h₁</text>
+              <text x="30" y="94" fill="#34d399" font-size="10" font-weight="600">h₂</text>
+              <text x="30" y="134" fill="#f87171" font-size="10" font-weight="600">h₃</text>
+              <text x="30" y="174" fill="#a78bfa" font-size="10" font-weight="600">h₄</text>
+
+              <!-- Grid rows -->
+              <!-- Row 1 (h1) - highlight column 3 -->
+              <g>
+                <rect x="50" y="40" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="86" y="40" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="122" y="40" width="36" height="24" rx="2" fill="#78350f" stroke="#f59e0b" stroke-width="2"/>
+                <text x="140" y="56" fill="#fcd34d" font-size="10" text-anchor="middle" font-weight="700">+1</text>
+                <rect x="158" y="40" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="194" y="40" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <text x="244" y="54" fill="#6b7280" font-size="8">... 2048 cols ...</text>
+                <rect x="560" y="40" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+              </g>
+              <!-- Row 2 (h2) - highlight column 5 -->
+              <g>
+                <rect x="50" y="80" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="86" y="80" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="122" y="80" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="158" y="80" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="194" y="80" width="36" height="24" rx="2" fill="#064e3b" stroke="#10b981" stroke-width="2"/>
+                <text x="212" y="96" fill="#34d399" font-size="10" text-anchor="middle" font-weight="700">+1</text>
+                <text x="244" y="94" fill="#6b7280" font-size="8">... 2048 cols ...</text>
+                <rect x="560" y="80" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+              </g>
+              <!-- Row 3 (h3) - highlight column 1 -->
+              <g>
+                <rect x="50" y="120" width="36" height="24" rx="2" fill="#450a0a" stroke="#ef4444" stroke-width="2"/>
+                <text x="68" y="136" fill="#f87171" font-size="10" text-anchor="middle" font-weight="700">+1</text>
+                <rect x="86" y="120" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="122" y="120" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="158" y="120" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="194" y="120" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <text x="244" y="134" fill="#6b7280" font-size="8">... 2048 cols ...</text>
+                <rect x="560" y="120" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+              </g>
+              <!-- Row 4 (h4) - highlight column 4 -->
+              <g>
+                <rect x="50" y="160" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="86" y="160" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="122" y="160" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <rect x="158" y="160" width="36" height="24" rx="2" fill="#2e1065" stroke="#7c3aed" stroke-width="2"/>
+                <text x="176" y="176" fill="#a78bfa" font-size="10" text-anchor="middle" font-weight="700">+1</text>
+                <rect x="194" y="160" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+                <text x="244" y="174" fill="#6b7280" font-size="8">... 2048 cols ...</text>
+                <rect x="560" y="160" width="36" height="24" rx="2" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+              </g>
+
+              <!-- Estimate arrow and label -->
+              <text x="440" y="108" fill="#94a3b8" font-size="10" text-anchor="middle">estimate("#SystemDesign")</text>
+              <text x="440" y="124" fill="#f59e0b" font-size="11" text-anchor="middle" font-weight="700">= MIN(row₁, row₂, row₃, row₄)</text>
+              <text x="440" y="140" fill="#6b7280" font-size="9" text-anchor="middle">← least overestimated value</text>
+
+              <text x="310" y="205" fill="#475569" font-size="9" text-anchor="middle">4 rows × 2048 cols × 4 bytes = 32 KB total (vs 50 GB for exact HashMap)</text>
+            </svg>
+          </div>
+
+          <h3>2. Sliding Window with Circular Bucket Buffer</h3>
+          <p>Why not just one big sketch? Because we need "trending in last 60 minutes" — events from 2 hours ago should not count. A circular buffer of 60 one-minute sketches solves this exactly.</p>
+
+          <h3>3. Trend Velocity — The "Trending" vs "Popular" Distinction</h3>
+          <p>This is the insight that separates strong candidates from average ones. A hashtag that has 30,000 mentions per minute steadily is <em>popular</em>. A hashtag that jumps from 200 to 50,000 mentions in 5 minutes is <em>trending</em>. The formula:</p>
+          <pre><code class="language-java">// velocity = (count_last_15min - count_15min_before) / count_15min_before
+// Stored in Redis: ZADD trending:velocity:global &lt;velocity&gt; &lt;hashtag&gt;
+// Final rank score = 0.6 × count_rank + 0.4 × velocity_rank
+
+double velocity = (countCurrentWindow - countPreviousWindow)
+                  / (double) countPreviousWindow;
+// #BreakingNews: (50000 - 200) / 200 = 249.0 → velocity rank #1
+// #MondayMotivation: (30000 - 29800) / 29800 = 0.007 → velocity rank low</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">⚠️</span>E — Evaluate<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Failure Modes &amp; Mitigations</h3>
+          <ul>
+            <li><strong>Hash collision in Count-Min Sketch:</strong> Two different hashtags hash to same counter → count overestimated. Mitigation: more hash functions (DEPTH=4 reduces error to ~2% with 99% probability at WIDTH=2048). Acceptable for trending use case.</li>
+            <li><strong>Late-arriving Flink events:</strong> Tweets arrive out of order (network delay, mobile reconnect). Mitigation: Flink's watermark mechanism — events up to 30 seconds late are included in the current window. Events beyond 30s late are dropped from window (acceptable: trending doesn't need sub-second precision).</li>
+            <li><strong>Hot Kafka partition:</strong> During breaking news, one hashtag (#WorldCup during World Cup final) gets 100K events/sec to one partition. Mitigation: partition by <code>hash(hashtag) + jitter</code> with a whitelist of known-hot hashtags that get special over-partitioning.</li>
+            <li><strong>Geo accuracy:</strong> IP geolocation is 80–90% accurate at country level. Geo-trending accepts this — a 10% misclassification is imperceptible to users. Explicit geo tagging (user sets their location) is more accurate but optional.</li>
+            <li><strong>Redis Sorted Set memory:</strong> If 1M unique hashtags are in the set, ZREVRANGE is still O(K) not O(N). But ZADD for 1M hashtags uses ~80MB Redis — fine. If extreme, use a Bloom filter to gate which hashtags enter the sorted set.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title"><span class="content-section__title-icon">✅</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <div class="insight-box" style="background:var(--color-primary-bg,#eff6ff);border-left:4px solid var(--color-primary,#3b82f6);padding:var(--space-5);border-radius:var(--radius-md)">
+            <strong>📣 Your Closing Statement (memorize this structure):</strong>
+            <p style="margin:var(--space-3) 0 0;line-height:1.8"><strong>Trending = Count-Min Sketch</strong> (approximate counting, 32KB vs 50GB exact) + <strong>sliding window</strong> of 60 one-minute circular buckets + <strong>Min-Heap</strong> for top-K. Pipeline: Kafka ingest (partitioned by hashtag for locality) → Flink stream processing (Count-Min Sketch per 1-min tumbling window) → <strong>Redis Sorted Sets</strong> for O(log N) insert, O(K) range query → API serves top-10 from Redis in &lt;1ms. Add <strong>velocity scoring</strong>: (current window count − previous window count) / previous = trend direction. Combined rank = 0.6 × count + 0.4 × velocity. Geo: 200 separate Redis sorted sets, still only 200 × 32KB = 6.4MB.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs<span class="reshaded-step__letter">Key decisions</span></h2>
+        <div class="content-section__body">
+          <div style="overflow-x:auto">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Winner &amp; Why</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Counting method</strong></td>
+                  <td>Exact HashMap (50GB/node)</td>
+                  <td>Count-Min Sketch (32KB)</td>
+                  <td>✅ <strong>Sketch</strong> — 100,000× space reduction, 2% error acceptable for trending</td>
+                </tr>
+                <tr>
+                  <td><strong>Processing model</strong></td>
+                  <td>Batch (every 5 min, Spark)</td>
+                  <td>Stream (Flink, real-time)</td>
+                  <td>✅ <strong>Stream</strong> — 5-min freshness vs 30-min batch; breaking news requires low latency</td>
+                </tr>
+                <tr>
+                  <td><strong>Serving layer</strong></td>
+                  <td>Query Cassandra directly</td>
+                  <td>Redis Sorted Set cache</td>
+                  <td>✅ <strong>Redis</strong> — O(log N) insert, O(K) range, sub-millisecond serving latency</td>
+                </tr>
+                <tr>
+                  <td><strong>Time window type</strong></td>
+                  <td>Fixed tumbling (exact hour boundaries)</td>
+                  <td>Sliding (circular buffer)</td>
+                  <td>✅ <strong>Sliding</strong> — "last 60 minutes" means last 60 minutes, not "since :00"</td>
+                </tr>
+                <tr>
+                  <td><strong>Ranking signal</strong></td>
+                  <td>Count only</td>
+                  <td>Count + velocity score</td>
+                  <td>✅ <strong>Count + velocity</strong> — captures emerging trends, not just popular topics</td>
+                </tr>
+                <tr>
+                  <td><strong>Geo granularity</strong></td>
+                  <td>One global trending</td>
+                  <td>Per-region (200 sets)</td>
+                  <td>✅ <strong>Per-region</strong> — 200 × 32KB = still tiny; major UX improvement</td>
+                </tr>
+                <tr>
+                  <td><strong>Top-K parallelism</strong></td>
+                  <td>Single task, all hashtags</td>
+                  <td>Local top-K per task, then merge</td>
+                  <td>✅ <strong>Local merge</strong> — O(K log K) merge is trivial; enables horizontal scaling</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * CountMinSketch — probabilistic frequency estimation data structure.
+ *
+ * Space: O(d × w) = 32KB at d=4, w=2048.
+ * Error bound: estimate ≤ true_count + ε × total_events
+ *   where ε = e/w ≈ 0.0014 and P(error) ≤ e^{-d} ≈ 0.018
+ *
+ * Why minimum? Hash collisions cause overestimation. Taking the minimum
+ * across all hash functions gives the least-overestimated count.
+ */
+public class CountMinSketch {
+    private static final int DEPTH = 4;    // number of independent hash functions
+    private static final int WIDTH = 2048; // counters per row (power of 2 for fast modulo)
+
+    private final long[][] table = new long[DEPTH][WIDTH];
+    // Different seeds ensure hash functions are independent
+    private final long[] hashSeeds = { 0xABCDABCDL, 0x12341234L, 0x56785678L, 0xDEF0DEF0L };
+
+    /**
+     * Increments the count for the given item by 1.
+     * O(d) time — constant since d is fixed.
+     */
+    public void increment(String item) {
+        for (int row = 0; row &lt; DEPTH; row++) {
+            int column = hashToColumn(item, hashSeeds[row]);
+            table[row][column]++;
+        }
+    }
+
+    /**
+     * Estimates the count for the given item.
+     * Returns the MINIMUM across all rows — this is the least overestimated value.
+     * The true count is always ≤ any cell's value (overestimation only, never under).
+     * O(d) time.
+     */
+    public long estimate(String item) {
+        long minimum = Long.MAX_VALUE;
+        for (int row = 0; row &lt; DEPTH; row++) {
+            int column = hashToColumn(item, hashSeeds[row]);
+            minimum = Math.min(minimum, table[row][column]);
+        }
+        return minimum;
+    }
+
+    /**
+     * Merges another sketch into this one (element-wise addition).
+     * Used when summing multiple time-bucket sketches for the sliding window.
+     */
+    public void mergeFrom(CountMinSketch other) {
+        for (int row = 0; row &lt; DEPTH; row++) {
+            for (int col = 0; col &lt; WIDTH; col++) {
+                table[row][col] += other.table[row][col];
+            }
+        }
+    }
+
+    /** Resets all counters to zero (used when rotating a bucket). */
+    public void reset() {
+        for (int row = 0; row &lt; DEPTH; row++) {
+            java.util.Arrays.fill(table[row], 0L);
+        }
+    }
+
+    private int hashToColumn(String item, long seed) {
+        long h = item.hashCode() ^ seed;
+        h ^= (h &gt;&gt;&gt; 33);
+        h *= 0xff51afd7ed558ccdL;
+        h ^= (h &gt;&gt;&gt; 33);
+        return (int) Math.abs(h % WIDTH);
+    }
+}
+
+/**
+ * SlidingWindowTrendCounter — maintains a sliding 60-minute window using
+ * a circular buffer of one-minute CountMinSketch buckets.
+ *
+ * Design choice: 60 independent sketches vs one large sketch with decay.
+ * Independent sketches allow exact bucket expiry (step function).
+ * Total memory: 60 × 32KB = 1.9MB per region — trivially small.
+ */
+public class SlidingWindowTrendCounter {
+    private static final int WINDOW_MINUTES = 60;
+
+    private final CountMinSketch[] buckets = new CountMinSketch[WINDOW_MINUTES];
+    private volatile int currentBucketIndex = 0;
+    private final ScheduledExecutorService rotationScheduler =
+        Executors.newSingleThreadScheduledExecutor();
+
+    public SlidingWindowTrendCounter() {
+        for (int i = 0; i &lt; WINDOW_MINUTES; i++) {
+            buckets[i] = new CountMinSketch();
+        }
+        // Advance to next bucket every minute — old bucket is expired implicitly
+        rotationScheduler.scheduleAtFixedRate(
+            this::rotateToNextBucket, 1, 1, TimeUnit.MINUTES
+        );
+    }
+
+    public synchronized void recordHashtag(String hashtag) {
+        buckets[currentBucketIndex].increment(hashtag);
+    }
+
+    /**
+     * Estimates count of hashtag across the entire 60-minute sliding window.
+     * Sums all 60 buckets' estimates for this hashtag.
+     */
+    public long estimateWindowCount(String hashtag) {
+        long total = 0;
+        for (CountMinSketch bucket : buckets) {
+            total += bucket.estimate(hashtag);
+        }
+        return total;
+    }
+
+    /**
+     * Rotates to the next bucket: advances index and resets that bucket.
+     * The reset bucket was the oldest one — now it becomes the current (newest) bucket.
+     * This is the circular buffer rotation: O(WIDTH) to reset, not O(all hashtags).
+     */
+    private synchronized void rotateToNextBucket() {
+        currentBucketIndex = (currentBucketIndex + 1) % WINDOW_MINUTES;
+        buckets[currentBucketIndex].reset(); // zero out the oldest bucket
+    }
+}
+
+/**
+ * TopKTracker — maintains top-K hashtags using a min-heap of size K.
+ * Space: O(K) — only K entries regardless of total distinct hashtags.
+ *
+ * Pattern: if a hashtag's estimated count > heap's minimum → evict minimum, insert new.
+ * This correctly finds the top-K by count with minimal memory.
+ */
+public class TopKTracker {
+    private static final int TOP_K = 1000;
+
+    // Min-heap: smallest count at top → easy to check if a new item qualifies
+    private final PriorityQueue&lt;long[]&gt; minHeap =
+        new PriorityQueue&lt;&gt;(Comparator.comparingLong(entry -&gt; entry[0]));
+    private final Map&lt;String, Long&gt; hashtagToCount = new HashMap&lt;&gt;();
+
+    /**
+     * Updates the tracker with a new count for a hashtag.
+     * Called by Flink aggregator after each 1-minute window.
+     */
+    public synchronized void update(String hashtag, long newCount) {
+        hashtagToCount.put(hashtag, newCount);
+
+        if (minHeap.size() &lt; TOP_K) {
+            minHeap.offer(new long[]{newCount, hashtag.hashCode()});
+        } else if (newCount &gt; minHeap.peek()[0]) {
+            minHeap.poll(); // remove smallest
+            minHeap.offer(new long[]{newCount, hashtag.hashCode()});
+        }
+    }
+
+    /**
+     * Returns top-K hashtags sorted by count descending.
+     * Called once per minute to push results to Redis.
+     */
+    public List&lt;Map.Entry&lt;String, Long&gt;&gt; getTopK() {
+        return hashtagToCount.entrySet().stream()
+            .sorted(Map.Entry.&lt;String, Long&gt;comparingByValue().reversed())
+            .limit(TOP_K)
+            .collect(java.util.stream.Collectors.toList());
+    }
+}
+
+/**
+ * VelocityScorer — computes trend velocity for ranking.
+ *
+ * velocity = (currentWindowCount - previousWindowCount) / previousWindowCount
+ * Ranges from -1.0 (completely stopped) to +∞ (explosive growth).
+ * High velocity = emerging trend. Combined rank = 0.6×count + 0.4×velocity.
+ */
+public class VelocityScorer {
+    private final Map&lt;String, Long&gt; previousWindowCounts = new ConcurrentHashMap&lt;&gt;();
+
+    public double computeVelocity(String hashtag, long currentCount) {
+        long previousCount = previousWindowCounts.getOrDefault(hashtag, 0L);
+        if (previousCount == 0L) {
+            previousWindowCounts.put(hashtag, currentCount);
+            return 0.0; // no baseline yet
+        }
+        double velocity = (double)(currentCount - previousCount) / previousCount;
+        previousWindowCounts.put(hashtag, currentCount); // update baseline
+        return velocity;
+    }
+
+    public double combinedRankScore(long countRank, double velocityRank) {
+        return 0.6 * countRank + 0.4 * velocityRank;
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-trending-topics-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-text"></div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+
+          <div data-question="An exact HashMap counting all hashtags needs 50GB of memory per node. A Count-Min Sketch with d=4 rows and w=2048 counters needs only 32KB. How is this possible, and what is the cost?" data-options='["Count-Min Sketch compresses data using lossless compression — no information is lost","Count-Min Sketch uses d×w counters shared across ALL hashtags using hash functions. Multiple hashtags can hash to the same counter (hash collision), so each counter tracks the sum of multiple hashtags. The MINIMUM across all rows gives the least-overestimated count. The cost: counts are slightly overestimated (never underestimated). For trending, a 2-5% overestimate is perfectly acceptable.","Count-Min Sketch stores only the top-1000 hashtags and ignores the rest","Count-Min Sketch uses a different encoding that requires less space per counter"]' data-correct="1" data-explanation="Count-Min Sketch is a probabilistic data structure that accepts bounded approximation errors in exchange for fixed memory (independent of number of distinct items). With d=4, w=2048: P(error > ε) < δ where ε=e/w and δ=e^{-d}. Concretely: 99.98% confidence that count is within 0.05% of true value. For trending topics (we only care about approximate rank), this error is completely acceptable. This is also used by Redis HyperLogLog (cardinality), streaming analytics, and network traffic analysis." style="display:none"></div>
+
+          <div data-question="Twitter wants trending topics to reflect events from the last 60 minutes using a sliding window. You use 60 one-minute buckets in a circular buffer. A breaking news event happened at 9:00 AM. At 10:01 AM, what happens to that event's contribution to the 'last 60 minutes' trending count?" data-options='["The event stays in the trending count indefinitely until manually removed","At 10:01 AM, the 9:00 AM bucket (now 61 minutes old) falls outside the 60-minute window. The circular buffer rotates: the oldest bucket is zeroed out and becomes the new current bucket. The event contribution is immediately removed from the 60-minute total. This creates a step-function decrease rather than a gradual decay.","The event contribution is halved every 10 minutes (exponential decay)","Events from more than 60 minutes ago are stored in a separate archive and never affect trending"]' data-correct="1" data-explanation="The circular buffer creates precise 60-minute windows with step-function transitions. At minute 61, the oldest bucket drops out completely — a hard cutoff. This means a viral event at 9:00 AM will abruptly stop contributing to trending at 10:00 AM. For smoother transitions, you could weight buckets (older buckets counted with lower weight), creating exponential decay. Twitter uses a combination: fixed window for display + exponential decay for velocity scoring." style="display:none"></div>
+
+          <div data-question="A hashtag #BreakingNews suddenly goes from 1,000 mentions/minute to 50,000 mentions/minute in 2 minutes. Another hashtag #MondayMotivation has a steady 30,000 mentions/minute all morning. How should trend velocity change the ranking?" data-options='["#MondayMotivation should always rank higher because it has more total mentions","#BreakingNews should rank higher despite lower total count, because its velocity (growth rate = (50000-1000)/1000 = 4900%) signals a sudden emerging event. This is the difference between what is popular (high count) and what is trending (rapid growth). Interviewers specifically look for this distinction.","Both should rank equally based on their current minute count","Velocity is not a useful signal — count alone determines trending rank"]' data-correct="1" data-explanation="This is the core insight of trending vs popular. A topic with steady mentions is popular but not trending. Trending means ACCELERATION — a sudden increase in mention rate. Velocity = (current_window_count - previous_window_count) / previous_window_count captures this. #BreakingNews velocity = (50K - 1K) / 1K = 4900%. #MondayMotivation velocity ≈ 0%. Combined rank = 0.6×count_rank + 0.4×velocity_rank pushes #BreakingNews to the top. This is why Twitter trending shows breaking news events, not evergreen popular topics." style="display:none"></div>
+
+          <div data-question="Your trending system uses Flink with multiple parallel tasks. Task 1 processes hashtags A-M, Task 2 processes N-Z. How do you produce a single global top-10?" data-options='["Run a separate global aggregator that polls all Flink tasks every second","Each Flink task produces its local top-K. A separate lightweight aggregator collects all local top-K lists and merges them: sort all candidates by count, take the global top-10. The merge of K lists each of size K takes O(K log K) — trivial. Store the merged result in Redis Sorted Set.","Only one Flink task can compute trending — parallelism is not possible for top-K","Use a distributed sort across all tasks to produce a single globally sorted list"]' data-correct="1" data-explanation="The local top-K → merge pattern is how all distributed top-K systems work (MapReduce, Spark, Flink). Each partition computes its local top-K independently (highly parallelizable). A single lightweight aggregator merges K sorted lists in O(K log K) — at K=1000, this is ~10,000 comparisons, trivially fast. The key insight: the global top-10 MUST come from some local task top-K list. So collecting local top-K lists is sufficient to find the global top-K. No element not in any local top-K can be in the global top-K." style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="facebook-messenger.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Facebook Messenger →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="leaderboard.html" class="btn btn--outline">← Leaderboard</a>
+        <a href="facebook-messenger.html" class="btn btn--primary">Next: Facebook Messenger →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

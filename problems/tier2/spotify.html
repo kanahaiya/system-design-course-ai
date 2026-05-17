@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design Spotify — RESHADED walkthrough: adaptive bitrate audio streaming, CDN delivery, collaborative filtering recommendations, DRM offline sync for MAANG interviews.">
+  <title>Design Spotify — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/spotify/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-spotify" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=spotify" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Senior</span>
+          <span class="tag">45 min</span>
+          <span class="tag">CDN · Collab Filtering · DRM</span>
+        </div>
+        <h1 class="module-header__title">Design Spotify</h1>
+        <p class="module-header__desc">Music streaming = <strong>STORE</strong> (audio in object storage) + <strong>STREAM</strong> (adaptive bitrate via CDN) + <strong>DISCOVER</strong> (two recommendation engines) + <strong>OFFLINE</strong> (DRM-encrypted downloads). Each is a fully independent subsystem with different scaling characteristics.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Spotify, Apple Music, Amazon Music, YouTube Music</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> CDN streaming · Collab filtering · DRM</div>
+        </div>
+      </header>
+
+      <!-- Mental Model -->
+      <div class="insight-box insight-box--info" style="margin-bottom:var(--space-6)">
+        <div class="insight-box__title">🧠 The Core Mental Model</div>
+        <p style="margin:0;font-size:1.05rem"><strong>STORE → STREAM → DISCOVER → OFFLINE.</strong> Audio files live in S3 (3 quality tiers per song). Audio is delivered directly from CDN edge nodes — it never touches your API servers. Discovery is two separate systems: batch collaborative filtering for Discover Weekly, real-time audio-feature ANN for Radio. Offline is DRM-encrypted downloads with license keys that expire. Use these four pillars as your interview skeleton.</p>
+      </div>
+
+      <!-- R: Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><strong>Stream songs:</strong> Playback starts within 2 seconds, no buffering on a decent connection. Gapless between tracks.</li>
+            <li><strong>Search:</strong> Songs, artists, albums — results in &lt;200ms with fuzzy matching</li>
+            <li><strong>Playlists:</strong> Create, edit, reorder, share playlists. Collaborative playlists (multiple editors).</li>
+            <li><strong>Recommendations:</strong> Discover Weekly (refreshed Sunday, personalized 30-song playlist) and Radio (real-time "more like this song")</li>
+            <li><strong>Offline mode (Premium):</strong> Download up to 10,000 songs to device for playback without internet</li>
+            <li><strong>Podcast support:</strong> Same streaming infrastructure, separate content ingestion pipeline</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> 600M users, 250M Premium (paying) — largest music platform on earth</li>
+            <li><strong>Audio storage:</strong> 100M songs × 3 quality tiers = ~1PB of audio files</li>
+            <li><strong>Play latency:</strong> p99 &lt;2s time-to-first-audio, p99 seek &lt;500ms</li>
+            <li><strong>Availability:</strong> 99.99% — "music never stops" is a core brand promise</li>
+            <li><strong>Concurrent streams:</strong> 600M DAU × avg 30 min/day listening = ~300K simultaneous streams at peak</li>
+          </ul>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">⛔ Explicitly Out of Scope</div>
+            <p style="margin:0">Social features (following friends), live events/concerts, video, lyrics sync display (mention as a deep dive option), royalty calculation pipeline. State these at the start.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- E: Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--space-4);margin-bottom:var(--space-5)">
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:#1db954">70K</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">plays/second avg (6B songs/day ÷ 86,400s)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:#1db954">1.05 PB</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">Audio storage (100M songs × 3 tiers × 3.5MB avg)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:#1db954">48 Gbps</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">CDN bandwidth (300K streams × 160kbps)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:#1db954">180B</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">Playlist rows in DB (600M users × 10 playlists × 30 songs)</div>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+            <thead><tr style="border-bottom:2px solid var(--border)">
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Component</th>
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Calculation</th>
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Result</th>
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Play events/day</td><td style="padding:var(--space-2) var(--space-3)">600M DAU × 10 songs/day avg</td><td style="padding:var(--space-2) var(--space-3)"><strong>6 billion events/day</strong></td></tr>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Search index size</td><td style="padding:var(--space-2) var(--space-3)">100M songs × metadata × 1KB</td><td style="padding:var(--space-2) var(--space-3)"><strong>100GB (fits in RAM)</strong></td></tr>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Discover Weekly batch</td><td style="padding:var(--space-2) var(--space-3)">600M users, runs Sunday night</td><td style="padding:var(--space-2) var(--space-3)"><strong>~6hr Spark job</strong></td></tr>
+              <tr><td style="padding:var(--space-2) var(--space-3)">Offline storage (per user)</td><td style="padding:var(--space-2) var(--space-3)">10,000 songs × 3.5MB avg</td><td style="padding:var(--space-2) var(--space-3)"><strong>35GB max per device</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- S: Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// songs — PostgreSQL (metadata), audio files in S3
+// Primary DB for catalog data: low write rate, complex queries OK
+songs (
+  song_id     UUID  PRIMARY KEY,
+  title       TEXT,
+  artist_id   UUID  REFERENCES artists(artist_id),
+  album_id    UUID  REFERENCES albums(album_id),
+  duration_ms INT,
+  release_date DATE,
+  genre       TEXT[],
+  audio_url   TEXT,       -- S3 key prefix: /audio/{song_id}/
+  bpm         FLOAT,      -- audio features for recommendation
+  energy      FLOAT,      -- 0.0-1.0
+  danceability FLOAT,     -- 0.0-1.0
+  valence     FLOAT,      -- 0.0-1.0 (musical "happiness")
+  waveform    JSONB       -- amplitude array for visualization
+)
+
+artists (
+  artist_id    UUID PRIMARY KEY,
+  name         TEXT,
+  follower_count BIGINT,
+  verified     BOOLEAN,
+  image_url    TEXT
+)
+
+// playlists — Cassandra (600M users × many playlists = high write volume)
+playlists (
+  playlist_id  UUID,
+  user_id      UUID,
+  name         TEXT,
+  is_public    BOOLEAN,
+  song_ids     LIST&lt;UUID&gt;,  // ordered list, supports reordering
+  created_at   TIMESTAMP,
+  updated_at   TIMESTAMP,
+  PRIMARY KEY ((user_id), playlist_id)
+)
+
+// play_events — Cassandra (append-only, 6B events/day — pure write throughput)
+// Partitioned by (user_id, month) to co-locate a user's listening history
+play_events (
+  user_id          UUID,
+  played_at        TIMESTAMP,
+  song_id          UUID,
+  duration_played_ms INT,   // &lt;30s = skip (strong negative signal)
+  source           TEXT,    // search | playlist | radio | recommendation
+  device_type      TEXT,
+  PRIMARY KEY ((user_id, month), played_at DESC)
+)
+
+// user_library — Redis (liked songs, fast lookup)
+// Key: user:{user_id}:liked_songs → Sorted Set (song_id, liked_at_ts)
+
+// offline_cache — stored on client device only
+// offline_cache: { user_id, song_id, downloaded_at, file_path_local, drm_license_expiry }</code></pre>
+        </div>
+      </section>
+
+      <!-- H: High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <!-- SVG 4-column diagram -->
+          <div style="overflow-x:auto;margin-bottom:var(--space-6)">
+            <svg viewBox="0 0 920 360" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:920px;font-family:Inter,sans-serif" aria-label="Spotify 4-subsystem architecture: Store, Stream, Discover, Offline" role="img">
+              <rect x="0" y="0" width="920" height="360" rx="12" fill="#0f1117"/>
+
+              <!-- Column backgrounds -->
+              <rect x="8"   y="8" width="210" height="344" rx="8" fill="#1a1f2e" stroke="#1db954" stroke-width="1.5"/>
+              <rect x="230" y="8" width="210" height="344" rx="8" fill="#1a1f2e" stroke="#3b82f6" stroke-width="1.5"/>
+              <rect x="452" y="8" width="218" height="344" rx="8" fill="#1a1f2e" stroke="#8b5cf6" stroke-width="1.5"/>
+              <rect x="682" y="8" width="230" height="344" rx="8" fill="#1a1f2e" stroke="#f59e0b" stroke-width="1.5"/>
+
+              <!-- Column labels -->
+              <text x="113" y="28" text-anchor="middle" fill="#1db954" font-size="10" font-weight="700" letter-spacing="2">STORE</text>
+              <text x="335" y="28" text-anchor="middle" fill="#3b82f6" font-size="10" font-weight="700" letter-spacing="2">STREAM</text>
+              <text x="561" y="28" text-anchor="middle" fill="#8b5cf6" font-size="10" font-weight="700" letter-spacing="2">DISCOVER</text>
+              <text x="797" y="28" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="700" letter-spacing="2">OFFLINE</text>
+
+              <!-- STORE column -->
+              <rect x="20"  y="40" width="186" height="34" rx="5" fill="#064e3b"/>
+              <text x="113" y="62" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="600">🎵 100M Songs Catalog</text>
+
+              <rect x="20"  y="86" width="186" height="34" rx="5" fill="#064e3b"/>
+              <text x="113" y="103" text-anchor="middle" fill="#6ee7b7" font-size="10.5" font-weight="600">3 Quality Tiers per Song</text>
+              <text x="113" y="116" text-anchor="middle" fill="#4ade80" font-size="9">96kbps · 160kbps · 320kbps</text>
+
+              <rect x="20"  y="132" width="186" height="34" rx="5" fill="#064e3b"/>
+              <text x="113" y="154" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="600">🗃️ S3 Object Storage</text>
+
+              <rect x="20"  y="178" width="186" height="34" rx="5" fill="#064e3b"/>
+              <text x="113" y="196" text-anchor="middle" fill="#6ee7b7" font-size="10.5" font-weight="600">🔄 Upload Processing Queue</text>
+              <text x="113" y="209" text-anchor="middle" fill="#4ade80" font-size="9">transcode · features · copyright</text>
+
+              <!-- down arrows store -->
+              <line x1="113" y1="74" x2="113" y2="86" stroke="#1db954" stroke-width="1.5" marker-end="url(#arr-green2)"/>
+              <line x1="113" y1="120" x2="113" y2="132" stroke="#1db954" stroke-width="1.5" marker-end="url(#arr-green2)"/>
+              <line x1="113" y1="166" x2="113" y2="178" stroke="#1db954" stroke-width="1.5" marker-end="url(#arr-green2)"/>
+
+              <!-- STREAM column -->
+              <rect x="242" y="40" width="186" height="34" rx="5" fill="#1e3a5f"/>
+              <text x="335" y="62" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">👤 User Plays Song</text>
+
+              <rect x="242" y="86" width="186" height="34" rx="5" fill="#1e3a5f"/>
+              <text x="335" y="103" text-anchor="middle" fill="#93c5fd" font-size="10.5" font-weight="600">🔑 API: Get Presigned CDN URL</text>
+              <text x="335" y="116" text-anchor="middle" fill="#60a5fa" font-size="9">4-hour TTL · no audio through API</text>
+
+              <rect x="242" y="132" width="186" height="34" rx="5" fill="#1e3a5f"/>
+              <text x="335" y="154" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">🌍 CDN Edge (200+ POPs)</text>
+
+              <rect x="242" y="178" width="186" height="34" rx="5" fill="#1e3a5f"/>
+              <text x="335" y="196" text-anchor="middle" fill="#93c5fd" font-size="10.5" font-weight="600">📡 Adaptive Bitrate Client</text>
+              <text x="335" y="209" text-anchor="middle" fill="#60a5fa" font-size="9">auto-switch quality · prefetch 30s</text>
+
+              <rect x="242" y="224" width="186" height="34" rx="5" fill="#1e3a5f"/>
+              <text x="335" y="246" text-anchor="middle" fill="#93c5fd" font-size="10.5" font-weight="600">🔇 Gapless Playback</text>
+              <text x="335" y="259" text-anchor="middle" fill="#60a5fa" font-size="9">prefetch next song 15s before end</text>
+
+              <!-- down arrows stream -->
+              <line x1="335" y1="74" x2="335" y2="86" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue2)"/>
+              <line x1="335" y1="120" x2="335" y2="132" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue2)"/>
+              <line x1="335" y1="166" x2="335" y2="178" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue2)"/>
+              <line x1="335" y1="212" x2="335" y2="224" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue2)"/>
+
+              <!-- DISCOVER column -->
+              <rect x="464" y="40" width="194" height="34" rx="5" fill="#2d1b69"/>
+              <text x="561" y="62" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600">📊 Play Events (Kafka)</text>
+
+              <rect x="464" y="86" width="194" height="56" rx="5" fill="#2d1b69"/>
+              <text x="561" y="105" text-anchor="middle" fill="#c4b5fd" font-size="10.5" font-weight="600">🤝 Collab Filtering (Batch)</text>
+              <text x="561" y="118" text-anchor="middle" fill="#a78bfa" font-size="9">Matrix factorization (ALS)</text>
+              <text x="561" y="131" text-anchor="middle" fill="#a78bfa" font-size="9">Spark · runs Sunday night</text>
+
+              <rect x="464" y="154" width="194" height="34" rx="5" fill="#2d1b69"/>
+              <text x="561" y="172" text-anchor="middle" fill="#c4b5fd" font-size="10.5" font-weight="600">📅 Discover Weekly</text>
+              <text x="561" y="185" text-anchor="middle" fill="#a78bfa" font-size="9">stored in Redis per user</text>
+
+              <rect x="464" y="200" width="194" height="56" rx="5" fill="#2d1b69"/>
+              <text x="561" y="219" text-anchor="middle" fill="#c4b5fd" font-size="10.5" font-weight="600">🎼 Audio Features ANN (Real-time)</text>
+              <text x="561" y="232" text-anchor="middle" fill="#a78bfa" font-size="9">FAISS / HNSW index</text>
+              <text x="561" y="245" text-anchor="middle" fill="#a78bfa" font-size="9">BPM · energy · valence · key</text>
+
+              <rect x="464" y="268" width="194" height="34" rx="5" fill="#2d1b69"/>
+              <text x="561" y="290" text-anchor="middle" fill="#c4b5fd" font-size="10.5" font-weight="600">📻 Radio (real-time)</text>
+
+              <!-- down arrows discover -->
+              <line x1="561" y1="74" x2="561" y2="86" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple2)"/>
+              <line x1="561" y1="142" x2="561" y2="154" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple2)"/>
+              <line x1="561" y1="256" x2="561" y2="268" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple2)"/>
+
+              <!-- OFFLINE column -->
+              <rect x="694" y="40" width="206" height="34" rx="5" fill="#451a03"/>
+              <text x="797" y="62" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="600">💾 Download Request (Premium)</text>
+
+              <rect x="694" y="86" width="206" height="34" rx="5" fill="#451a03"/>
+              <text x="797" y="104" text-anchor="middle" fill="#fcd34d" font-size="10.5" font-weight="600">🔐 DRM License Server</text>
+              <text x="797" y="117" text-anchor="middle" fill="#f59e0b" font-size="9">AES-128 key · 24h TTL</text>
+
+              <rect x="694" y="132" width="206" height="34" rx="5" fill="#451a03"/>
+              <text x="797" y="150" text-anchor="middle" fill="#fcd34d" font-size="10.5" font-weight="600">📦 Encrypted Audio File (S3)</text>
+              <text x="797" y="163" text-anchor="middle" fill="#f59e0b" font-size="9">ciphertext — useless without key</text>
+
+              <rect x="694" y="178" width="206" height="34" rx="5" fill="#451a03"/>
+              <text x="797" y="196" text-anchor="middle" fill="#fcd34d" font-size="10.5" font-weight="600">📱 Local Device Cache</text>
+              <text x="797" y="209" text-anchor="middle" fill="#f59e0b" font-size="9">encrypted at rest on device</text>
+
+              <rect x="694" y="224" width="206" height="34" rx="5" fill="#1f2937" stroke="#ef4444" stroke-width="1"/>
+              <text x="797" y="242" text-anchor="middle" fill="#fca5a5" font-size="10.5" font-weight="600">🚫 Sub expires → key denied</text>
+              <text x="797" y="255" text-anchor="middle" fill="#f87171" font-size="9">files become unplayable ciphertext</text>
+
+              <!-- down arrows offline -->
+              <line x1="797" y1="74" x2="797" y2="86" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+              <line x1="797" y1="120" x2="797" y2="132" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+              <line x1="797" y1="166" x2="797" y2="178" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+              <line x1="797" y1="212" x2="797" y2="224" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+
+              <defs>
+                <marker id="arr-green2"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1db954"/></marker>
+                <marker id="arr-blue2"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/></marker>
+                <marker id="arr-purple2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6"/></marker>
+                <marker id="arr-amber"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker>
+              </defs>
+            </svg>
+          </div>
+
+          <h3>STORE — Audio File Management</h3>
+          <ul>
+            <li><strong>3 quality tiers per song:</strong> 96kbps AAC (mobile low-data), 160kbps (standard), 320kbps (Premium lossless). S3 key: <code>/audio/{song_id}/{quality}.aac</code></li>
+            <li><strong>No audio through API servers</strong> — the most important architectural decision. API server returns a presigned CDN URL with 4-hour TTL. Client fetches audio directly from the nearest CDN POP.</li>
+            <li><strong>Upload pipeline:</strong> Artist uploads raw WAV → SQS queue → FFmpeg workers transcode to 3 tiers → audio feature extraction → copyright fingerprint check → S3 upload → song marked "available".</li>
+          </ul>
+
+          <h3>STREAM — Adaptive Bitrate Audio Delivery</h3>
+          <ul>
+            <li><strong>CDN pre-positioning:</strong> Popular songs are pre-pushed to all CDN POPs globally. Viral songs are served from cache edge-to-client; S3 never sees the spike.</li>
+            <li><strong>Adaptive bitrate:</strong> Client measures available bandwidth every 10 seconds. On poor connection (mobile on subway): auto-downgrades to 96kbps. On WiFi: uses 320kbps. Switch is seamless mid-song.</li>
+            <li><strong>Prefetch buffer:</strong> Client downloads the next 30 seconds of audio ahead of the current playback position. Seek within buffered range is instant.</li>
+            <li><strong>Gapless playback:</strong> When 15 seconds remain in current song, client fires background request for next song's CDN URL and begins buffering. Crossfade over 5 seconds eliminates audible gap.</li>
+          </ul>
+
+          <h3>DISCOVER — Two Recommendation Systems</h3>
+          <p><strong>System 1: Collaborative Filtering (Discover Weekly — batch)</strong></p>
+          <ul>
+            <li>User-song play matrix: 600M users × 100M songs (extremely sparse — each user has heard ~0.001% of catalog)</li>
+            <li>Matrix factorization (ALS algorithm): decomposes into user vectors (600M × 100) and song vectors (100M × 100)</li>
+            <li>Cosine similarity between user vectors → find users with similar taste → surface songs they loved but you haven't heard</li>
+            <li>Run as weekly Spark job Sunday night, store top-50 per user in Redis, refreshed Monday morning</li>
+          </ul>
+          <p><strong>System 2: Audio Feature ANN (Radio — real-time)</strong></p>
+          <ul>
+            <li>Spotify analyzes every song: BPM, musical key, energy (0–1), danceability (0–1), acousticness, valence (musical happiness)</li>
+            <li>Each song is a point in 100-dimensional audio-feature space</li>
+            <li>Radio = "find k nearest neighbors in this space to the seed song" → FAISS/HNSW index for approximate nearest neighbor in milliseconds</li>
+            <li>No user history needed → solves cold start for new users and new songs simultaneously</li>
+          </ul>
+
+          <h3>OFFLINE — DRM-Encrypted Downloads</h3>
+          <ul>
+            <li>Client requests presigned S3 URL for encrypted audio file + DRM license key from license server</li>
+            <li>Audio file encrypted with AES-128. Key tied to user's subscription status via license server.</li>
+            <li>License keys have 24-48h TTL — client must periodically renew while connected to internet</li>
+            <li>When subscription expires: license server refuses key renewal → encrypted files become unplayable ciphertext</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- A: APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Core streaming — returns a presigned CDN URL, not the audio bytes
+GET /v1/songs/{song_id}/stream?quality=HIGH
+// Response: { "stream_url": "https://cdn.spotify.com/audio/.../320.aac?sig=...", "quality": "HIGH_320KBPS", "duration_ms": 214000, "waveform_data": [...] }
+// The presigned URL expires in 4 hours. Audio flows CDN → client directly.
+
+// Search — Elasticsearch under the hood
+GET /v1/search?q=shape+of+you&amp;type=song,artist,album&amp;limit=10
+// Response: { "songs": [{song_id, title, artist, duration_ms, cover_url}], "artists": [...], "albums": [...] }
+
+// Playlist management
+POST /v1/playlists
+{ "name": "Sunday Vibes", "song_ids": ["uuid1", "uuid2"] }
+// Response: { "playlist_id": "uuid-new" }
+
+PUT /v1/playlists/{playlist_id}/songs
+{ "song_ids": ["uuid1", "uuid3", "uuid2"] }  // full ordered list
+// Response: 204 No Content
+
+// Recommendations
+GET /v1/recommendations/weekly
+// Response: { "songs": ["song_uuid_1", ...30 songs...], "generated_at": "2026-05-17T00:00:00Z" }
+// Served from Redis — O(1) lookup
+
+GET /v1/recommendations/radio?seed_song_id={uuid}&amp;limit=25
+// Response: { "songs": [...] }
+// Real-time FAISS ANN lookup — p99 &lt;50ms
+
+// Play event tracking — fire-and-forget, async
+POST /v1/events/play
+{ "song_id": "uuid", "duration_played_ms": 42000, "source": "radio" }
+// Response: 202 Accepted (event queued in Kafka, processed asynchronously)</code></pre>
+        </div>
+      </section>
+
+      <!-- D: Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">15 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Why Audio Never Touches Your API Servers</h3>
+          <p>This is the single most important architectural insight in the problem. Let's calculate why:</p>
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid #1db954">
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">300,000 concurrent streams × 160kbps = 48 Gbps of audio data
+A standard API server can handle ~10 Gbps throughput maximum.
+You would need 5+ dedicated servers just for bandwidth — not for compute.
+
+CDN solution:
+→ API server returns presigned CDN URL (just 200 bytes of JSON)
+→ Client fetches audio from nearest CDN POP (possibly 5ms away)
+→ API server load: 300K × ~100 bytes/s of control traffic ≈ 30 MB/s
+→ CDN handles: 48 Gbps across 200+ POPs = 240 Mbps per POP average
+
+This is why Netflix, Spotify, YouTube, Apple Music ALL use CDN for media.
+If you route audio through your API servers in an interview, flag it immediately.</pre>
+          </div>
+
+          <h3>2. Gapless Playback — The Engineering Detail Interviewers Love</h3>
+          <p>The 100ms silence between tracks that amateur streaming apps produce is a UX catastrophe for music. Gapless playback requires coordinating two concurrent streams:</p>
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid #3b82f6">
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">Timeline:
+  t=0s:  Song A starts playing
+  t=3:05s (15s before end): Client fires GET /v1/songs/{B}/stream
+                            Client starts buffering Song B in background
+  t=3:15s:  Song A has 5s left. Begin crossfade:
+            AudioA.volume fading 1.0 → 0.0 over 5s
+            AudioB.volume fading 0.0 → 1.0 over 5s
+  t=3:20s:  Song A ends. Song B already fully buffered and playing.
+            Zero gap, zero buffering spinner.
+
+Browser implementation: two &lt;audio&gt; elements, swap currentTime listeners.
+Native mobile: use AudioQueueRef (iOS) or AudioTrack (Android) with seamless handoff.</pre>
+          </div>
+
+          <h3>3. The Cold Start Problem in Recommendations</h3>
+          <p>Collaborative filtering is useless for a new user — no play history means no position in the user-song matrix. This is the cold start problem.</p>
+          <ul>
+            <li><strong>Onboarding signal:</strong> Ask new user to pick 3+ favorite artists/genres → immediately use content-based ANN on those artists' top songs</li>
+            <li><strong>Implicit signals from day 1:</strong> Play duration is a powerful signal even without history. &lt;30 seconds = strong skip (negative). Full play + repeat = strong like (positive). These feed into the model after just a few sessions.</li>
+            <li><strong>Geo + demographic defaults:</strong> New user in Brazil → start with trending Brazilian artists. Not ideal but far better than random.</li>
+            <li><strong>Audio features solve cold start for NEW SONGS:</strong> A song uploaded today has no play history but has audio features immediately. ANN can recommend it to users who like acoustically similar songs before a single play event exists.</li>
+          </ul>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__title">💡 Discover Weekly: The Mechanics</div>
+            <p style="margin:0">Matrix factorization decomposes the enormous user-song play matrix into two smaller matrices: User Factors (600M × 100) and Song Factors (100M × 100). The 100-dimensional vectors are latent representations — the algorithm discovers features like "affinity for acoustic indie" automatically without labeling. Two users with similar factor vectors have similar tastes. Top-N songs for a user = k-nearest songs in factor space that the user hasn't heard. Computed for all 600M users in parallel via Spark ALS — precomputed and stored in Redis, so query time is O(1).</p>
+          </div>
+
+          <h3>4. Audio Upload Processing Pipeline</h3>
+          <p>When an artist (or podcaster) uploads new content, synchronous processing would mean users wait minutes for the upload to "finish" and timeout on large files. The correct pattern is async pipeline:</p>
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid #8b5cf6">
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">1. API accepts raw upload → stores to S3 raw bucket → returns 202 Accepted + job_id
+2. SQS message triggers processing workers (independent, retriable):
+   a. FFmpeg workers: transcode to 96/160/320 kbps AAC (parallelized per tier)
+   b. Feature extractor: BPM, key, energy, danceability → store in songs table
+   c. Waveform generator: amplitude array → stored as JSONB for visualization
+   d. Copyright detector: Shazam-style audio fingerprint against known catalog
+3. All outputs uploaded to S3 production bucket
+4. Song record updated: status = AVAILABLE
+5. Elasticsearch index updated: song is now searchable
+6. Webhook/push notification to artist: "Your song is live!"
+
+Total time: typically 2-8 minutes depending on file size and queue depth.
+Status endpoint: GET /v1/upload/{job_id}/status → { status: "PROCESSING", progress: 60 }</pre>
+          </div>
+
+          <h3>5. Royalty Tracking at Scale</h3>
+          <p>Every play_event feeds into a royalty calculation pipeline — music labels receive per-stream payments. 6 billion events/day cannot be processed synchronously.</p>
+          <ul>
+            <li>play_events → Kafka topic → Flink stream processing → aggregate by (song_id, day) → royalty_calculations table</li>
+            <li>End-of-month batch job: sum all daily aggregates → generate payout amounts per rights holder → trigger payment processing</li>
+            <li>Short plays (&lt;30 seconds) do NOT generate royalties (industry standard) — the <code>duration_played_ms</code> field in the play_event schema is critical for this filter</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- E: Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">⚖️</span>E — Evaluate Bottlenecks<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <div class="insight-box insight-box--warning">
+            <div class="insight-box__title">🚨 Bottleneck 1: Viral Song Thundering Herd</div>
+            <p style="margin:0">A new Taylor Swift album drops. 50M users start playing the same song simultaneously. Mitigation: (1) CDN pre-positioning — the new release is pre-pushed to all CDN POPs before the release timestamp. (2) Multi-CDN: route through Akamai AND Cloudflare — no single CDN POP becomes a bottleneck. (3) S3 already handles millions of concurrent reads natively. The CDN absorbs 99.9% of the spike before S3 sees it.</p>
+          </div>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">🚨 Bottleneck 2: Discover Weekly — 600M Playlists in One Night</div>
+            <p style="margin:0">Sunday night: generate 600M personalized playlists using matrix factorization. This takes ~6 hours on a 10,000-node Spark cluster. Key insight: matrix factorization computes ALL user vectors and song vectors in one pass — it doesn't run separately per user. The computation scales with matrix size, not user count. Pre-store results in Redis with a 7-day TTL. If the job overruns, last week's recommendations serve as fallback.</p>
+          </div>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">🚨 Bottleneck 3: Copyright and DRM Compliance</div>
+            <p style="margin:0">Music labels require DRM for all audio content — this is non-negotiable. Every audio file must be encrypted (AES-128 or Widevine). The license server is a critical availability dependency — if it goes down, no one can play music (even online streams need license verification on first play). Mitigation: multi-region license server with 99.999% SLA. License keys cached on client for 24h so brief outages don't interrupt playback.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- D: Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title"><span class="content-section__title-icon">🎯</span>D — Deliver: Closing Statement<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);border-left:4px solid #1db954">
+            <p style="margin:0;font-size:1rem;line-height:1.7">"Spotify is four independent subsystems. <strong>STORE</strong>: 100M songs stored in S3 as 3 quality tiers per song (96/160/320kbps). <strong>STREAM</strong>: the most critical insight — audio never touches your API servers. The client gets a presigned CDN URL and fetches audio directly from the nearest CDN edge node. Adaptive bitrate auto-switches quality based on bandwidth. Gapless playback prefetches the next song 15 seconds early. <strong>DISCOVER</strong>: two engines for different use cases — weekly Spark matrix factorization for Discover Weekly (batch, stored in Redis), real-time FAISS audio-feature ANN for Radio (solves cold start too). <strong>OFFLINE</strong>: DRM-encrypted files with 24-hour license keys. Subscription expiry = license server denies renewal = files become unplayable ciphertext on the device."</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚡</span>Key Trade-offs</h2>
+        <div class="content-section__body">
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+              <thead><tr style="border-bottom:2px solid var(--border)">
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Decision</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Option A</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Option B</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Winner &amp; Why</th>
+              </tr></thead>
+              <tbody>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Audio delivery</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Proxy through API servers</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Presigned CDN URL — audio direct to client</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ CDN — API servers cannot handle 48Gbps; CDN scales horizontally across global POPs</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Recommendations</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Only collaborative filtering</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Collab filtering + audio-feature ANN</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Both — collab for personalization, ANN for cold start and real-time radio</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Offline protection</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Trust client to check subscription status</td>
+                  <td style="padding:var(--space-2) var(--space-3)">DRM: encrypted files + expiring license keys from server</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ DRM — only cryptographically enforced solution. Client-side checks are trivially bypassed.</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Play event DB</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">MySQL</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Cassandra (append-only, time-series)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Cassandra — 6B events/day is pure write throughput. MySQL would require extreme sharding.</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Search</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Custom inverted index</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Elasticsearch</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Elasticsearch — 100M songs is manageable, operational simplicity wins at this scale vs building from scratch</td>
+                </tr>
+                <tr>
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Quality selection</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">User selects manually</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Adaptive (auto, with user override)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Adaptive default — prevents most buffering. Power users can force 320kbps. Best of both.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <p>The core streaming service: presigned URL generation, quality gating, and async play event logging:</p>
+          <pre><code class="language-java">/**
+ * MusicStreamingService — core service for song streaming and event tracking.
+ *
+ * Key design decisions:
+ *   - Audio delivery via presigned CDN URLs only (no audio bytes through this service)
+ *   - Play events logged asynchronously to Kafka (non-blocking — never delay a stream for logging)
+ *   - Premium quality gating: free users get 160kbps max
+ *   - URL TTL: 4 hours (long enough for a full album listen, short enough to limit abuse)
+ */
+import java.util.UUID;
+import java.time.Instant;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+
+public class MusicStreamingService {
+
+    // ── Constants ──────────────────────────────────────────────────────────────
+
+    private static final Duration CDN_URL_TTL = Duration.ofHours(4);
+    private static final int MIN_PLAY_DURATION_MS_FOR_ROYALTY = 30_000;  // 30 seconds
+    private static final String CDN_BASE_URL = "https://cdn.spotify.com/audio";
+
+    // ── Inner Types ────────────────────────────────────────────────────────────
+
+    public enum AudioQuality {
+        LOW_96KBPS("96kbps", false),         // mobile data-saver, available to all
+        STANDARD_160KBPS("160kbps", false),  // default, available to all
+        HIGH_320KBPS("320kbps", true);       // Premium only
+
+        public final String label;
+        public final boolean requiresPremium;
+
+        AudioQuality(String label, boolean requiresPremium) {
+            this.label = label;
+            this.requiresPremium = requiresPremium;
+        }
+    }
+
+    public record StreamResponse(
+        String streamUrl,          // presigned CDN URL — expires in 4 hours
+        AudioQuality quality,      // actual quality granted (may downgrade if not Premium)
+        int durationMs,
+        double[] waveformData      // amplitude array for visualization UI
+    ) {}
+
+    public record PlayEvent(
+        UUID userId,
+        UUID songId,
+        long durationPlayedMs,
+        String source,             // search | playlist | radio | recommendation
+        String deviceType,
+        Instant playedAt
+    ) {}
+
+    // ── Dependencies (injected) ────────────────────────────────────────────────
+
+    private final SongRepository songRepository;
+    private final UserRepository userRepository;
+    private final CdnSigningService cdnSigningService;    // generates presigned URLs
+    private final KafkaProducer&lt;String, PlayEvent&gt; kafkaProducer;
+
+    public MusicStreamingService(
+        SongRepository songRepository,
+        UserRepository userRepository,
+        CdnSigningService cdnSigningService,
+        KafkaProducer&lt;String, PlayEvent&gt; kafkaProducer
+    ) {
+        this.songRepository = songRepository;
+        this.userRepository = userRepository;
+        this.cdnSigningService = cdnSigningService;
+        this.kafkaProducer = kafkaProducer;
+    }
+
+    // ── Core Logic ─────────────────────────────────────────────────────────────
+
+    /**
+     * Returns a presigned CDN URL for the requested song.
+     * Audio NEVER flows through this service — only the URL is returned.
+     *
+     * Quality is downgraded to STANDARD_160KBPS if user is not Premium
+     * and HIGH_320KBPS was requested. This is enforced server-side —
+     * never trust the client to gate Premium features.
+     *
+     * @param songId    the song to stream
+     * @param userId    the requesting user (used to check subscription)
+     * @param requested the quality tier the client wants
+     * @return StreamResponse with a 4-hour CDN URL
+     * @throws SongNotFoundException if song_id does not exist or is not yet available
+     * @throws UserNotFoundException if user_id is invalid
+     */
+    public StreamResponse getSongStreamUrl(UUID songId, UUID userId, AudioQuality requested) {
+        Song song = fetchSongOrThrow(songId);
+        User user = fetchUserOrThrow(userId);
+
+        AudioQuality grantedQuality = resolveGrantedQuality(requested, user.isPremium());
+        String presignedUrl = buildPresignedCdnUrl(songId, grantedQuality);
+
+        return new StreamResponse(
+            presignedUrl,
+            grantedQuality,
+            song.durationMs(),
+            song.waveformData()
+        );
+    }
+
+    /**
+     * Logs a play event to Kafka asynchronously.
+     * This must NEVER block the streaming response — royalty accounting happens
+     * in a separate async pipeline. Fire-and-forget: if Kafka is temporarily down,
+     * we lose some play events but we never delay music playback.
+     *
+     * Events with duration &lt; 30s are still logged but flagged as "skips" —
+     * they do NOT generate royalty payments but ARE used as negative signals
+     * for recommendation training.
+     *
+     * @param event  the play event to record
+     */
+    public void logPlayEventAsync(PlayEvent event) {
+        // Non-blocking: returns immediately, Kafka send happens on producer thread pool
+        CompletableFuture.runAsync(() -&gt; {
+            try {
+                kafkaProducer.send("play-events", event.userId().toString(), event);
+            } catch (KafkaException kafkaException) {
+                // Log internally but DO NOT surface to user or caller.
+                // A missed play event is acceptable. A delayed stream is not.
+                System.err.println("[MusicStreamingService.logPlayEventAsync] Kafka send failed: " + kafkaException.getMessage());
+            }
+        });
+    }
+
+    // ── Helper Logic ──────────────────────────────────────────────────────────
+
+    /**
+     * Enforces Premium quality gating server-side.
+     * 320kbps is downgraded to 160kbps for free-tier users.
+     * This prevents client-side manipulation of the quality parameter.
+     */
+    private AudioQuality resolveGrantedQuality(AudioQuality requested, boolean isPremium) {
+        if (requested.requiresPremium &amp;&amp; !isPremium) {
+            return AudioQuality.STANDARD_160KBPS;  // silent downgrade — standard UX
+        }
+        return requested;
+    }
+
+    /**
+     * Builds a presigned CDN URL with 4-hour expiry signature.
+     * The URL points directly to the CDN edge — client fetches audio without
+     * any further involvement from this service.
+     *
+     * Pattern: {CDN_BASE}/{song_id}/{quality}.aac?sig={hmac_signature}&amp;expires={ts}
+     */
+    private String buildPresignedCdnUrl(UUID songId, AudioQuality quality) {
+        String audioPath = String.format("%s/%s/%s.aac", CDN_BASE_URL, songId, quality.label);
+        long expiresAt = Instant.now().plus(CDN_URL_TTL).getEpochSecond();
+        String signature = cdnSigningService.sign(audioPath, expiresAt);
+        return String.format("%s?expires=%d&amp;sig=%s", audioPath, expiresAt, signature);
+    }
+
+    private Song fetchSongOrThrow(UUID songId) {
+        return songRepository.findById(songId)
+            .orElseThrow(() -&gt; new SongNotFoundException("Song not found or not yet available: " + songId));
+    }
+
+    private User fetchUserOrThrow(UUID userId) {
+        return userRepository.findById(userId)
+            .orElseThrow(() -&gt; new UserNotFoundException("User not found: " + userId));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * RecommendationService — two engines for different contexts.
+ *
+ * Weekly:    Redis lookup — O(1), pre-computed Sunday night by Spark job
+ * Radio:     Real-time ANN search in audio-feature vector space — p99 &lt;50ms
+ */
+public class RecommendationService {
+
+    private static final int RADIO_RESULT_COUNT = 25;
+
+    private final RedisClient redisClient;
+    private final SongFeatureRepository songFeatureRepository;
+    private final AnnIndex annIndex;  // FAISS or HNSW index of audio feature vectors
+
+    public RecommendationService(RedisClient redisClient,
+                                  SongFeatureRepository songFeatureRepository,
+                                  AnnIndex annIndex) {
+        this.redisClient = redisClient;
+        this.songFeatureRepository = songFeatureRepository;
+        this.annIndex = annIndex;
+    }
+
+    /**
+     * Returns pre-computed Discover Weekly playlist for a user.
+     * Pre-computed by weekly Spark matrix factorization job, stored in Redis.
+     * Key: "discover_weekly:{user_id}" → JSON list of 30 song UUIDs.
+     *
+     * Falls back to trending songs if no pre-computed result exists
+     * (new users, or Spark job not yet run this week).
+     *
+     * @param userId  the user requesting their weekly playlist
+     * @return ordered list of recommended song IDs
+     */
+    public java.util.List&lt;UUID&gt; getDiscoverWeekly(UUID userId) {
+        String cacheKey = "discover_weekly:" + userId;
+        java.util.List&lt;UUID&gt; cachedRecommendations = redisClient.getList(cacheKey, UUID.class);
+
+        if (cachedRecommendations != null &amp;&amp; !cachedRecommendations.isEmpty()) {
+            return cachedRecommendations;
+        }
+
+        // Cold start or cache miss: fall back to curated trending songs for user's geo
+        return getTrendingFallback(userId);
+    }
+
+    /**
+     * Radio: finds songs acoustically similar to the seed song.
+     * Uses Approximate Nearest Neighbor (ANN) search on 100-dimensional
+     * audio feature vectors: [bpm, key, energy, danceability, valence, acousticness, ...]
+     *
+     * This solves the cold start problem for both:
+     *   - New users (no play history needed — just a seed song)
+     *   - New songs (can be recommended immediately after feature extraction)
+     *
+     * @param seedSongId  the song to find similar tracks for
+     * @return list of acoustically similar song IDs, sorted by similarity descending
+     */
+    public java.util.List&lt;UUID&gt; getRadio(UUID seedSongId) {
+        double[] seedFeatureVector = fetchAudioFeatureVector(seedSongId);
+
+        // ANN lookup: finds k nearest neighbors in O(log N) — approximate but fast
+        // HNSW index: ~5ms at 100M songs, vs exact search ~500ms
+        java.util.List&lt;UUID&gt; similarSongIds = annIndex.findNearestNeighbors(
+            seedFeatureVector,
+            RADIO_RESULT_COUNT + 1  // +1 because the seed itself will be in results
+        );
+
+        // Remove the seed song itself from radio results
+        similarSongIds.remove(seedSongId);
+        return similarSongIds.subList(0, Math.min(RADIO_RESULT_COUNT, similarSongIds.size()));
+    }
+
+    private double[] fetchAudioFeatureVector(UUID songId) {
+        SongFeatures features = songFeatureRepository.findById(songId)
+            .orElseThrow(() -&gt; new SongNotFoundException("Audio features not found for: " + songId));
+        // Feature vector: [bpm_norm, key_norm, energy, danceability, valence, acousticness, ...]
+        return new double[]{
+            features.bpmNormalized(), features.keyNormalized(),
+            features.energy(), features.danceability(),
+            features.valence(), features.acousticness()
+            // ... additional learned latent features from the ALS model
+        };
+    }
+
+    private java.util.List&lt;UUID&gt; getTrendingFallback(UUID userId) {
+        // Placeholder: in production, fetch from a trending-songs service
+        // partitioned by user geography and onboarding genre preferences
+        return java.util.Collections.emptyList();
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="content-section__body">
+          <div class="quiz" data-quiz-id="p-spotify-quiz" role="region" aria-label="Spotify problem quiz">
+            <div class="quiz__header">
+              <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+              <div class="quiz__score" aria-live="polite"></div>
+            </div>
+            <div class="quiz__question">
+              <div class="quiz__question-number">Question 1 of 4</div>
+              <div class="quiz__question-text"></div>
+              <div class="quiz__options" role="group" aria-label="Answer options"></div>
+              <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            </div>
+
+            <div data-question="Spotify serves 300,000 simultaneous audio streams at 160kbps. A new album drops and 5 million users start playing it simultaneously. Where in the architecture does this spike hit first, and how is it absorbed?" data-options='["The song database — 5M concurrent DB reads overwhelm the catalog PostgreSQL instance","The API servers — 5M requests per second far exceeds server capacity","The CDN edge nodes — CDN absorbs the spike by serving audio from cache at each POP globally. Your S3 origin only sees one cache miss per CDN POP (200 POPs = 200 origin requests), not 5 million direct requests","The recommendation service — the new album causes recommendation feedback loops"]' data-correct="2" data-explanation="Audio never goes through your API servers. The CDN serves audio directly from edge nodes closest to each user. A new album is pre-positioned at all CDN POPs before its release time (Spotify coordinates with labels on release windows). 5M requests hit CDN edge nodes — which are designed to handle millions of simultaneous connections. Your S3 origin sees at most one cache miss per CDN POP — about 200 requests total, not 5 million. This is the fundamental reason CDN is non-negotiable for audio and video streaming at any meaningful scale." style="display:none"></div>
+
+            <div data-question="Discover Weekly refreshes every Sunday for 600 million users using collaborative filtering with matrix factorization. How do you generate 600M personalized playlists within a reasonable Sunday-night time window?" data-options='["Run the recommendation algorithm sequentially for each user — simple but complete before Monday morning","Use distributed Spark matrix factorization (ALS): decompose the user-song play matrix into user factor vectors (600M × 100 dimensions) and song factor vectors (100M × 100 dimensions). Pre-compute top-50 songs per user via ANN search across the factor space. Parallelized across thousands of Spark workers, this runs in ~6 hours. Store results per user in Redis — query-time is O(1) lookup.","Use a single shared recommendation model that returns the same popular songs for all users in the same country","Limit Discover Weekly to Premium users only to reduce total computation required"]' data-correct="1" data-explanation="The key insight: matrix factorization computes 100-dimensional latent vectors for ALL users and songs in a single distributed pass — it does not run separately per user. ALS (Alternating Least Squares) iterates over the matrix alternately fixing user vectors and song vectors until convergence. The result: a 100-dimensional 'taste vector' per user and a 100-dimensional 'feature vector' per song. Top-N recommendations = find N song vectors with highest cosine similarity to the user's vector, excluding already-heard songs. This is precomputed for all 600M users in parallel on a large Spark cluster, then stored in Redis. Monday morning, every user's GET /v1/recommendations/weekly is an O(1) Redis lookup." style="display:none"></div>
+
+            <div data-question="A Premium user downloads 500 songs for offline listening. Their subscription expires. How does your system prevent them from playing the downloaded songs without requiring the app to delete local files?" data-options='["Delete all downloaded audio files from the device immediately when subscription expires via push notification","Trust the client app to check subscription status on launch — if expired, the client UI blocks playback","Use DRM: audio files are encrypted with AES-128 using a key managed by your license server. The client must fetch a fresh license key every 24-48 hours to decrypt and play. When the subscription expires, the license server stops issuing key renewals. The encrypted files on the device become unplayable ciphertext — no delete operation needed.","Use time-limited presigned URLs for downloaded files, regenerating them daily while subscription is active"]' data-correct="2" data-explanation="DRM is the only cryptographically enforced solution. The device stores the encrypted audio file permanently — it can never be played without the decryption key. License keys expire (24-48h TTL) and must be renewed from your license server while the device has internet connectivity. When the subscription expires, the license server denies renewal. The encrypted bytes on the device are mathematically unplayable without the key. Client-side checks (option B) are trivially bypassed with a modified app. This is exactly how Netflix, Spotify, Apple Music, and Amazon Prime Music all handle offline content protection — it is an industry-wide standard enforced by music label contracts." style="display:none"></div>
+
+            <div data-question="A new artist uploads their first song. Describe the complete processing pipeline before it appears in search results and is streamable by users." data-options='["Store the raw audio file to S3 immediately and make it searchable right away — process lower quality tiers on demand","The upload triggers an async pipeline: (1) store raw file to S3, return 202 Accepted; (2) FFmpeg workers transcode to 3 quality tiers; (3) audio feature extractor computes BPM/energy/danceability/valence for recommendations; (4) waveform generator creates amplitude array for UI visualization; (5) copyright fingerprint check against known catalog; (6) all outputs uploaded to S3; (7) Elasticsearch index updated; (8) song record status set to AVAILABLE. Typically 2-8 minutes end-to-end.","Process synchronously during the upload HTTP request — user waits for all transcoding to complete before receiving a response","Only transcode to the highest 320kbps quality, then transcode to lower qualities on demand when a free user requests them"]' data-correct="1" data-explanation="Synchronous processing would timeout on large files (a 10-minute WAV file could be 600MB) and would block the HTTP response for minutes. The correct pattern: accept the upload, store the raw file, return 202 Accepted immediately with a job_id. The async pipeline via SQS/Kafka handles each step independently — each worker can retry on failure without re-running the entire pipeline. The song is marked 'PROCESSING' in the database and 'AVAILABLE' only after all steps complete and all S3 uploads succeed. This is how Spotify, YouTube, SoundCloud, and all major platforms handle media uploads — async pipeline is the only approach that is resilient, scalable, and provides a good user experience." style="display:none"></div>
+
+            <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+            <div class="quiz__actions">
+              <div></div>
+              <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+            </div>
+            <div class="quiz__result is-hidden" aria-live="polite">
+              <div class="quiz__result-score"></div>
+              <div class="quiz__result-label"></div>
+              <div style="margin-top:var(--space-4)">
+                <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+                <a href="leaderboard.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev/Next navigation -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-8);padding-top:var(--space-6);border-top:1px solid var(--border)">
+        <a href="search-engine.html" class="btn btn--outline">← Design a Search Engine</a>
+        <a href="leaderboard.html" class="btn btn--primary">Design a Leaderboard →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

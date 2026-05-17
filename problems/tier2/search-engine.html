@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Search Engine like Google — RESHADED walkthrough: web crawler, inverted index, TF-IDF ranking, PageRank, and scatter-gather serving for MAANG interviews.">
+  <title>Design a Search Engine — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/search-engine/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link site-nav__link--active">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar" aria-label="Table of contents">
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
+          <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
+          <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-search-engine" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=search-engine" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Tier 2</span>
+        </nav>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="tag tag--yellow">Tier 2 — Senior</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Inverted Index · PageRank · Crawling</span>
+        </div>
+        <h1 class="module-header__title">Design a Search Engine</h1>
+        <p class="module-header__desc">A search engine is a 3-phase pipeline: <strong>COLLECT → INDEX → SERVE</strong>. Every component — crawlers, inverted index, ranking — maps to one of these three phases. Master that mental model and the entire system clicks into place.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Microsoft (Bing), Amazon</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> Inverted index · TF-IDF · PageRank</div>
+        </div>
+      </header>
+
+      <!-- Mental Model -->
+      <div class="insight-box insight-box--info" style="margin-bottom:var(--space-6)">
+        <div class="insight-box__title">🧠 The Core Mental Model</div>
+        <p style="margin:0;font-size:1.05rem"><strong>COLLECT → INDEX → SERVE.</strong> The crawler collects raw web pages. The indexing pipeline transforms them into an inverted index. The query server serves results by merging posting lists and ranking. Every single design decision in this problem maps to one of these three phases. Use it as your skeleton throughout the interview.</p>
+      </div>
+
+      <!-- R: Requirements -->
+      <section class="content-section" id="requirements" aria-labelledby="req-title">
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><strong>Crawl the web:</strong> Discover, download, and parse web pages continuously</li>
+            <li><strong>Index content:</strong> Store processed content for fast full-text retrieval</li>
+            <li><strong>Rank results:</strong> Relevance scoring using TF-IDF × PageRank combined signal</li>
+            <li><strong>Serve queries:</strong> Return top-10 results for any keyword query in &lt;200ms</li>
+            <li><strong>Support advanced query syntax:</strong> phrase search (<code>"exact phrase"</code>), boolean operators (AND/OR/NOT), field filters (<code>site:example.com</code>)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Scale:</strong> Index 50 billion pages, serve 10 billion queries/day</li>
+            <li><strong>Query latency:</strong> p99 &lt;500ms, p50 &lt;100ms (users abandon at 500ms)</li>
+            <li><strong>Freshness:</strong> Popular pages re-crawled every hour; cold pages every 30 days</li>
+            <li><strong>Availability:</strong> 99.99% — search downtime makes international headlines</li>
+          </ul>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">⛔ Explicitly Out of Scope</div>
+            <p style="margin:0">Image search, personalization, ads, auto-suggest, spell correction. State these up front — it shows you know how to scope a 45-minute conversation.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- E: Estimation -->
+      <section class="content-section" id="estimation" aria-labelledby="est-title">
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <div class="content-section__body">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--space-4);margin-bottom:var(--space-5)">
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:var(--accent-primary)">115K</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">QPS average (10B queries/day ÷ 86,400s)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:var(--accent-primary)">500K</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">Peak QPS (4× average — global morning rush)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:var(--accent-primary)">5 PB</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">Raw crawl storage (50B pages × 100KB avg HTML)</div>
+            </div>
+            <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-4);border:1px solid var(--border)">
+              <div style="font-size:1.8rem;font-weight:800;color:var(--accent-primary)">500 TB</div>
+              <div style="font-size:0.85rem;color:var(--text-secondary)">Processed index (50B × 10KB extracted text)</div>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+            <thead><tr style="border-bottom:2px solid var(--border)">
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Component</th>
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Calculation</th>
+              <th style="text-align:left;padding:var(--space-2) var(--space-3)">Result</th>
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Index shards</td><td style="padding:var(--space-2) var(--space-3)">500TB ÷ 1TB/server (SSD)</td><td style="padding:var(--space-2) var(--space-3)"><strong>500 servers</strong></td></tr>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Link graph (PageRank)</td><td style="padding:var(--space-2) var(--space-3)">50B nodes, ~500B edges × 8 bytes</td><td style="padding:var(--space-2) var(--space-3)"><strong>~4 TB</strong></td></tr>
+              <tr style="border-bottom:1px solid var(--border)"><td style="padding:var(--space-2) var(--space-3)">Crawler throughput</td><td style="padding:var(--space-2) var(--space-3)">50B pages re-crawled every 30 days avg</td><td style="padding:var(--space-2) var(--space-3)"><strong>~19K pages/sec</strong></td></tr>
+              <tr><td style="padding:var(--space-2) var(--space-3)">Unique terms (vocabulary)</td><td style="padding:var(--space-2) var(--space-3)">English + proper nouns + URLs</td><td style="padding:var(--space-2) var(--space-3)"><strong>~1 billion terms</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- S: Schema -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema &amp; Data Structures<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <p>Three completely separate stores — each optimized for its access pattern:</p>
+
+          <h3>1. Crawl Store (S3 / Object Storage)</h3>
+          <pre><code class="language-java">// raw_pages table (metadata in DynamoDB, content in S3)
+url_hash     VARCHAR  PRIMARY KEY   -- SHA-256 of normalized URL
+url          TEXT
+raw_html     BLOB                   -- stored in S3, key = url_hash
+crawled_at   TIMESTAMP
+http_status  INT
+content_hash VARCHAR               -- SHA-256 of body, for deduplication</code></pre>
+
+          <h3>2. Forward Index (Document Store — Cassandra)</h3>
+          <pre><code class="language-java">// documents table — one row per indexed page
+doc_id          BIGINT   PRIMARY KEY
+url             TEXT
+title           TEXT
+snippet         TEXT     -- ~160 char excerpt for result display
+word_count      INT
+page_rank       FLOAT    -- pre-computed, updated weekly
+last_indexed    TIMESTAMP
+outbound_links  LIST&lt;TEXT&gt;</code></pre>
+
+          <h3>3. Inverted Index — The Heart of Search</h3>
+          <pre><code class="language-java">// For each term → sorted posting list on disk (Lucene segment files)
+// In memory during build: HashMap&lt;String, List&lt;Posting&gt;&gt;
+//
+// Posting: { doc_id, term_frequency, positions[] }
+// Example: "design" → [(doc:42, tf:3, pos:[5,19,88]), (doc:107, tf:1, pos:[3]), ...]
+//
+// Stored sorted by doc_id — enables fast AND-merge (like merge sort)
+// Immutable segment files on disk, merged periodically (LSM-tree style)</code></pre>
+
+          <h3>4. Link Graph (PageRank computation)</h3>
+          <pre><code class="language-java">// Adjacency list partitioned across servers
+// doc_id → [outbound_doc_id_1, outbound_doc_id_2, ...]
+// Stored as Parquet files in object storage, loaded into Spark for weekly PageRank job</code></pre>
+        </div>
+      </section>
+
+      <!-- H: High-level Design -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <!-- SVG Pipeline Diagram -->
+          <div style="overflow-x:auto;margin-bottom:var(--space-6)">
+            <svg viewBox="0 0 860 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;font-family:Inter,sans-serif" aria-label="Search engine 3-phase pipeline: Collect, Index, Serve" role="img">
+              <!-- Phase backgrounds -->
+              <rect x="0" y="0" width="860" height="320" rx="12" fill="#0f1117"/>
+              <rect x="8" y="8" width="270" height="304" rx="8" fill="#1a1f2e" stroke="#3b82f6" stroke-width="1.5"/>
+              <rect x="290" y="8" width="270" height="304" rx="8" fill="#1a1f2e" stroke="#8b5cf6" stroke-width="1.5"/>
+              <rect x="572" y="8" width="280" height="304" rx="8" fill="#1a1f2e" stroke="#10b981" stroke-width="1.5"/>
+
+              <!-- Phase labels -->
+              <text x="143" y="30" text-anchor="middle" fill="#3b82f6" font-size="11" font-weight="700" letter-spacing="2">PHASE 1 — COLLECT</text>
+              <text x="425" y="30" text-anchor="middle" fill="#8b5cf6" font-size="11" font-weight="700" letter-spacing="2">PHASE 2 — INDEX</text>
+              <text x="712" y="30" text-anchor="middle" fill="#10b981" font-size="11" font-weight="700" letter-spacing="2">PHASE 3 — SERVE</text>
+
+              <!-- COLLECT phase boxes -->
+              <rect x="20" y="44" width="238" height="38" rx="6" fill="#1e3a5f"/>
+              <text x="139" y="68" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">🌐  Web Pages (50B)</text>
+
+              <rect x="20" y="100" width="238" height="38" rx="6" fill="#1e3a5f"/>
+              <text x="139" y="124" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">📋  URL Frontier (Priority Queue)</text>
+
+              <rect x="20" y="156" width="238" height="38" rx="6" fill="#1e3a5f"/>
+              <text x="139" y="180" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">🕷️  Crawler Workers (distributed)</text>
+
+              <rect x="20" y="212" width="238" height="38" rx="6" fill="#1e3a5f"/>
+              <text x="139" y="236" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">🗃️  Raw Store (S3)</text>
+
+              <!-- Down arrows collect -->
+              <line x1="139" y1="82" x2="139" y2="100" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+              <line x1="139" y1="138" x2="139" y2="156" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+              <line x1="139" y1="194" x2="139" y2="212" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+
+              <!-- INDEX phase boxes -->
+              <rect x="302" y="44" width="238" height="38" rx="6" fill="#2d1b69"/>
+              <text x="421" y="68" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">🔤  Parser + Tokenizer + Stemmer</text>
+
+              <rect x="302" y="100" width="238" height="38" rx="6" fill="#2d1b69"/>
+              <text x="421" y="124" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">📊  TF-IDF Scorer</text>
+
+              <rect x="302" y="156" width="238" height="38" rx="6" fill="#2d1b69"/>
+              <text x="421" y="180" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">🗂️  Inverted Index Builder (MapReduce)</text>
+
+              <rect x="302" y="212" width="238" height="38" rx="6" fill="#2d1b69"/>
+              <text x="421" y="236" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">📦  Index Shards (500 servers)</text>
+
+              <!-- Down arrows index -->
+              <line x1="421" y1="82" x2="421" y2="100" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+              <line x1="421" y1="138" x2="421" y2="156" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+              <line x1="421" y1="194" x2="421" y2="212" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+              <!-- SERVE phase boxes -->
+              <rect x="584" y="44" width="256" height="38" rx="6" fill="#064e3b"/>
+              <text x="712" y="68" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="600">👤  User Query</text>
+
+              <rect x="584" y="100" width="256" height="38" rx="6" fill="#064e3b"/>
+              <text x="712" y="124" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="600">🖥️  Query Server (tokenize + parse)</text>
+
+              <rect x="584" y="156" width="256" height="38" rx="6" fill="#064e3b"/>
+              <text x="712" y="180" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="600">🔀  Scatter-Gather (500 shards)</text>
+
+              <rect x="584" y="212" width="256" height="38" rx="6" fill="#064e3b"/>
+              <text x="712" y="236" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="600">🏆  Ranker → Top-10 Results</text>
+
+              <!-- Down arrows serve -->
+              <line x1="712" y1="82" x2="712" y2="100" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+              <line x1="712" y1="138" x2="712" y2="156" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+              <line x1="712" y1="194" x2="712" y2="212" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+              <!-- Cross-phase arrows: S3 → Parser -->
+              <line x1="258" y1="231" x2="302" y2="231" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-gray)"/>
+
+              <!-- Index shards ↔ Scatter-gather -->
+              <line x1="540" y1="175" x2="584" y2="175" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-gray)"/>
+
+              <!-- Redis cache label -->
+              <rect x="584" y="265" width="256" height="38" rx="6" fill="#1f2937" stroke="#f59e0b" stroke-width="1"/>
+              <text x="712" y="289" text-anchor="middle" fill="#fcd34d" font-size="12" font-weight="600">⚡  Redis Cache (top 10K queries)</text>
+
+              <!-- Defs for arrowheads -->
+              <defs>
+                <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/></marker>
+                <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6"/></marker>
+                <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#10b981"/></marker>
+                <marker id="arr-gray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6b7280"/></marker>
+              </defs>
+            </svg>
+          </div>
+
+          <h3>Phase 1 — COLLECT: The Web Crawler</h3>
+          <ul>
+            <li><strong>URL Frontier:</strong> A prioritized queue (BFS + priority boost by estimated PageRank). Seeds: known high-authority domains, sitemaps, direct submissions.</li>
+            <li><strong>Crawler workers:</strong> Download pages in parallel, extract all <code>&lt;a href&gt;</code> links, store raw HTML to S3, push new URLs into the frontier.</li>
+            <li><strong>Politeness:</strong> Respect <code>robots.txt</code>, enforce 1 request/domain/second (rate limit per domain in Redis), honor <code>Crawl-delay</code> header.</li>
+            <li><strong>DNS cache:</strong> Each crawler maintains a local DNS cache with 1-hour TTL — crawling 10K domains without a DNS cache would be catastrophic latency.</li>
+            <li><strong>Dedup:</strong> SHA-256 of normalized URL before fetching. Content-hash after fetching — skip indexing if <code>content_hash</code> matches existing record.</li>
+          </ul>
+
+          <h3>Phase 2 — INDEX: Building the Inverted Index</h3>
+          <ul>
+            <li><strong>Parsing:</strong> Strip HTML tags, remove boilerplate (nav, footer, cookie banners), extract title, body text, headings, anchor text.</li>
+            <li><strong>NLP pipeline:</strong> Tokenize → Lowercase → Remove stop words (the, a, is) → Stem (running → run, searches → search)</li>
+            <li><strong>MapReduce job:</strong> Map phase: <code>emit(term, {doc_id, tf, positions[]})</code>. Reduce phase: merge all emissions for each term into a sorted posting list.</li>
+            <li><strong>PageRank:</strong> Weekly Spark job on the full link graph. 50+ iterations until convergence. Result: <code>page_rank</code> float stored in the document record.</li>
+            <li><strong>Segment files:</strong> Inverted index stored as immutable Lucene-style segment files. New documents create new segments. Background process merges small segments into large ones (like LSM-tree compaction).</li>
+          </ul>
+
+          <h3>Phase 3 — SERVE: Answering Queries in &lt;200ms</h3>
+          <ul>
+            <li><strong>Query processing:</strong> Tokenize query → look up posting lists for each term → AND-merge (intersection) for multi-word queries → score → sort → top-10</li>
+            <li><strong>Scatter-gather:</strong> Query server fans out to ALL 500 index shards simultaneously, each shard returns its local top-10, query server merges into global top-10</li>
+            <li><strong>Result cache:</strong> Redis caches complete results for the top 10,000 most frequent queries (LRU eviction, 5-minute TTL). Top 1% of queries → 50% of traffic eliminated from shard load.</li>
+            <li><strong>Snippet generation:</strong> For each result, extract 160 chars around the first occurrence of query terms in the document body.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- A: APIs -->
+      <section class="content-section" id="apis" aria-labelledby="apis-title">
+        <h2 class="content-section__title" id="apis-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// Search — public, the core API
+GET /v1/search?q=system+design&amp;page=1&amp;limit=10
+// Response:
+{
+  "results": [
+    { "url": "...", "title": "...", "snippet": "...", "score": 0.847 }
+  ],
+  "total_results": 4_200_000,
+  "query_time_ms": 87
+}
+
+// Crawl scheduling — internal admin API
+POST /v1/crawl/schedule
+{ "url": "https://example.com", "priority": "HIGH" }
+// Response: { "job_id": "crawl-abc-123" }
+
+// Index status — internal debugging / Search Console
+GET /v1/index/status?url=https://example.com
+// Response:
+{
+  "indexed_at": "2026-05-17T02:14:00Z",
+  "page_rank": 0.0034,
+  "word_count": 1847,
+  "outbound_links": 23
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- D: Deep Dive -->
+      <section class="content-section" id="deepdive" aria-labelledby="deep-title">
+        <h2 class="content-section__title" id="deep-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">15 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. The Inverted Index: AND-Merge Algorithm</h3>
+          <p>The inverted index maps every word to a sorted list of documents containing it. Finding documents that contain ALL query terms is the AND-intersection — identical to merging sorted arrays (merge sort's merge step).</p>
+
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid var(--accent-primary)">
+            <p style="margin:0 0 var(--space-3)"><strong>Example:</strong> Query = "system design interview"</p>
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">Posting lists (sorted by doc_id):
+"system"    → [4, 7, 12, 19, 31, 45, ...]
+"design"    → [4, 9, 12, 28, 31, ...]
+"interview" → [4, 31, 67, ...]
+
+AND-merge result: [4, 31, ...] — only docs in ALL three lists
+
+Algorithm: 3 pointers, advance the smallest.
+When all 3 point to same doc_id → match! Time: O(N₁ + N₂ + N₃)</pre>
+          </div>
+
+          <h3>2. TF-IDF Ranking — Why Rare Terms Win</h3>
+          <p>TF-IDF answers: "Which documents are most relevant to this term?" It rewards terms that appear frequently in a document but rarely across the entire corpus.</p>
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid #8b5cf6">
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">TF(term, doc)  = count of term in doc / total terms in doc
+IDF(term)      = log(total_docs / docs_containing_term)
+TF-IDF score   = TF × IDF
+
+"the" → IDF ≈ log(50B / 49B) ≈ 0.02  ← nearly useless signal
+"eigenvector" → IDF ≈ log(50B / 50K) ≈ 6.0  ← very strong signal
+
+Final ranking: finalScore = 0.7 × TF-IDF + 0.3 × PageRank
+(weights tuned by Google's quality raters — these are illustrative)</pre>
+          </div>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__title">💡 Why PageRank Beat AltaVista</div>
+            <p style="margin:0">AltaVista used TF-IDF only — trivially gamed by "keyword stuffing" (repeating terms 100 times in white text). PageRank treats each hyperlink as a vote, weighted by the voting page's own PageRank. It's an eigenvector calculation: the PageRank vector is the principal eigenvector of the web's link matrix. This makes it exponentially harder to fake — you'd need other high-PageRank sites to link to you.</p>
+          </div>
+
+          <h3>3. Deduplication: SimHash for Near-Duplicate Detection</h3>
+          <p>The web is ~30% duplicate or near-duplicate content (articles syndicated across news sites, forums quoting the same text). Exact hashing misses paraphrased copies. SimHash is locality-sensitive — similar texts produce similar fingerprints.</p>
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);border-left:3px solid #10b981">
+            <pre style="margin:0;font-size:0.85rem;color:var(--text-secondary)">SimHash algorithm:
+1. Generate overlapping 3-word shingles: "system design is" "design is hard" ...
+2. Hash each shingle to 64 bits (MurmurHash)
+3. XOR all hashes → 64-bit fingerprint
+4. Hamming distance ≤ 3 bits → near-duplicate
+
+URL normalization (always do this BEFORE hashing):
+• Remove tracking params: ?utm_source=twitter → removed
+• Lowercase domain, normalize trailing slash
+• Remove session IDs, timestamps in query params</pre>
+          </div>
+
+          <h3>4. Crawl Frontier: Politeness + Priority</h3>
+          <p>A naive BFS crawler will DDoS every website it touches. The frontier must enforce politeness while also prioritizing pages most worth crawling.</p>
+          <ul>
+            <li><strong>Priority score:</strong> <code>crawl_score = estimated_pagerank × freshness_factor</code>. High-PageRank + not recently crawled = top priority.</li>
+            <li><strong>Politeness in Redis:</strong> Key = <code>crawl_delay:{domain}</code>, value = <code>last_crawl_ts</code>. Enforce minimum 1s gap per domain. Respect <code>Crawl-delay</code> in <code>robots.txt</code>.</li>
+            <li><strong>Distributed Kafka topics:</strong> One topic per domain hash range. Crawler workers consume from assigned topics — prevents multiple workers from hitting the same domain simultaneously.</li>
+            <li><strong>Tiered crawl budget:</strong> Top 10M domains → unlimited crawl. Mid-tier → 100 pages/day. Unknown → just the homepage.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- E: Evaluate -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">⚖️</span>E — Evaluate Bottlenecks<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <div class="insight-box insight-box--warning">
+            <div class="insight-box__title">🚨 Bottleneck 1: Scatter-Gather Fan-Out</div>
+            <p style="margin:0">500K QPS × 500 shards = <strong>250 million shard requests/second</strong>. Each query touches every shard. Solution: (1) Read replicas per shard distribute load. (2) Redis result cache for top queries eliminates most shard traffic entirely. In practice, the top 1% of queries generate ~50% of traffic — cache hit rate for those is near 100%.</p>
+          </div>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">🚨 Bottleneck 2: Crawl Freshness vs Cost</div>
+            <p style="margin:0">Crawling all 50B pages hourly would require ~14M pages/second — impossible. Solution: Tiered freshness. Top 100M pages (news, social, major domains): hourly. Next 5B: daily. Remaining 45B: monthly. Pages that link to frequently-updated pages get boosted crawl priority automatically.</p>
+          </div>
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">🚨 Bottleneck 3: Spam and SEO Gaming</div>
+            <p style="margin:0">TF-IDF can be gamed (keyword stuffing). PageRank can be gamed (link farms). Defense layers: (1) TrustRank: seed from known-good domains, propagate trust. (2) Link spam detection: flag domains with suspicious inbound link growth patterns. (3) Manually curated spam domain blocklist.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- D: Deliver -->
+      <section class="content-section" id="deliver" aria-labelledby="deliver-title">
+        <h2 class="content-section__title" id="deliver-title"><span class="content-section__title-icon">🎯</span>D — Deliver: Closing Statement<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <div style="background:var(--surface-2);border-radius:var(--radius-lg);padding:var(--space-5);border-left:4px solid var(--accent-primary)">
+            <p style="margin:0;font-size:1rem;line-height:1.7">"A search engine is a 3-phase pipeline. <strong>COLLECT</strong>: the crawler discovers and downloads pages via a prioritized URL frontier, stores raw HTML to S3, and enforces politeness per domain. <strong>INDEX</strong>: the MapReduce pipeline tokenizes, stems, and builds a sorted inverted index — each term maps to a posting list of (doc_id, TF, positions). TF-IDF × PageRank produces the final relevance score. <strong>SERVE</strong>: the query server scatter-gathers across all 500 index shards simultaneously — each returns local top-10, merged into global top-10. Redis caches the most frequent queries. The core algorithm powering query answering is the AND-merge of sorted posting lists — identical to merge-sort's merge step — running in O(N₁ + N₂ + N₃)."</p>
+          </div>
+
+          <div class="insight-box insight-box--warning" style="margin-top:var(--space-5)">
+            <div class="insight-box__title">⚠️ The Most Common Interview Mistake</div>
+            <p style="margin:0">Do NOT say "I'd use Elasticsearch" as your primary answer. Elasticsearch is the right deployment answer, but interviewers want to know you understand the <em>internals</em>: posting lists, AND-merge algorithm, TF-IDF scoring, how scatter-gather works. Show the internals first, then mention Elasticsearch as the operational choice.</p>
+          </div>
+
+          <div class="insight-box insight-box--info" style="margin-top:var(--space-4)">
+            <div class="insight-box__title">💡 If They Say "Focus on the Interesting Part"</div>
+            <p style="margin:0">Go deep on the inverted index immediately. Explain posting lists, draw the AND-merge algorithm on the whiteboard, discuss TF-IDF with concrete numbers, explain phrase search (position arrays), then transition to scatter-gather serving. That's the 15 minutes that separates candidates who pass from those who don't.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Trade-offs -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚡</span>Key Trade-offs</h2>
+        <div class="content-section__body">
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+              <thead><tr style="border-bottom:2px solid var(--border)">
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Decision</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Option A</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Option B</th>
+                <th style="text-align:left;padding:var(--space-2) var(--space-3)">Winner &amp; Why</th>
+              </tr></thead>
+              <tbody>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Index structure</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Hash map (O(1) lookup)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Sorted segment files (range queries)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Sorted files — enables prefix search, phrase search, better compression</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Ranking signal</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">TF-IDF only</td>
+                  <td style="padding:var(--space-2) var(--space-3)">TF-IDF + PageRank</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Combined — TF-IDF gives relevance, PageRank gives authority. Either alone is gameable.</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Index freshness</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Push (crawler triggers re-index)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Pull (periodic batch re-index)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Pull + priority queue — batch is manageable, priority ensures news/critical pages are fast</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Query routing</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Scatter-gather all shards</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Partition by first letter of query term</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Scatter-gather — AND queries span multiple terms which span all shards; partitioning would require cross-shard joins anyway</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Dedup strategy</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Exact SHA-256 hash</td>
+                  <td style="padding:var(--space-2) var(--space-3)">SimHash (near-duplicate detection)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ SimHash — catches paraphrased and lightly reformatted copies that share identical content</td>
+                </tr>
+                <tr>
+                  <td style="padding:var(--space-2) var(--space-3)"><strong>Crawl ordering</strong></td>
+                  <td style="padding:var(--space-2) var(--space-3)">Pure BFS</td>
+                  <td style="padding:var(--space-2) var(--space-3)">Priority BFS (by estimated PageRank)</td>
+                  <td style="padding:var(--space-2) var(--space-3)">✅ Priority BFS — discovers high-value pages first, BFS alone wastes crawl budget on low-value deep pages</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Java Implementation -->
+      <section class="content-section" id="implementation" aria-labelledby="impl-title">
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <p>The inverted index with AND-merge search — the core algorithm powering every search engine:</p>
+          <pre><code class="language-java">/**
+ * InvertedIndex — core data structure for a search engine.
+ *
+ * Supports:
+ *   addDocument(docId, terms[]) — indexes a document
+ *   search(queryTerms[])        — AND-merge across posting lists, returns ranked doc IDs
+ *   computeTfIdf(term, docId)   — TF-IDF relevance score
+ */
+import java.util.*;
+
+public class InvertedIndex {
+
+    // ── Inner Types ────────────────────────────────────────────────────────────
+
+    /**
+     * One entry in a posting list: the document containing the term,
+     * how often the term appears, and the byte positions (for phrase search).
+     */
+    public static class Posting implements Comparable&lt;Posting&gt; {
+        public final int docId;
+        public final int termFrequency;
+        public final List&lt;Integer&gt; positions;   // byte offsets — enables phrase search
+
+        public Posting(int docId, int termFrequency, List&lt;Integer&gt; positions) {
+            this.docId = docId;
+            this.termFrequency = termFrequency;
+            this.positions = Collections.unmodifiableList(positions);
+        }
+
+        @Override
+        public int compareTo(Posting other) {
+            return Integer.compare(this.docId, other.docId);
+        }
+    }
+
+    // ── State ─────────────────────────────────────────────────────────────────
+
+    // term → sorted posting list (sorted by docId for efficient AND-merge)
+    private final Map&lt;String, List&lt;Posting&gt;&gt; invertedIndex = new HashMap&lt;&gt;();
+
+    // docId → total term count in that document (for TF normalization)
+    private final Map&lt;Integer, Integer&gt; documentLengths = new HashMap&lt;&gt;();
+
+    // docId → pre-computed PageRank score
+    private final Map&lt;Integer, Double&gt; pageRanks = new HashMap&lt;&gt;();
+
+    private int totalDocuments = 0;
+
+    // Weight constants — in production, these are tuned by quality raters
+    private static final double TF_IDF_WEIGHT = 0.7;
+    private static final double PAGE_RANK_WEIGHT = 0.3;
+
+    // ── Core Logic ─────────────────────────────────────────────────────────────
+
+    /**
+     * Indexes a document. Builds posting lists for each unique term.
+     * In production: called by the MapReduce reducer after Combine phase.
+     *
+     * @param docId unique document identifier
+     * @param terms array of pre-processed tokens (lowercased, stemmed, no stopwords)
+     */
+    public void addDocument(int docId, String[] terms) {
+        // Track how many terms this document has (for TF normalization)
+        documentLengths.put(docId, terms.length);
+        totalDocuments++;
+
+        // Build per-term frequency + position maps
+        Map&lt;String, List&lt;Integer&gt;&gt; termPositions = new LinkedHashMap&lt;&gt;();
+        for (int position = 0; position &lt; terms.length; position++) {
+            String term = terms[position];
+            termPositions.computeIfAbsent(term, ignored -&gt; new ArrayList&lt;&gt;()).add(position);
+        }
+
+        // Insert into inverted index — maintain sort order by docId
+        for (Map.Entry&lt;String, List&lt;Integer&gt;&gt; entry : termPositions.entrySet()) {
+            String term = entry.getKey();
+            List&lt;Integer&gt; positions = entry.getValue();
+            int termFrequency = positions.size();
+
+            Posting posting = new Posting(docId, termFrequency, positions);
+
+            List&lt;Posting&gt; postingList = invertedIndex.computeIfAbsent(term, ignored -&gt; new ArrayList&lt;&gt;());
+            postingList.add(posting);  // Documents added in ascending docId order during MapReduce
+        }
+    }
+
+    /**
+     * Sets the pre-computed PageRank for a document.
+     * PageRank is computed weekly by a separate Spark job on the link graph.
+     *
+     * @param docId  the document
+     * @param pageRank  value in range [0, 1]
+     */
+    public void setPageRank(int docId, double pageRank) {
+        pageRanks.put(docId, pageRank);
+    }
+
+    /**
+     * AND-search: returns docs containing ALL query terms, ranked by TF-IDF × PageRank.
+     *
+     * Algorithm: pointer-based merge identical to merging sorted arrays.
+     * Time complexity: O(N₁ + N₂ + ... + Nₖ) where Nᵢ = posting list length for term i.
+     * This is the same operation as merge-sort's merge step.
+     *
+     * @param queryTerms pre-processed query tokens (same stemming as indexing)
+     * @return list of matching docIds sorted by relevance score descending
+     */
+    public List&lt;Integer&gt; search(String[] queryTerms) {
+        if (queryTerms == null || queryTerms.length == 0) {
+            return Collections.emptyList();
+        }
+
+        // Gather posting lists for all query terms
+        List&lt;List&lt;Posting&gt;&gt; postingLists = new ArrayList&lt;&gt;();
+        for (String term : queryTerms) {
+            List&lt;Posting&gt; postingList = invertedIndex.get(term);
+            if (postingList == null || postingList.isEmpty()) {
+                return Collections.emptyList();  // AND: if any term is missing → no results
+            }
+            postingLists.add(postingList);
+        }
+
+        // Sort posting lists ascending by size: start with rarest term first
+        // This minimizes iterations — we advance the smallest list most often
+        postingLists.sort(Comparator.comparingInt(List::size));
+
+        // AND-merge using one pointer per posting list
+        List&lt;Integer&gt; matchingDocIds = andMerge(postingLists);
+
+        // Score and rank matching documents
+        return rankDocuments(matchingDocIds, queryTerms);
+    }
+
+    /**
+     * Core AND-merge: finds doc IDs present in ALL posting lists.
+     * One pointer per list, always advance the list with the smallest current docId.
+     * When all pointers agree on the same docId → it's a match.
+     *
+     * @param postingLists  sorted posting lists for each query term
+     * @return doc IDs appearing in all lists
+     */
+    private List&lt;Integer&gt; andMerge(List&lt;List&lt;Posting&gt;&gt; postingLists) {
+        List&lt;Integer&gt; result = new ArrayList&lt;&gt;();
+        int[] pointers = new int[postingLists.size()];  // one pointer per list
+
+        while (true) {
+            // Find current docId at each pointer position
+            int maxDocId = Integer.MIN_VALUE;
+            boolean anyListExhausted = false;
+
+            for (int listIndex = 0; listIndex &lt; postingLists.size(); listIndex++) {
+                if (pointers[listIndex] &gt;= postingLists.get(listIndex).size()) {
+                    anyListExhausted = true;
+                    break;
+                }
+                int currentDocId = postingLists.get(listIndex).get(pointers[listIndex]).docId;
+                maxDocId = Math.max(maxDocId, currentDocId);
+            }
+
+            if (anyListExhausted) {
+                break;  // One list is exhausted — AND is done
+            }
+
+            // Check if all pointers are on the same docId
+            boolean allMatch = true;
+            for (int listIndex = 0; listIndex &lt; postingLists.size(); listIndex++) {
+                int currentDocId = postingLists.get(listIndex).get(pointers[listIndex]).docId;
+                if (currentDocId != maxDocId) {
+                    allMatch = false;
+                    // Advance this pointer to skip ahead toward maxDocId
+                    pointers[listIndex]++;
+                }
+            }
+
+            if (allMatch) {
+                result.add(maxDocId);
+                // Advance ALL pointers past this matched docId
+                for (int listIndex = 0; listIndex &lt; postingLists.size(); listIndex++) {
+                    pointers[listIndex]++;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Scores each matching document and returns docIds sorted by score descending.
+     * Score = 0.7 × TF-IDF + 0.3 × PageRank
+     *
+     * @param docIds       candidate document IDs from AND-merge
+     * @param queryTerms   original query terms
+     * @return docIds ranked by combined relevance score
+     */
+    private List&lt;Integer&gt; rankDocuments(List&lt;Integer&gt; docIds, String[] queryTerms) {
+        // Score each document
+        Map&lt;Integer, Double&gt; scores = new HashMap&lt;&gt;();
+        for (int docId : docIds) {
+            double tfIdfSum = 0.0;
+            for (String term : queryTerms) {
+                tfIdfSum += computeTfIdf(term, docId);
+            }
+            double pageRank = pageRanks.getOrDefault(docId, 0.001);
+            double combinedScore = TF_IDF_WEIGHT * tfIdfSum + PAGE_RANK_WEIGHT * pageRank;
+            scores.put(docId, combinedScore);
+        }
+
+        // Sort descending by score
+        List&lt;Integer&gt; ranked = new ArrayList&lt;&gt;(docIds);
+        ranked.sort((docIdA, docIdB) -&gt; Double.compare(scores.get(docIdB), scores.get(docIdA)));
+        return ranked;
+    }
+
+    /**
+     * TF-IDF score for one term in one document.
+     *
+     * TF  = termFrequency / documentLength  (normalized frequency)
+     * IDF = log(totalDocs / docsContainingTerm)  (inverse document frequency)
+     *
+     * @param term   the search term
+     * @param docId  the document to score
+     * @return TF-IDF relevance score, or 0.0 if term not in document
+     */
+    public double computeTfIdf(String term, int docId) {
+        List&lt;Posting&gt; postingList = invertedIndex.get(term);
+        if (postingList == null) {
+            return 0.0;
+        }
+
+        // Find the posting for this specific document (binary search — list is sorted)
+        int postingIndex = Collections.binarySearch(
+            postingList,
+            new Posting(docId, 0, Collections.emptyList())
+        );
+
+        if (postingIndex &lt; 0) {
+            return 0.0;  // Term not in this document
+        }
+
+        Posting posting = postingList.get(postingIndex);
+        int documentLength = documentLengths.getOrDefault(docId, 1);
+        int docsContainingTerm = postingList.size();
+
+        double termFrequency = (double) posting.termFrequency / documentLength;
+        double inverseDocFrequency = Math.log((double) totalDocuments / docsContainingTerm);
+
+        return termFrequency * inverseDocFrequency;
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- E: Evaluate / Quiz -->
+      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <div class="content-section__body">
+          <div class="quiz" data-quiz-id="p-search-engine-quiz" role="region" aria-label="Search engine problem quiz">
+            <div class="quiz__header">
+              <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+              <div class="quiz__score" aria-live="polite"></div>
+            </div>
+            <div class="quiz__question">
+              <div class="quiz__question-number">Question 1 of 4</div>
+              <div class="quiz__question-text"></div>
+              <div class="quiz__options" role="group" aria-label="Answer options"></div>
+              <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            </div>
+
+            <div data-question="A user queries 'system design interview'. Your search engine has posting lists of 10M docs for 'system', 8M for 'design', and 5M for 'interview'. What algorithm finds documents containing ALL THREE terms, and what is its time complexity?" data-options='["Hash join all three lists — O(1) per lookup, O(N) total","Pointer-based AND-merge: initialize one pointer per posting list (all sorted by doc_id), always advance the pointer of the list with the smallest current doc_id. When all pointers land on the same doc_id, it is a match — O(N₁+N₂+N₃) where N is posting list length","Load all docs from each list into memory and use Set.retainAll() — O(N²)","Sort all three lists by doc_id, then binary search each — O(N log N)"]' data-correct="1" data-explanation="The AND-merge is a pointer-based merge identical to merging sorted arrays in merge sort. Initialize one pointer at the start of each posting list. Always advance the pointer of the list with the smallest current doc_id. When all three pointers point to the same doc_id, it is a match. This is O(N₁+N₂+N₃) — linear in total posting list size. Starting with the rarest term first is a key optimization: the rare 5M 'interview' list will cause you to skip most entries in the larger lists." style="display:none"></div>
+
+            <div data-question="Page A has TF-IDF score 0.9 for a query term but PageRank 0.01. Page B has TF-IDF 0.6 but PageRank 0.8. Using finalScore = 0.7×TF-IDF + 0.3×PageRank, which ranks higher and why is the combined formula the right design?" data-options='["Page A (score 0.636) — TF-IDF should always dominate because text relevance matters most","Page B (score 0.66) — the combined score reflects both text relevance AND authority. PageRank prevents keyword-stuffed spam from outranking high-quality authoritative pages","They should rank equally — TF-IDF and PageRank should be weighted 50/50 at all times","Page A — PageRank is an outdated signal no longer used in modern search ranking"]' data-correct="1" data-explanation="Page B: 0.7×0.6 + 0.3×0.8 = 0.42+0.24 = 0.66. Page A: 0.7×0.9 + 0.3×0.01 = 0.63+0.003 = 0.633. Page B wins. The combined score is the correct design because TF-IDF alone is trivially gamed — repeat a keyword 500 times in white text and you score high. PageRank adds an authority signal based on other sites linking to you, which is exponentially harder to fake at scale. This is the insight Google had that AltaVista missed." style="display:none"></div>
+
+            <div data-question="Your search index has 50 billion pages across 500 shards. Every query hits ALL 500 shards (scatter-gather). At 500K QPS, each query triggers 500 × 500K = 250M shard requests per second. How do you make this scale?" data-options='["Reduce to 10 shards — fewer shards means fewer scatter-gather fan-out requests","Add read replicas to each shard so 250M requests distribute across N replicas; simultaneously cache the top 10,000 most frequent queries in Redis to eliminate most shard traffic — top 1% of queries drive 50% of volume","Use UDP instead of TCP for shard communication to reduce connection overhead","Pre-compute results for all possible queries offline and serve from a lookup table"]' data-correct="1" data-explanation="Two complementary approaches work together: (1) Read replicas: replicate each shard R times. 250M requests now distribute across 500×R servers. At R=5 that is 50M per server. (2) Result cache: research shows top 1% of queries drive ~50% of search traffic. Cache those top 10K queries in Redis with a 5-minute TTL — most traffic never touches a shard at all. Together, these are exactly what Google, Bing, and every large search engine deploys. Reducing shard count alone would make each shard too large for SSD and slow AND-merge." style="display:none"></div>
+
+            <div data-question="How does your search engine handle near-duplicate content — for example, the same news article syndicated across 100 different news sites?" data-options='["Index all 100 copies and let PageRank naturally demote the lower-authority duplicates over time","Use SimHash fingerprinting: generate a 64-bit fingerprint from overlapping 3-word text shingles, compare fingerprints using Hamming distance — pages with distance ≤ 3 bits are near-duplicates. Keep only the highest-PageRank copy in the index","Use exact SHA-256 hashing of page content — only store pages with unique hashes","Mark all pages sharing the same domain as potential duplicates and remove them"]' data-correct="1" data-explanation="Exact SHA-256 hashing catches byte-for-byte copies but misses near-duplicates where one word changed, a byline was added, or the site added its own header. SimHash is locality-sensitive: the algorithm shingles the text into overlapping 3-word n-grams, hashes each shingle, XORs all hashes into a 64-bit fingerprint. Two pages with 3 or fewer bit differences are near-duplicates. This is the technique from Google's SimHash paper (Charikar, 2002), used in production web-scale deduplication. Indexing all 100 copies would waste storage and dilute ranking signals." style="display:none"></div>
+
+            <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+            <div class="quiz__actions">
+              <div></div>
+              <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+            </div>
+            <div class="quiz__result is-hidden" aria-live="polite">
+              <div class="quiz__result-score"></div>
+              <div class="quiz__result-label"></div>
+              <div style="margin-top:var(--space-4)">
+                <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+                <a href="spotify.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next Problem: Design Spotify →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Prev/Next navigation -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-8);padding-top:var(--space-6);border-top:1px solid var(--border)">
+        <a href="google-docs.html" class="btn btn--outline">← Design Google Docs</a>
+        <a href="spotify.html" class="btn btn--primary">Design Spotify →</a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>
