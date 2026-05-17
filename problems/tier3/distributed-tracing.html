@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Distributed Tracing System (like Jaeger) &mdash; MAANG System Design RESHADED walkthrough.">
-  <title>Design a Distributed Tracing System (like Jaeger) &mdash; MAANG System Design</title>
+  <meta name="description" content="Design a Distributed Tracing System like Jaeger or Zipkin — MAANG System Design RESHADED walkthrough covering trace model, W3C traceparent, head vs tail sampling, Cassandra storage, and OpenTelemetry instrumentation.">
+  <title>Design a Distributed Tracing System &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -56,215 +56,643 @@
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
           <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
-          <span class="tag">60 min</span><span class="tag">Observability</span>
+          <span class="tag">60 min</span><span class="tag">Observability Infrastructure</span>
         </div>
-        <h1 class="module-header__title">Design a Distributed Tracing System (like Jaeger)</h1>
-        <p class="module-header__desc">Distributed tracing answers why was this specific request slow across dozens of microservices. The key challenge: you cannot trace everything (too expensive), but random 1% sampling misses the rare slow outliers you most need to find. Adaptive sampling solves this.</p>
+        <h1 class="module-header__title">Design a Distributed Tracing System</h1>
+        <p class="module-header__desc">Distributed tracing answers the question: what happened during this one request across all 15 services it touched? The core challenge is that at 1M req/sec with 50 spans each, storing everything costs 500 MB/sec. Sampling strategies determine what you keep — and the wrong strategy means you never have the trace you need when an incident hits.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; Jaeger, Zipkin, Datadog APM</div>
+          <div class="module-header__meta-item">&#x1F3E2; Jaeger (Uber), Zipkin (Twitter), AWS X-Ray, Datadog APM</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
         </div>
       </header>
 
-      <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+      <!-- REQUIREMENTS -->
+      <section class="content-section" id="requirements">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Trace a single request end-to-end across microservices</li>
-            <li>Visualize spans (service calls) with timing and metadata</li>
-            <li>Search traces by service, latency, error, or custom tags</li>
-            <li>Alert on SLO violations (p99 latency &gt; threshold)</li></ul>
+            <li>Capture the full tree of service calls for each request: which services were called, in what order, how long each took</li>
+            <li>Propagate trace context across HTTP, gRPC, and Kafka message boundaries</li>
+            <li>Search traces by: service name, operation name, duration, error status, custom tags</li>
+            <li>Visualize a trace as a waterfall/flamegraph: show span durations, parent-child relationships</li>
+            <li>Service dependency map: auto-discover which services call which other services</li>
+            <li>Error traces: immediately accessible; never sampled away</li>
+            <li>Sampling: configurable rates per service and operation to manage storage costs</li>
+          </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 100K requests/sec, 1M spans/sec</li>
-            <li><strong>Sampling overhead:</strong> &lt;1% on traced services</li>
-            <li><strong>Retention:</strong> Last 7 days queryable; compress and archive older</li></ul>
+            <li><strong>Overhead:</strong> instrumentation must add &lt;1% latency to services being traced</li>
+            <li><strong>Throughput:</strong> 1M requests/second, each with ~50 spans</li>
+            <li><strong>Storage budget:</strong> ~10K traces/second after sampling (1% of 1M req/sec)</li>
+            <li><strong>Search latency:</strong> p99 &lt; 2 seconds for queries over the last 24 hours</li>
+            <li><strong>Trace completeness:</strong> all spans for a given trace must be retrievable together</li>
+            <li><strong>Retention:</strong> recent traces 7 days (fast search), older traces 30 days (slower)</li>
+          </ul>
+          <h3>Clarifying Questions</h3>
+          <ul>
+            <li>Do we need tail-based sampling (requires collecting all spans before making keep/drop decision)?</li>
+            <li>Is this internal infrastructure or a multi-tenant product (each customer traces their own services)?</li>
+            <li>What is the latency budget for the tracing instrumentation? (1% overhead? 0.1%?)</li>
+          </ul>
         </div>
       </section>
 
-      <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li>1M spans/sec &times; 500 bytes/span = 500MB/sec = 43TB/day &rarr; with 1% sampling: 430GB/day</li>
-            <li>Span search index (service, tags) for search: 10% of raw size = 43GB/day &rarr; Elasticsearch handles this</li></ul></div>
-      </section>
-
-      <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Trace storage (Cassandra -- partition by traceId for O(1) trace lookup)
-spans:
-    trace_id     UUID,         -- same across all spans in one request
-    span_id      UUID,
-    parent_span  UUID,         -- null for root span
-    service      VARCHAR(100),
-    operation    VARCHAR(100),
-    start_time   TIMESTAMP,
-    duration_us  INT,          -- microseconds
-    tags         MAP<STRING, STRING>,
-    status       ENUM(ok, error),
-    PRIMARY KEY (trace_id, span_id)
-
-// Span index (Elasticsearch -- for search: find traces by service/latency/tag)
-// Indexes: service, duration_us, status, tags.*</code></pre></div>
-      </section>
-
-      <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Instrumentation:</strong> OpenTelemetry SDK in each service. Creates spans for outbound calls. Injects trace context into HTTP headers (W3C traceparent: 00-{traceId}-{spanId}-{flags}).</li>
-            <li><strong>Sampling decision:</strong> Made at trace root (head-based) or after trace completes (tail-based). Propagated to all downstream services via sampled flag in traceparent.</li>
-            <li><strong>Span collector:</strong> Agents in each pod batch spans and send to Kafka. Collector consumers write to Cassandra (by trace_id) and index to Elasticsearch.</li>
-            <li><strong>Trace assembly:</strong> Query Cassandra with trace_id &rarr; get all spans &rarr; build tree by parent_span linkage.</li>
-            <li><strong>UI:</strong> Gantt chart timeline, service dependency graph, latency histograms.</li></ul></div>
-      </section>
-
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Span Submission API (internal -- called by OpenTelemetry SDK)
-POST /api/v1/spans
-Body: [{ traceId, spanId, parentSpanId, service, operation, startTime, duration, tags, status }]
-
-// Trace Query API (Jaeger UI / developer tools)
-GET /api/v1/traces/{traceId}
-  Response: { traceId, spans: [...], duration, services: [...] }
-
-GET /api/v1/traces?service=auth&minDuration=500ms&limit=20
-  Response: { traces: [{ traceId, rootSpan, duration, services }] }
-
-GET /api/v1/services
-  Response: { services: ["auth", "payments", "inventory", ...] }</code></pre></div>
-      </section>
-
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+      <!-- ESTIMATION -->
+      <section class="content-section" id="estimation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Head-based sampling:</strong> Sampling decision made at trace root (first service). Propagated downstream via traceparent sampled flag (1=sample, 0=drop). Simple, predictable overhead, but cannot sample based on outcome -- you do not know if the trace will be slow until it is complete.</p>
-          <p><strong>Tail-based sampling:</strong> All spans buffered in-memory. Sampling decision made when trace is complete. Can use trace characteristics: is it slow? Did it have errors? This is the correct approach for capturing outliers -- slow traces are captured at higher rates than fast ones.</p>
-          <p><strong>Adaptive sampling:</strong> Start with 1% base rate. If a trace has p99 latency &gt; threshold, upgrade to 100% sample rate for that trace. Slow traces and error traces are always written; fast normal traces are sampled probabilistically.</p>
-          <p><strong>W3C Traceparent header format:</strong></p>
-          <p><code>traceparent: 00-{16-byte traceId}-{8-byte spanId}-{flags}</code></p>
-          <p>Flags byte: 0x01 = sampled. Services check this flag before creating child spans.</p></div>
+          <h3>Span Volume Calculation</h3>
+          <ul>
+            <li>1M req/sec × 50 spans/trace = <strong>50M spans/sec</strong> total</li>
+            <li>Each span: ~1 KB (operation name, timestamps, tags, log messages) = <strong>50 GB/sec raw</strong></li>
+            <li>Storing everything: 50 GB/sec × 86,400 sec = 4.3 PB/day — economically impossible</li>
+            <li>At 1% head sampling: 500K spans/sec = 500 MB/sec = <strong>43 TB/day</strong> — still expensive</li>
+            <li>At 0.1% head sampling: 50 MB/sec = 4.3 TB/day — manageable</li>
+          </ul>
+          <h3>After Sampling: Storage Sizing</h3>
+          <ul>
+            <li>Target: 10K traces/sec sampled (mix of head and tail-based)</li>
+            <li>10K traces/sec × 50 spans × 1 KB = <strong>500 MB/sec</strong> to storage</li>
+            <li>500 MB/sec × 86,400 sec × 7 days = ~300 TB for 7-day hot tier</li>
+            <li>Cassandra: 3 TB per node (with replication factor 3 = 1 TB effective) → 300 nodes? Too expensive.</li>
+            <li>Revised: 10K traces/sec × 50 spans × 500 bytes (compressed) = 250 MB/sec = ~150 TB for 7 days. With replication factor 2: 300 TB total. ~100 nodes at 3 TB each.</li>
+          </ul>
+          <h3>Cassandra Write Throughput</h3>
+          <ul>
+            <li>10K traces/sec × 50 spans = 500K writes/sec to Cassandra</li>
+            <li>Cassandra can handle ~50K–100K writes/sec per node → need 10 nodes minimum for writes</li>
+            <li>Storage needs 100 nodes → bottleneck is storage, not write throughput. Node count = 100.</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Senior Signal:</strong> Walk through the math publicly. At 1M req/sec the naive "store everything" answer costs PBs/day. The interviewer wants to see you derive the sampling rate from the storage budget, then reason about which traces MUST be kept (errors, slow outliers) vs which can be dropped (successful fast traces).
+          </div>
+        </div>
       </section>
 
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Head-based vs tail-based trade-off:</strong> Head-based: zero buffering, simple. Tail-based: requires buffering all spans (memory-intensive), complex. For debugging production issues, tail-based is far more valuable -- you can guarantee slow/error traces are captured.</li>
-            <li><strong>Storage cost:</strong> Even at 1% sampling, 7-day retention requires ~3TB of span data + 300GB Elasticsearch index. Manageable but requires dedicated cluster separate from application Elasticsearch.</li></ul></div>
+      <!-- SCHEMA -->
+      <section class="content-section" id="schema">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Span Data Model</h3>
+          <pre><code class="language-java">// The fundamental unit of tracing is a Span.
+// A Trace is a tree of Spans sharing the same traceId.
+
+public record Span(
+    String traceId,       // 128-bit hex: "4bf92f3577b34da6a3ce929d0e0e4736"
+    String spanId,        // 64-bit hex:  "00f067aa0ba902b7"
+    String parentSpanId,  // null for root span (the entry point of the request)
+    String operationName, // "HTTP GET /api/v1/users" or "PostgreSQL SELECT users"
+    String serviceName,   // "payment-service"
+    long startTimeEpochMicros,  // microsecond precision
+    long durationMicros,
+    SpanStatus status,    // OK | ERROR | UNSET
+    Map&lt;String, String&gt; tags,   // key-value metadata: http.method, db.type, error.message
+    List&lt;SpanLog&gt; logs,         // timestamped log messages within this span
+    boolean isSampled            // whether this span should be exported
+) {}
+
+// W3C traceparent header format (propagated across service calls):
+// "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+//  ^  ^                                ^                 ^
+//  version  traceId (128-bit hex)      parentSpanId       flags (01 = sampled)</code></pre>
+
+          <h3>Cassandra Schema: Wide Row per Trace</h3>
+          <pre><code class="language-java">// Cassandra is the right store for traces: one partition per traceId,
+// all spans for that trace in the same partition = one read to get the full trace.
+
+CREATE TABLE traces (
+    trace_id         TEXT,
+    span_id          TEXT,
+    parent_span_id   TEXT,
+    service_name     TEXT,
+    operation_name   TEXT,
+    start_time       TIMESTAMP,
+    duration_us      BIGINT,
+    status           TEXT,
+    tags             MAP&lt;TEXT, TEXT&gt;,
+    logs             LIST&lt;FROZEN&lt;span_log&gt;&gt;,
+    PRIMARY KEY (trace_id, span_id)     -- partition key: trace_id; clustering key: span_id
+) WITH default_time_to_live = 604800   -- 7-day TTL, automatic expiry
+  AND compaction = { 'class': 'LeveledCompactionStrategy' };
+
+-- Lookup by trace_id: one partition read, returns all spans. O(1).
+SELECT * FROM traces WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+// Elasticsearch: separate index for tag-based search (by service, operation, duration, error)
+// Cannot use Cassandra for this — Cassandra can only query by partition key efficiently.
+PUT traces-search/_doc/{trace_id}
+{
+  "trace_id":       "4bf92f3577b34da6a3ce929d0e0e4736",
+  "root_service":   "api-gateway",
+  "root_operation": "HTTP GET /api/v1/users",
+  "duration_ms":    342,
+  "has_error":      true,
+  "start_time":     "2024-03-15T10:23:45.123Z",
+  "services":       ["api-gateway", "auth-service", "payment-service"],
+  "tags":           { "http.status": "500", "error.type": "PaymentException" }
+  // Only trace-level summary, not all 50 spans — Elasticsearch index is small
+}</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body"><p>Distributed tracing = W3C traceparent propagation + adaptive tail-based sampling + Cassandra storage (by trace_id) + Elasticsearch index (by service/latency/tags). Key insight: always capture error traces and slow traces regardless of base sample rate.</p></div>
+      <!-- HLD -->
+      <section class="content-section" id="hld">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <h3>System Architecture</h3>
+          <pre><code class="language-java">// ─── Instrumented Services ────────────────────────────────────────────────────
+// Each service has the OpenTelemetry Java agent attached (-javaagent:otel-agent.jar)
+// The agent auto-instruments: Spring MVC, JDBC, gRPC, Kafka, HTTP clients
+// Spans are created and exported asynchronously (non-blocking to the request path)
+
+// ─── Span Export Pipeline ────────────────────────────────────────────────────
+// Service → OTel SDK (batches spans in-process) → Kafka topic: "spans.raw"
+//   (Key = traceId — ensures all spans of a trace go to same Kafka partition)
+//   (Value = Protobuf-serialized span batch)
+
+// ─── Sampling Decision ───────────────────────────────────────────────────────
+// Two sampling strategies (choose based on requirements):
+//
+// Head-based: Decision made at the ROOT SPAN (first service).
+//   Propagated via traceparent flags bit (01 = sampled).
+//   Downstream services ONLY export spans if the flag is set.
+//   Pros: minimal overhead (unsampled spans never touch Kafka or storage).
+//   Cons: cannot sample based on outcome (error status, latency) — unknown at start.
+//
+// Tail-based: ALL spans exported to a collector buffer.
+//   After 30 seconds (max trace duration), the buffer applies rules:
+//   - Keep if any span has status=ERROR
+//   - Keep if root span duration > 2000ms (slow trace)
+//   - Keep 1% of remaining (representative sample)
+//   Pros: keeps ALL interesting traces (errors + slow).
+//   Cons: requires buffering ALL spans for 30s — 50 GB/sec × 30s = 1.5 TB buffer. Expensive.
+
+// ─── Span Processing (Flink) ─────────────────────────────────────────────────
+// Consumes from Kafka → enriches spans (service → team owner lookup)
+// For tail sampling: windows spans by traceId, applies sampling rules, emits kept traces
+// Writes to Cassandra (all spans) and Elasticsearch (trace summary for search)
+
+// ─── Storage ─────────────────────────────────────────────────────────────────
+// Cassandra: full span data, partitioned by traceId, 7-day TTL
+// Elasticsearch: trace summaries (1 doc per trace), searchable by all fields
+
+// ─── Query Layer ─────────────────────────────────────────────────────────────
+// Trace Search: Elasticsearch query → get list of trace_ids matching criteria
+// Trace Detail: Cassandra read by trace_id → all spans → reconstruct the tree
+// Service Map: Kafka Streams job builds service dependency graph from span parent/child</code></pre>
+
+          <h3>Context Propagation Across Service Boundaries</h3>
+          <p>Every service-to-service call must propagate the trace context. The W3C traceparent header is the standard:</p>
+          <pre><code class="language-java">// HTTP/gRPC propagation:
+// Outgoing request from Service A → Service B:
+// Header: traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+//                       ^ version ^ traceId (128-bit)               ^ parentSpanId  ^ flags
+
+// Service B reads the header, creates a child span:
+// new span: traceId=4bf92f3577b34da6a3ce929d0e0e4736, parentSpanId=00f067aa0ba902b7, spanId=new_id
+
+// Kafka message propagation:
+// Producer adds to Kafka message headers:
+//   "traceparent": "00-traceId-spanId-01"
+// Consumer extracts from headers before processing, creates child span.
+// This links the async processing trace to the original request trace.
+
+// gRPC metadata propagation:
+// OTel gRPC interceptor automatically reads/writes traceparent as gRPC metadata.
+// No manual code required with auto-instrumentation.</code></pre>
+
+          <h3>Head-based vs Tail-based Sampling: The Key Tradeoff</h3>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin:var(--space-4) 0">
+            <strong>&#x1F4A1; The Core Problem with Head-based Sampling:</strong> You make the keep/drop decision at the first service before the request has touched any downstream services. A 1% sample rate means 99% of traces are dropped. If an error occurs in a service at the end of the call chain, there is a 99% chance it was dropped by the head sampler — and you will never see the trace for it.
+          </div>
+          <p>Tail-based sampling solves this by collecting all spans and making the decision after the trace completes:</p>
+          <ul>
+            <li>All spans flow to a collector fleet (Kafka as the buffer)</li>
+            <li>The collector waits 30 seconds for trace completion (the maximum expected request duration)</li>
+            <li>Then applies rules: keep if error=true, keep if duration>2s, keep 0.1% of the rest</li>
+            <li>Cost: you must buffer all spans for 30 seconds. 50M spans/sec × 30s × 1 KB = 1.5 TB in-flight buffer. This is the storage cost of tail-based sampling. Manageable with a Kafka cluster, very expensive in RAM.</li>
+          </ul>
+        </div>
       </section>
 
-      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
-        <div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Head-based Sampling</th><th>Tail-based Sampling</th></tr></thead>
-            <tbody>
-              <tr><td>When to decide</td><td>At trace root (start)</td><td>After trace completes (end)</td></tr>
-              <tr><td>Can capture slow outliers</td><td>No -- decision before outcome known</td><td>Yes -- decision after duration known</td></tr>
-              <tr><td>Memory overhead</td><td>None -- spans dropped immediately</td><td>High -- all spans buffered until trace complete</td></tr>
-              <tr><td>Implementation complexity</td><td>Low</td><td>High -- consistent hashing by traceId required</td></tr>
-            </tbody>
-          </table></div>
+      <!-- APIS -->
+      <section class="content-section" id="apis">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── Trace Search API ────────────────────────────────────────────────────────
+POST /api/v1/traces/search
+Request: {
+  "service":     "payment-service",
+  "operation":   "processPayment",       // optional
+  "min_duration_ms": 200,                // find slow traces
+  "has_error":   true,                   // find error traces
+  "tags":        { "http.status": "500" },
+  "time_range":  { "from": "now-1h", "to": "now" },
+  "limit":       50
+}
+Response: {
+  "traces": [
+    { "trace_id": "4bf92f...", "root_service": "api-gateway", "duration_ms": 342, "has_error": true,
+      "services": ["api-gateway", "auth", "payment"], "start_time": "2024-03-15T10:23:45Z" },
+    ...
+  ]
+}
+
+// ─── Trace Detail API ────────────────────────────────────────────────────────
+GET /api/v1/traces/{trace_id}
+Response: {
+  "trace_id":    "4bf92f3577b34da6a3ce929d0e0e4736",
+  "duration_ms": 342,
+  "span_count":  47,
+  "spans": [
+    { "span_id": "00f067...", "parent_span_id": null, "service": "api-gateway",
+      "operation": "HTTP GET /api/v1/orders", "start_offset_ms": 0, "duration_ms": 342,
+      "status": "ERROR", "tags": { "http.status": "500" } },
+    { "span_id": "ab34cd...", "parent_span_id": "00f067...", "service": "auth-service",
+      "operation": "validateToken", "start_offset_ms": 2, "duration_ms": 18, "status": "OK" },
+    ...
+  ]
+}
+// Cassandra read: SELECT * FROM traces WHERE trace_id = ? → reconstruct tree client-side
+
+// ─── Service Map API ─────────────────────────────────────────────────────────
+GET /api/v1/service-map?time_range=1h
+Response: {
+  "nodes": ["api-gateway", "auth-service", "payment-service", "postgres"],
+  "edges": [
+    { "from": "api-gateway",     "to": "auth-service",    "call_count": 1200000, "error_rate": 0.002 },
+    { "from": "api-gateway",     "to": "payment-service", "call_count": 450000,  "error_rate": 0.015 },
+    { "from": "payment-service", "to": "postgres",        "call_count": 900000,  "error_rate": 0.001 }
+  ]
+}
+
+// ─── Sampling Config API ──────────────────────────────────────────────────────
+PUT /api/v1/sampling/config
+Request: {
+  "default_rate":  0.001,       // 0.1% by default
+  "service_overrides": {
+    "payment-service":  0.01,   // 1% for payment (more important)
+    "batch-processor":  0.0001  // 0.01% for batch jobs (very high volume, less interesting)
+  },
+  "rule_overrides": [
+    { "service": "payment-service", "tag": "http.status", "value": "5xx", "rate": 1.0 }
+    // 100% sample rate for 5xx responses from payment service
+  ]
+}</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
-        <div class="content-section__body"><pre><code class="language-java">/**
- * TraceSampler -- adaptive sampling that ensures slow/error traces are always captured.
- * Base sampling rate: 1%. Traces exceeding latency threshold: 100% sampled.
+      <!-- DEEP DIVE -->
+      <section class="content-section" id="deepdive">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Auto-instrumentation vs Manual Instrumentation</h3>
+          <p>The OpenTelemetry Java agent uses bytecode weaving (via Java agent API) to automatically instrument known libraries without source code changes:</p>
+          <ul>
+            <li><strong>Agent instrumentation:</strong> Attach the OTEL Java agent jar at JVM startup: <code>-javaagent:/opt/otel-javaagent.jar -Dotel.service.name=payment-service</code>. The agent intercepts class loading and injects tracing code into Spring MVC controllers, RestTemplate/OkHttp clients, JDBC drivers, Kafka producers/consumers, gRPC stubs. Zero application code changes required.</li>
+            <li><strong>What agent cannot do:</strong> Custom business spans ("time spent in pricing calculation"), custom tags ("customer_id", "order_amount"), custom events within a span. For these, developers add manual spans via the OTEL SDK API.</li>
+            <li><strong>Manual instrumentation:</strong> <code>Span span = tracer.spanBuilder("processPayment").startSpan(); try (Scope s = span.makeCurrent()) { ... span.setAttribute("amount_cents", 4999); } finally { span.end(); }</code></li>
+            <li><strong>Why both:</strong> Agent gives you 80% coverage with zero effort. Manual instrumentation adds the 20% that matters most for business-specific debugging.</li>
+          </ul>
+
+          <h3>2. Tail-based Sampling: The Implementation Challenge</h3>
+          <p>Tail-based sampling requires correlating all spans for a trace (which arrive from 50 different services over up to 30 seconds) before deciding whether to keep or drop the trace. The Kafka-based implementation:</p>
+          <pre><code class="language-java">// Key insight: use traceId as the Kafka partition key.
+// All spans for the same trace go to the same partition → handled by the same consumer.
+// This enables stateful windowing: one consumer accumulates all spans for a trace.
+
+// Flink tail sampling job:
+// 1. Consume from Kafka topic "spans.raw" (keyed by traceId)
+// 2. KeyedProcessFunction: per-traceId state
+// 3. For each incoming span: add to trace buffer in state
+// 4. Set a timer for 30 seconds after the first span (max trace duration)
+// 5. When timer fires:
+//    - Does any span have status=ERROR? → KEEP
+//    - Is root span duration > 2000ms? → KEEP
+//    - Random(0,1) < 0.001 → KEEP (0.1% sample of remaining)
+//    - Otherwise: DROP (discard all spans in buffer, release state)
+// 6. For KEEP: emit all spans to the storage sink (Cassandra + ES)</code></pre>
+
+          <h3>3. Sampling Math and Storage Verification</h3>
+          <p>Always verify your sampling math against storage constraints:</p>
+          <pre><code class="language-java">// Scenario: 1M req/sec, 50 spans each, tail-based sampling
+//
+// Without sampling:
+// 1M × 50 spans = 50M spans/sec × 1 KB = 50 GB/sec → 4.3 PB/day
+//
+// With tail-based sampling rules:
+// Error rate: ~0.5% of requests → 5,000 req/sec → 250K spans/sec (always kept)
+// Slow traces: ~1% of requests > 2s → 10,000 req/sec → 500K spans/sec (kept)
+// Remaining: ~990K req/sec → 0.1% random → 990 req/sec → 49.5K spans/sec (sampled)
+// Total kept: 250K + 500K + 49.5K ≈ 800K spans/sec
+// 800K × 1 KB × 86,400 sec = ~69 TB/day
+// After LZ4 compression (5×): ~14 TB/day
+// With replication factor 2: ~28 TB/day in Cassandra
+// 28 TB/day × 7 days = 196 TB → ~65 nodes at 3 TB each
+//
+// This is within budget. Without tail sampling, it's 100× larger.</code></pre>
+
+          <h3>4. Service Dependency Map Construction</h3>
+          <p>Jaeger and Zipkin both auto-generate service maps from trace data. The mechanism:</p>
+          <ul>
+            <li>A Kafka Streams job (or Flink) reads all spans. For each span with a parent, it emits an edge: <code>(parent.serviceName → span.serviceName)</code></li>
+            <li>These edges are aggregated into a call graph with counts and error rates. Stored in Redis (ZINCRBY for counts) with a 1-hour rolling window.</li>
+            <li>The service map API reads from Redis and returns the graph. Automatically shows new dependencies when a service starts calling a new service — no manual configuration.</li>
+            <li>This is one of the most valuable outputs of distributed tracing beyond individual trace debugging. It reveals hidden dependencies (service A calls service B's database directly) and helps capacity planning.</li>
+          </ul>
+
+          <h3>5. Adaptive Sampling</h3>
+          <p>Fixed sampling rates create a problem: a service that normally handles 100 req/sec (low traffic) but suddenly spikes to 10K req/sec will overwhelm the collector. Adaptive sampling adjusts the rate to maintain a target throughput:</p>
+          <ul>
+            <li>Target: 100 traces/sec per service regardless of traffic volume</li>
+            <li>If service handles 100 req/sec → 100% sample rate</li>
+            <li>If service handles 1,000 req/sec → 10% sample rate</li>
+            <li>If service handles 100,000 req/sec → 0.1% sample rate</li>
+            <li>Implementation: the sampling decision service monitors ingest rate per service (from a Kafka Streams count) and pushes rate adjustments to all SDK instances via the config service. SDKs receive the rate update via SSE (same pattern as feature flags).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- EVALUATE -->
+      <section class="content-section" id="evaluate">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <h3>Performance Overhead Verification</h3>
+          <p>The 1% overhead requirement for instrumentation must be verified in production. The overhead sources:</p>
+          <ul>
+            <li><strong>Span creation:</strong> Allocating a span object, recording start time (System.nanoTime() — ~20 ns). Across 50 spans per request: ~1 microsecond of CPU time. Negligible.</li>
+            <li><strong>Context propagation:</strong> Reading/writing the traceparent header adds ~50 bytes to each HTTP request and ~200 ns of string manipulation. At 1,000 outgoing calls per second per service: ~200 microseconds total. Still negligible.</li>
+            <li><strong>Span export (the real cost):</strong> The in-process SDK batches spans. Every 5,000 spans or 5 seconds (whichever comes first), a background thread serializes and sends to Kafka. This is off the critical path — the application thread never blocks waiting for export. The serialization cost is ~50 microseconds per batch, amortized across 5,000 spans = 10 nanoseconds per span.</li>
+            <li><strong>Total overhead at 1% sampling:</strong> For unsampled spans (99% of traffic), the cost is one boolean check: <code>if (flags != 01) return;</code>. &lt;1 ns. This is why head-based sampling is so efficient — unsampled spans are essentially free.</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin:var(--space-4) 0">
+            <strong>&#x1F4A1; Benchmark:</strong> Uber's Jaeger team measured OpenTelemetry Java agent overhead at ~0.03% additional CPU and &lt;0.1% additional latency on a realistic microservices benchmark. The theoretical 1% limit is very conservative — real-world overhead is far lower.
+          </div>
+          <h3>Failure Modes</h3>
+          <ul>
+            <li><strong>Cassandra hot partition:</strong> A single trace with 10,000 spans (e.g., a loop that spawned thousands of DB calls) creates a 10 MB Cassandra partition — the maximum recommended is 100 MB. Not an immediate problem but monitor for outlier traces. Mitigation: set a max spans-per-trace limit in the collector (discard spans after 1,000 per trace, log a warning).</li>
+            <li><strong>Kafka consumer lag in tail sampler:</strong> If the Flink tail sampler falls behind, trace windows extend beyond 30 seconds and timer accuracy degrades. The trace is still eventually assembled but may include spans from the next minute. Mitigation: over-provision Flink workers; use Kafka partition count = Flink parallelism for linear scaling.</li>
+            <li><strong>Clock skew between services:</strong> Span timestamps are generated by each service's local clock. If service A's clock is 500ms ahead of service B's, a child span appears to start before its parent. Mitigation: ensure NTP synchronization across all nodes; display spans using relative offsets from trace start, not absolute timestamps.</li>
+            <li><strong>Elasticsearch index mapping explosion:</strong> Tags are stored as a map. If high-cardinality tag values (like user IDs) are mapped as Elasticsearch fields, mapping explosion occurs. Solution: map <code>tags</code> as a nested Elasticsearch type, not top-level fields.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- DELIVER -->
+      <section class="content-section" id="deliver">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Trace model:</strong> Span = (traceId, spanId, parentSpanId, operationName, timestamps, tags). Trace = tree of spans sharing traceId.</li>
+            <li><strong>Propagation:</strong> W3C traceparent header in HTTP/gRPC. Kafka message headers for async. OTel Java agent handles propagation automatically.</li>
+            <li><strong>Pipeline:</strong> Service → OTel SDK (async batching) → Kafka (partitioned by traceId) → Flink tail sampler → Cassandra (full spans) + Elasticsearch (trace summary for search).</li>
+            <li><strong>Sampling:</strong> Tail-based — keep all errors (status=ERROR), all slow traces (&gt;2s), 0.1% random of the rest. Results in ~14 TB/day (compressed) from 50 GB/sec raw.</li>
+            <li><strong>Storage:</strong> Cassandra wide row per traceId (7-day TTL, one partition read = complete trace). Elasticsearch for tag-based search queries.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- TRADE-OFFS -->
+      <section class="content-section" id="tradeoffs">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Head-based Sampling</th><th>Tail-based Sampling</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Error trace coverage</strong></td><td>Poor — error traces dropped at same rate as normal traces</td><td>Excellent — all error traces kept, regardless of sample rate</td></tr>
+                <tr><td><strong>Infrastructure cost</strong></td><td>Low — unsampled spans never reach the collector</td><td>High — all spans must flow to collector for 30s before drop decision</td></tr>
+                <tr><td><strong>Implementation complexity</strong></td><td>Low — flag in traceparent header propagates decision downstream</td><td>High — stateful windowing, timer management, trace assembly</td></tr>
+                <tr><td><strong>Latency added</strong></td><td>Minimal (&lt;1 ms) — decision is local</td><td>Minimal in app — decision is in collector pipeline, not app path</td></tr>
+                <tr><td><strong>Use when</strong></td><td>Very high volume where even collector pipeline is too expensive</td><td>Default choice for most systems — guarantees you have error traces</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrapper" style="margin-top:var(--space-6)">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Cassandra</th><th>Elasticsearch</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Primary access pattern</strong></td><td>Read all spans for one trace (by traceId) — single partition read</td><td>Search traces by tag, service, duration — inverted index required</td></tr>
+                <tr><td><strong>Write performance</strong></td><td>Excellent — append-only writes, LSM tree, no index overhead</td><td>Good — inverted index built asynchronously but adds write amplification</td></tr>
+                <tr><td><strong>Storage efficiency</strong></td><td>Good with compaction; TTL handled automatically</td><td>High overhead (3–5× raw) for inverted index</td></tr>
+                <tr><td><strong>Why both:</strong></td><td colspan="2">Use both: Cassandra stores all span data; Elasticsearch stores only trace summaries (one doc per trace, not 50 spans). Search uses Elasticsearch to find trace IDs, then Cassandra to fetch the full trace. This hybrid gives O(1) trace retrieval with full-text search capability.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- IMPLEMENTATION -->
+      <section class="content-section" id="implementation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TracingFilter — servlet filter that extracts or creates trace context for each HTTP request.
+ * Creates the root span for server-received requests.
+ * Propagates context to downstream calls via TraceContext thread-local (set by OTel SDK).
  */
-public class TraceSampler {
+@Component
+public class TracingFilter implements Filter {
 
-    private static final double BASE_SAMPLE_RATE = 0.01; // 1% default
-    private static final long SLOW_TRACE_THRESHOLD_MS = 500; // 500ms = slow
-    private static final String SAMPLED_FLAG = "01";
-    private static final String NOT_SAMPLED_FLAG = "00";
+    private static final String TRACEPARENT_HEADER = "traceparent";
 
-    private final Random random = new Random();
+    private final Tracer tracer;
 
-    /**
-     * Decides whether to sample a completed trace.
-     * Prioritizes: (1) error traces, (2) slow traces, (3) probabilistic base rate.
-     */
-    public boolean shouldSample(String traceId, long durationMs, boolean hasErrors) {
-        if (hasErrors) {
-            return true; // Always sample error traces for debugging
+    public TracingFilter(OpenTelemetry openTelemetry) {
+        this.tracer = openTelemetry.getTracer("http-server", "1.0.0");
+    }
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+        // Extract parent context from incoming traceparent header (if present)
+        // If no header: this is the root service — generate a new traceId
+        Context parentContext = extractParentContext(httpRequest);
+
+        String operationName = httpRequest.getMethod() + " " + httpRequest.getRequestURI();
+        Span serverSpan = tracer.spanBuilder(operationName)
+            .setParent(parentContext)
+            .setSpanKind(SpanKind.SERVER)
+            .startSpan();
+
+        try (Scope scope = serverSpan.makeCurrent()) {
+            serverSpan.setAttribute("http.method", httpRequest.getMethod());
+            serverSpan.setAttribute("http.url", httpRequest.getRequestURI());
+            serverSpan.setAttribute("service.name", "payment-service");
+
+            chain.doFilter(request, response);
+
+            int statusCode = httpResponse.getStatus();
+            serverSpan.setAttribute("http.status_code", statusCode);
+            if (statusCode >= 500) {
+                serverSpan.setStatus(StatusCode.ERROR, "HTTP " + statusCode);
+            }
+        } catch (Exception exception) {
+            serverSpan.setStatus(StatusCode.ERROR, exception.getMessage());
+            serverSpan.recordException(exception);
+            throw exception;
+        } finally {
+            serverSpan.end(); // CRITICAL: always end the span; open spans = memory leak
         }
-        if (durationMs &gt; SLOW_TRACE_THRESHOLD_MS) {
-            return true; // Always sample slow traces for performance analysis
+    }
+
+    private Context extractParentContext(HttpServletRequest request) {
+        String traceparent = request.getHeader(TRACEPARENT_HEADER);
+        if (traceparent == null) {
+            return Context.root(); // generate new traceId
         }
-        return random.nextDouble() &lt; BASE_SAMPLE_RATE;
+        // W3C traceparent format: "00-traceId-parentSpanId-flags"
+        TextMapGetter&lt;HttpServletRequest&gt; getter = new HttpServletRequestTextMapGetter();
+        return W3CTraceContextPropagator.getInstance()
+            .extract(Context.root(), request, getter);
+    }
+}
+
+/**
+ * KafkaSpanExporter — exports spans to Kafka asynchronously.
+ * Replaces the default OTLP exporter for high-throughput environments.
+ * Kafka provides better durability and backpressure handling than HTTP OTLP.
+ */
+public class KafkaSpanExporter implements SpanExporter {
+
+    private static final String SPANS_TOPIC   = "spans.raw";
+    private static final int    MAX_BATCH_SIZE = 512;
+
+    private final KafkaProducer&lt;String, byte[]&gt; kafkaProducer;
+
+    public KafkaSpanExporter(Properties kafkaProperties) {
+        this.kafkaProducer = new KafkaProducer&lt;&gt;(kafkaProperties);
+    }
+
+    @Override
+    public CompletableResultCode export(Collection&lt;SpanData&gt; spans) {
+        CompletableResultCode result = new CompletableResultCode();
+        List&lt;SpanData&gt; spanList = new ArrayList&lt;&gt;(spans);
+
+        // Batch by traceId: all spans for the same trace to the same Kafka partition.
+        // This is the critical property for tail-based sampling — same partition = same consumer.
+        Map&lt;String, List&lt;SpanData&gt;&gt; byTraceId = spanList.stream()
+            .collect(Collectors.groupingBy(span -&gt; span.getTraceId()));
+
+        byTraceId.forEach((traceId, traceSpans) -&gt; {
+            byte[] serializedSpans = serializeToProtobuf(traceSpans);
+            ProducerRecord&lt;String, byte[]&gt; record =
+                new ProducerRecord&lt;&gt;(SPANS_TOPIC, traceId, serializedSpans);
+            kafkaProducer.send(record, (metadata, exception) -&gt; {
+                if (exception != null) {
+                    // Log but don't block — tracing failures must never affect application
+                    System.err.println("[SPAN_EXPORT_FAIL] " + exception.getMessage());
+                }
+            });
+        });
+
+        result.succeed();
+        return result;
+    }
+
+    @Override
+    public CompletableResultCode flush() {
+        kafkaProducer.flush();
+        return CompletableResultCode.ofSuccess();
+    }
+
+    @Override
+    public CompletableResultCode shutdown() {
+        kafkaProducer.close();
+        return CompletableResultCode.ofSuccess();
+    }
+
+    private byte[] serializeToProtobuf(List&lt;SpanData&gt; spans) {
+        // Serialize to OpenTelemetry Protobuf format (ExportTraceServiceRequest)
+        // Using the OTEL SDK's built-in protobuf serialization
+        ExportTraceServiceRequest protoRequest = SpanAdapter.toProtoResourceSpans(spans);
+        return protoRequest.toByteArray();
+    }
+}
+
+/**
+ * SpanBuilder — utility for creating manual custom spans within application code.
+ * Wraps the OTel SDK with a simpler API and consistent attribute naming.
+ */
+public class SpanBuilder {
+
+    private final Tracer tracer;
+
+    public SpanBuilder(OpenTelemetry openTelemetry, String instrumentationName) {
+        this.tracer = openTelemetry.getTracer(instrumentationName);
     }
 
     /**
-     * Generates W3C traceparent header for a new root span.
+     * Wraps a supplier in a custom span. The span is automatically ended when the
+     * supplier returns or throws. Tags are set as span attributes.
      */
-    public String generateTraceparent(String traceId, String spanId, boolean sampledDecision) {
-        String sampledFlag = sampledDecision ? SAMPLED_FLAG : NOT_SAMPLED_FLAG;
-        return "00-" + traceId + "-" + spanId + "-" + sampledFlag;
+    public &lt;T&gt; T withSpan(String operationName, Map&lt;String, String&gt; tags, Supplier&lt;T&gt; operation) {
+        Span span = tracer.spanBuilder(operationName).startSpan();
+        try (Scope ignored = span.makeCurrent()) {
+            tags.forEach(span::setAttribute);
+            T result = operation.get();
+            span.setStatus(StatusCode.OK);
+            return result;
+        } catch (Exception exception) {
+            span.setStatus(StatusCode.ERROR, exception.getMessage());
+            span.recordException(exception);
+            throw exception;
+        } finally {
+            span.end();
+        }
     }
+}
 
-    /**
-     * Parses a traceparent header to extract trace context.
-     * Called by downstream services to continue the trace.
-     */
-    public TraceContext parseTraceparent(String traceparentHeader) {
-        if (traceparentHeader == null || traceparentHeader.isEmpty()) {
-            return TraceContext.newTrace(BASE_SAMPLE_RATE);
-        }
-        String[] parts = traceparentHeader.split("-");
-        if (parts.length &lt; 4) {
-            return TraceContext.newTrace(BASE_SAMPLE_RATE);
-        }
-        boolean isSampled = SAMPLED_FLAG.equals(parts[3]);
-        return new TraceContext(parts[1], parts[2], isSampled);
-    }
-
-    public record TraceContext(String traceId, String parentSpanId, boolean isSampled) {
-        static TraceContext newTrace(double sampleRate) {
-            return new TraceContext(
-                UUID.randomUUID().toString().replace("-", ""),
-                null,
-                Math.random() &lt; sampleRate
-            );
-        }
-    }
-}</code></pre></div>
+// Usage example in PaymentService:
+// return spanBuilder.withSpan("processPayment",
+//     Map.of("payment.amount_cents", "4999", "payment.method", "card"),
+//     () -> paymentGateway.charge(amount, card)
+// );</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+      <!-- QUIZ -->
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-tracing-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
-          <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
-            <div class="quiz__question-text"></div>
-            <div class="quiz__options" role="group" aria-label="Answer options"></div>
-            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
-          </div>
-          <div data-question="Why does simple 1% random sampling fail to capture the traces you most need for debugging?" data-options='["1% sampling creates too much storage overhead", "Slow outliers (p99 latency) represent ~1% of traces. Random 1% sampling captures only 0.01% of slow traces -- missing almost all of them. You are most likely to debug the fast 99% while the actual slow paths go unsampled. Adaptive sampling solves this by always capturing slow traces regardless of base sampling rate.", "1% sampling causes incorrect latency histogram calculations", "Random sampling requires a centralized coordination service"]' data-correct="1" data-explanation="This is a well-known limitation of uniform sampling for observability. A request taking 5 seconds is interesting; a request taking 10ms is not. If both are sampled at 1%, you see 1% of interesting traces and 1% of boring traces. Tail-based adaptive sampling inverts this: slow traces at 100%, fast traces at 1%." style="display:none"></div>
-          <div data-question="How does the W3C traceparent header propagate sampling decisions across microservices?" data-options='["Each service makes an independent sampling decision based on its own sample rate", "The traceparent header contains a flags byte where bit 0 = sampled. Service A sets flags=0x01 (sampled) and includes it in all outbound HTTP calls. Service B reads the header, sees sampled=true, and creates a child span. The sampling decision propagates to all downstream services automatically.", "Services communicate sampling decisions via a separate gRPC metadata call", "The load balancer strips trace headers between services for security reasons"]' data-correct="1" data-explanation="Propagating the sampling decision via header is critical for trace completeness. If each service independently decided to sample, you would get partial traces -- some spans captured, some not -- making the trace useless. The root service decides once; all downstream services respect that decision via the sampled flag." style="display:none"></div>
-          <div data-question="Tail-based sampling requires buffering all spans before making a sampling decision. What is the key implementation challenge?" data-options='["Tail-based sampling requires a relational database to store all spans temporarily", "All spans for a trace must be buffered until the trace is complete. For long-running traces, this requires significant memory. Additionally, the trace must be routed to the same collector instance (consistent hashing by traceId), otherwise span assembly requires expensive cross-instance coordination.", "Tail-based sampling cannot handle error traces, only slow traces", "Buffering spans requires a distributed lock per active trace"]' data-correct="1" data-explanation="Memory and routing are the two challenges. Memory: a 1-minute trace with 100 spans at 500 bytes each = 50KB held per trace. At 100K concurrent traces: 5GB RAM minimum. Routing: consistent hashing of traceId to collector instance ensures all spans go to the same buffer, enabling in-memory assembly." style="display:none"></div>
-          <div data-question="What is the span parent_span_id field used for in trace visualization?" data-options='["parent_span_id identifies which process or machine created the span", "parent_span_id reconstructs the call tree: each span except the root has a parent_span. The UI builds a Gantt chart by starting with the root span (parent=null), then attaching child spans as branches. Depth shows the call hierarchy: frontend to API gateway to auth service to database query.", "parent_span_id is used for billing and attribution purposes across teams", "parent_span_id links spans across different trace IDs for distributed transactions"]' data-correct="1" data-explanation="The tree structure of a trace is encoded entirely in parent_span_id. Given all spans for a trace_id, you can reconstruct the complete call graph. Root span = the incoming request. Child spans = downstream calls. Grandchild spans = calls made by downstream services. Visual timeline overlaps show parallelism." style="display:none"></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 5</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+
+          <div data-question="A system receives 1M requests/sec with 50 spans each. Why is storing all spans economically infeasible, and what is the correct approach?" data-options='["Modern SSDs are fast enough to handle 50M spans/sec; the limiting factor is query latency not storage","1M × 50 spans × 1 KB = 50 GB/sec raw = 4.3 PB/day. This is economically impossible. Solution: tail-based sampling keeps 100% of error traces, 100% of slow traces (>2s), and 0.1% of the rest. This reduces to ~800K spans/sec → ~14 TB/day compressed — manageable. The critical insight: keep what matters (errors, anomalies), sample the rest.","Sampling is not needed; just increase Cassandra cluster size proportionally","Head-based sampling at 0.1% is sufficient; tail-based is only for compliance use cases"]' data-correct="1" data-explanation="The math makes sampling non-optional at this scale. The architectural insight is the asymmetry: you need 100% of error and slow traces (these are the ones you debug in production incidents) but only a small fraction of healthy, fast traces. Tail-based sampling is the only way to achieve this — you cannot know if a trace will have an error until it's complete." style="display:none"></div>
+
+          <div data-question="Why must Kafka be partitioned by traceId for tail-based sampling to work?" data-options='["Partitioning by traceId ensures alphabetical ordering of trace records within Kafka","All spans for a given trace must be handled by the same consumer to assemble the trace for the keep/drop decision. If spans for trace A go to partitions 1, 3, and 7 (handled by 3 different Flink workers), no single worker can see the complete trace to evaluate sampling rules. TraceId as partition key routes all spans for one trace to one partition — one Flink worker owns that traceId's state.","TraceId partitioning is needed only for Zipkin compatibility, not for functional correctness","Kafka partitioning by traceId enables compression; random partitioning does not"]' data-correct="1" data-explanation="This is the fundamental distributed systems constraint on tail-based sampling. The sampling decision requires the full trace. The full trace spans multiple services and arrives over 30 seconds. To assemble it, one worker must see all spans. Consistent hashing on traceId guarantees this: hash(traceId) % numPartitions gives the same partition every time, so one consumer always processes all spans for a given trace." style="display:none"></div>
+
+          <div data-question="What is the W3C traceparent header format, and why does it include a 'flags' byte?" data-options='["The flags byte stores the HTTP status code of the upstream request for error propagation","Format: 00-{traceId 128-bit hex}-{parentSpanId 64-bit hex}-{flags 8-bit}. The flags byte (01=sampled, 00=not sampled) propagates the head sampling decision from the root service to all downstream services. If the root decides not to sample (flags=00), downstream services know to skip instrumentation overhead entirely — they do not create spans, export nothing. This is how head sampling achieves near-zero overhead for unsampled traces.","The flags byte is reserved for future use and should always be set to 00","The flags byte encodes the gRPC status code for cross-protocol tracing"]' data-correct="1" data-explanation="The flags byte is what makes head-based sampling efficient. Without it, every service would need to create and buffer spans, then discard them based on a decision they don't know about. With flags=00, downstream services can skip all instrumentation for unsampled traces — effectively zero overhead. With flags=01, services know to create, export, and propagate spans. The decision is made once at the root and respected by all." style="display:none"></div>
+
+          <div data-question="Why is Cassandra preferred over PostgreSQL for storing distributed trace spans?" data-options='["Cassandra is always faster than PostgreSQL regardless of access pattern","For traces, the dominant read is: get all 50 spans for traceId X. In Cassandra, traceId is the partition key — all spans for one trace are in one partition, one physical disk location. This is a single sequential read, O(1) regardless of total data size. In PostgreSQL, without a partition key, a query for 50 spans scattered across a table of billions requires a B-tree index lookup + 50 random page reads across the heap — much slower at scale.","Cassandra has built-in TTL support, which PostgreSQL lacks entirely","Cassandra supports the W3C traceparent header natively, enabling automatic span assembly"]' data-correct="1" data-explanation="The data model maps perfectly to Cassandra's strengths. Partition key = traceId means all 50 spans of a trace are co-located on the same Cassandra node's SSTable. The fetch is one partition read. Cassandra also handles write throughput well (500K spans/sec) due to its LSM-tree storage which turns random writes into sequential. The TTL feature means trace expiry is automatic without expensive DELETE operations." style="display:none"></div>
+
+          <div data-question="An on-call engineer notices that spans from 'payment-service' appear to START BEFORE their parent spans in the trace waterfall. What is the cause?" data-options='["This means the payment service is incorrectly generating new traceIds instead of using the propagated one","Clock skew between the machine running the parent service and the machine running payment-service. If payment-service's clock is 500ms ahead, its span start timestamp is earlier than the parent's. Distributed tracing relies on NTP-synchronized clocks for correct waterfall rendering. Fix: use relative timestamps (offset from trace start) for display, not absolute timestamps. Ensure NTP sync tolerance < 1ms across all hosts.","The traceId propagation header is being corrupted by a load balancer","Cassandra is returning spans in storage order rather than timestamp order"]' data-correct="1" data-explanation="Clock skew in distributed systems is a fundamental problem (Lamport clocks and vector clocks exist for this reason). In distributed tracing, a child span appearing to start before its parent is the telltale sign of clock skew. The rendering fix (relative offsets) resolves the visual issue. The operational fix (strict NTP) prevents measurement errors. Production tracing systems like Jaeger use vector clocks internally for ordering guarantees." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="api-gateway.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: API Gateway &rarr;</a>
+              <a href="analytics-pipeline.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Analytics Pipeline &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="analytics-pipeline.html" class="btn btn--outline">&larr; Analytics Pipeline</a>
-        <a href="api-gateway.html" class="btn btn--primary">Next: API Gateway &rarr;</a>
+        <a href="feature-flags.html" class="btn btn--outline">&larr; Feature Flags</a>
+        <a href="analytics-pipeline.html" class="btn btn--primary">Next: Analytics Pipeline &rarr;</a>
       </div>
     </main>
   </div>

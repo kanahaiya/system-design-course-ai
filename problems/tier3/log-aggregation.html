@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Distributed Log Aggregation (ELK Stack) &mdash; MAANG System Design RESHADED walkthrough.">
-  <title>Design Distributed Log Aggregation (ELK Stack) &mdash; MAANG System Design</title>
+  <meta name="description" content="Design Distributed Log Aggregation like ELK Stack or Splunk — MAANG System Design RESHADED walkthrough covering log pipeline, Elasticsearch internals, sampling, retention tiers, PII scrubbing, and 1TB/day scale.">
+  <title>Design Distributed Log Aggregation &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -43,182 +43,679 @@
         </ul>
       </nav>
       <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
-        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-logs" style="width:100%">Mark Complete</button>
-        <a href="../../mock-interview/index.html?problem=p-logs" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-log-agg" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-log-agg" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
           <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span><span>Tier 3</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <span>Tier 3</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
           <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
-          <span class="tag">60 min</span><span class="tag">Observability</span>
+          <span class="tag">60 min</span><span class="tag">Observability Infrastructure</span>
         </div>
-        <h1 class="module-header__title">Design Distributed Log Aggregation (ELK Stack)</h1>
-        <p class="module-header__desc">Log aggregation has a paradox: the time you most need logs (during an outage) is when the system is most stressed. The solution: decouple log generation from processing via Kafka, and use lightweight local agents that will not block application threads.</p>
+        <h1 class="module-header__title">Design Distributed Log Aggregation System</h1>
+        <p class="module-header__desc">Log aggregation at scale is an ingest-heavy, search-heavy system where the write volume (1M lines/sec) is orders of magnitude larger than any OLTP workload. The core tension is between cost of storage (keep everything) and cost of search (inverted indexes are expensive). Every architectural decision traces back to: what do on-call engineers need to find, in what time window, and at what cost?</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; Elasticsearch, Splunk, Datadog Logs</div>
+          <div class="module-header__meta-item">&#x1F3E2; Elastic (ELK Stack), Splunk, Datadog, Grafana Loki</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
         </div>
       </header>
-      <section class="content-section" id="requirements"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><h3>Functional Requirements</h3><ul>
-            <li>Collect logs from distributed services (structured JSON logs preferred)</li>
-            <li>Full-text search: find all logs with a specific error message or trace ID</li>
-            <li>Tail logs in real-time for a specific service</li>
-            <li>Retention: searchable for 30 days, archived for 1 year</li>
-            <li>Alerting: notify on error rate spike or specific error patterns</li></ul><h3>Non-Functional Requirements</h3><ul>
-            <li><strong>Scale:</strong> 1M log lines/sec from 10K services</li>
-            <li><strong>Latency:</strong> Logs searchable within 30 seconds of generation</li>
-            <li><strong>Durability:</strong> Never lose logs even during Elasticsearch downtime</li>
-            <li><strong>Zero impact:</strong> Log shipping must not block application threads</li></ul></div></section>
-      <section class="content-section" id="estimation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><ul>
-            <li>1M logs/sec &times; avg 500 bytes = 500MB/sec = 43TB/day raw</li>
-            <li>Elasticsearch indexing overhead (~2x raw): 86TB/day &rarr; 2.6PB/month without tiering</li>
-            <li>With hot/warm/cold: SSD (7 days) &rarr; HDD (30 days) &rarr; S3 (1 year) &rarr; delete</li>
-            <li>Compressed S3 archive: 43TB/day &times; 0.1 (gzip) &times; 365 = 1.6PB/year</li></ul></div></section>
-      <section class="content-section" id="schema"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Log entries (Elasticsearch index per day)
-// Index: logs-{service}-{YYYY-MM-DD}
-log_entry:
-    "@timestamp"  ISO8601 datetime
-    level         enum: DEBUG INFO WARN ERROR FATAL
-    service       string: "auth-service"
-    trace_id      string: for correlation with distributed traces
-    span_id       string
-    message       text (full-text indexed)
-    exception     text (stack trace)
-    fields        object: {userId, requestId, ...}
 
-// Hot storage: SSD-backed Elasticsearch (last 7 days, fast search)
-// Warm storage: HDD-backed Elasticsearch (7-30 days, slower search)
-// Cold storage: S3 Parquet (30-365 days, batch queries only)</code></pre></div></section>
-      <section class="content-section" id="hld"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body"><ul>
-            <li><strong>Log agents (Fluentd/Filebeat):</strong> Sidecar or DaemonSet in each pod. Tails log files (stdout/stderr). Parses and enriches (add service name, Kubernetes labels). Batches to Kafka. Async &mdash; never blocks application.</li>
-            <li><strong>Kafka buffer:</strong> Absorbs log bursts during spikes. Decouples agent from Logstash. If Logstash is slow, Kafka queues the backlog without losing data. Retention: 7 days.</li>
-            <li><strong>Logstash / Kafka consumer:</strong> Parses log format (regex/grok for unstructured, direct JSON for structured). Enriches (GeoIP, user lookup). Writes to Elasticsearch index.</li>
-            <li><strong>Elasticsearch cluster:</strong> Hot nodes (SSD, last 7 days). Warm nodes (HDD, 7-30 days). Index Lifecycle Management (ILM) auto-migrates from hot to warm to cold.</li>
-            <li><strong>Kibana:</strong> Query UI, saved searches, dashboards, alerting on log patterns.</li></ul></div></section>
-      <section class="content-section" id="apis"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Log ingestion (internal -- called by log agents, not directly by applications)
-POST /api/v1/logs/_bulk
-Body: [{ "@timestamp": "...", level: "ERROR", service: "auth", message: "...", trace_id: "..." }]
-
-// Log search API (Kibana / developer tools)
-POST /api/v1/logs/_search
-Body: { query: { match: { message: "NullPointerException" } }, sort: [{ "@timestamp": "desc" }] }
-
-// Real-time log tail
-GET /api/v1/logs/tail?service=auth-service&level=ERROR  (Server-Sent Events)
-
-// Alert rule management
-POST /api/v1/alerts/rules  { condition: "error_rate > 10 per minute", notify: "pagerduty" }</code></pre></div></section>
-      <section class="content-section" id="deepdive"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body">
-          <p><strong>Why Kafka between agents and Elasticsearch?</strong></p>
+      <!-- REQUIREMENTS -->
+      <section class="content-section" id="requirements">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
           <ul>
-            <li>Elasticsearch has variable throughput -- slow during shard rebalancing or GC pauses. Without Kafka, a slow Elasticsearch would back-pressure to agents, which would back-pressure to applications, blocking log writes and potentially impacting application performance.</li>
-            <li>Kafka provides durable buffering: if Elasticsearch is down for 4 hours, logs queue in Kafka. When Elasticsearch recovers, it replays from the Kafka offset.</li>
-            <li>Multiple consumers: Kafka enables consuming the same log stream for different purposes -- Elasticsearch for search, ClickHouse for metrics, S3 for archival.</li>
+            <li>Collect logs from all microservices (50+ services, 1,000+ instances)</li>
+            <li>Support both structured (JSON) and unstructured (freeform text) log formats</li>
+            <li>Full-text search on log content: keyword search, field filters, time range</li>
+            <li>Correlation: given a request ID, show all logs across all services for that request</li>
+            <li>Alerting: trigger PagerDuty/Slack on log patterns (error rate spike, specific error message)</li>
+            <li>Retention tiers with different storage costs at different ages</li>
+            <li>Dynamic log level adjustment without service restart</li>
           </ul>
-          <p><strong>Structured logging (JSON):</strong></p>
-          <p>JSON logs: <code>{"level":"ERROR","msg":"DB timeout","trace_id":"abc123","latency_ms":5001}</code></p>
-          <p>Benefits: no parsing needed in Logstash, fields are directly indexed, easy to search by structured fields. Switch from string-based log parsing to direct JSON ingestion reduces Logstash CPU by ~60%.</p>
-          <p><strong>Log sampling for high-volume services:</strong> A high-throughput service might emit 1M DEBUG logs/sec. Sample DEBUG/INFO at 1%; always store WARN/ERROR/FATAL. Reduces storage 10-100x while preserving the actionable logs.</p></div></section>
-      <section class="content-section" id="evaluate"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2><div class="content-section__body"><ul>
-            <li><strong>Log loss risk:</strong> Agents buffer logs locally on disk before sending to Kafka (persistent queue). If the pod dies, the local buffer is lost. For critical logs: use application-level async logging to Kafka directly (no agent intermediary).</li>
-            <li><strong>Elasticsearch mapping explosion:</strong> Dynamic field mapping: every new JSON field becomes a new Elasticsearch field. 10M distinct field names = mapping explosion leading to OOM. Mitigation: explicit index mapping, reject unknown fields, or use Elasticsearch dynamic mapping limits.</li></ul></div></section>
-      <section class="content-section" id="deliver"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2><div class="content-section__body"><p>Log aggregation = App to log agent to Kafka to Logstash to Elasticsearch to Kibana. Kafka is the critical buffer. Hot/warm/cold tiering reduces cost 10-50x. Structured JSON logs eliminate Logstash parsing overhead. Always sample DEBUG/INFO; never sample ERROR/FATAL.</p></div></section>
-      <section class="content-section" id="tradeoffs"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2><div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th></tr></thead>
-            <tbody>
-              <tr><td>Log format</td><td>Structured JSON: no parsing, direct field indexing, searchable fields</td><td>Unstructured text: human-readable, requires grok parsing, slower</td></tr>
-              <tr><td>Kafka usage</td><td>With Kafka: durable buffer, survives ES downtime</td><td>Direct to ES: simpler, log loss during ES issues</td></tr>
-              <tr><td>Sampling</td><td>Sample DEBUG 1%, INFO 10%, always keep ERROR</td><td>No sampling: 100% capture, 100x storage cost</td></tr>
-              <tr><td>Retention</td><td>Tiered (SSD/HDD/S3): 10-50x cost reduction</td><td>All on SSD: fast queries, very expensive</td></tr>
-            </tbody>
-          </table></div></section>
-      <section class="content-section" id="implementation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2><div class="content-section__body"><pre><code class="language-java">/**
- * LogIngestionPipeline -- parses incoming log batches and publishes to Kafka asynchronously.
- * Never blocks the calling thread; failures are logged internally.
- */
-public class LogIngestionPipeline {
-
-    private static final String LOG_TOPIC = "app-logs";
-
-    private final KafkaProducer&lt;String, String&gt; kafkaProducer;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
-    public LogIngestionPipeline(KafkaProducer&lt;String, String&gt; kafkaProducer) {
-        this.kafkaProducer = kafkaProducer;
-    }
-
-    /**
-     * Ingests a raw log line, parses it to structured JSON, and publishes to Kafka.
-     * Runs on a virtual thread -- never blocks the application.
-     */
-    public void ingestLog(String rawLogLine, String serviceName) {
-        Thread.ofVirtual().start(() -&gt; {
-            try {
-                StructuredLogEntry entry = parseLogLine(rawLogLine, serviceName);
-                if (shouldSample(entry.getLevel())) {
-                    String serialized = objectMapper.writeValueAsString(entry);
-                    kafkaProducer.send(
-                        new ProducerRecord&lt;&gt;(LOG_TOPIC, serviceName, serialized),
-                        (metadata, sendException) -&gt; {
-                            if (sendException != null) {
-                                System.err.println("[LogIngestionPipeline] Kafka send failed: "
-                                                   + sendException.getMessage());
-                            }
-                        }
-                    );
-                }
-            } catch (Exception parseException) {
-                System.err.println("[LogIngestionPipeline] Parse error: " + parseException.getMessage());
-            }
-        });
-    }
-
-    /**
-     * Sampling policy: always store WARN/ERROR/FATAL; sample DEBUG/INFO.
-     * Reduces storage 10-100x while preserving actionable logs.
-     */
-    private boolean shouldSample(String logLevel) {
-        return switch (logLevel.toUpperCase()) {
-            case "WARN", "ERROR", "FATAL" -&gt; true;       // Always keep
-            case "INFO"  -&gt; Math.random() &lt; 0.10;        // 10% of INFO
-            case "DEBUG" -&gt; Math.random() &lt; 0.01;        // 1% of DEBUG
-            default      -&gt; true;
-        };
-    }
-
-    private StructuredLogEntry parseLogLine(String rawLogLine, String serviceName) {
-        try {
-            StructuredLogEntry entry = objectMapper.readValue(rawLogLine, StructuredLogEntry.class);
-            if (entry.getService() == null) { entry.setService(serviceName); }
-            return entry;
-        } catch (JsonProcessingException parseException) {
-            // Fallback: unstructured log -- wrap in structured format
-            return new StructuredLogEntry(
-                Instant.now().toString(), "INFO", serviceName, rawLogLine, null, null
-            );
-        }
-    }
-}</code></pre></div></section>
-      <section class="content-section" id="quiz">
-        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
-        <div class="quiz" data-quiz-id="p-logs-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
-          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 4</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
-          <div data-question="Why is Kafka placed between log agents and Elasticsearch in the ELK pipeline?" data-options='["Kafka provides encryption for log data in transit to Elasticsearch", "Elasticsearch has variable throughput -- slow during shard rebalancing or GC pauses. Without Kafka, a slow Elasticsearch would back-pressure to agents, which would back-pressure to applications, blocking log writes. Kafka absorbs log bursts durably -- if Elasticsearch is down, logs queue in Kafka until it recovers.", "Kafka provides log parsing and enrichment that Logstash cannot do", "Kafka is required because Elasticsearch does not support direct batch writes"]' data-correct="1" data-explanation="This is the classic buffer-against-slow-consumer pattern. Log pipelines must never block the application. Kafka durable high-throughput queue decouples the fast producers (agents) from the variable-speed consumer (Elasticsearch). Log loss tolerance is zero -- Kafka 7-day retention ensures logs survive extended Elasticsearch outages." style="display:none"></div>
-          <div data-question="What is hot/warm/cold tiering for log storage, and why is it used?" data-options='["Hot/warm/cold refers to the temperature at which log data is physically stored", "Recent logs (hot: last 7 days, SSD) are searched frequently during active debugging. Older logs (warm: 7-30 days, HDD) are searched occasionally. Archive (cold: 30+ days, S3) is rarely accessed but required for compliance. Tiering reduces cost: SSD is 10x more expensive than HDD, which is 100x more expensive than S3.", "Tiering is only necessary for log volumes over 1PB", "Hot/warm/cold tiering requires completely separate Elasticsearch clusters"]' data-correct="1" data-explanation="Cost breakdown is the driver: SSD ($0.20/GB) vs HDD ($0.04/GB) vs S3 ($0.003/GB). 43TB/day x 30 days = 1.3PB. On pure SSD: $260K/month. On tiered storage (7 days SSD + 23 days HDD + archive): ~$70K/month. Elasticsearch ILM automates migration between tiers based on index age." style="display:none"></div>
-          <div data-question="Why is structured logging (JSON) preferred over traditional string-formatted log lines?" data-options='["JSON log files are smaller than equivalent plain-text log files", "Structured logs (JSON) provide ready-made fields directly indexed in Elasticsearch without parsing. Searching for all logs with trace_id=abc123 is a direct field lookup. Unstructured logs require regex parsing (grok patterns) -- CPU-intensive, error-prone, and breaks when log format changes.", "JSON logs are required by Kubernetes log collection infrastructure", "Structured logging automatically prevents log injection security attacks"]' data-correct="1" data-explanation="Structured fields are first-class searchable attributes. In Kibana: trace_id:abc123 on a structured log is an index lookup (O(1)). On unstructured: it is a full-text regex scan (O(N)). The operational benefit during incidents: trace_id in logs, traces, and metrics all use the same ID -- you can pivot seamlessly between what happened (logs) and where is it slow (traces)." style="display:none"></div>
-          <div data-question="Why is log sampling recommended for DEBUG/INFO levels in high-throughput services?" data-options='["Debug logs should never be emitted in production under any circumstances", "High-throughput services may emit 1M+ DEBUG logs/second. Storing all of them is expensive and rarely useful -- most debug logs are routine. Sampling DEBUG/INFO at 1-10% reduces storage cost 10-100x while preserving WARN/ERROR/FATAL logs which are the actionable signals.", "Log sampling permanently loses information that can never be recovered", "Log sampling is only needed for services with more than 10K requests/sec"]' data-correct="1" data-explanation="The cost math: 1M/sec DEBUG logs x 500 bytes x 86400s x 30 days = 1.3PB/month. At 1% sampling: 13TB/month. For most debugging, the 1% sample is sufficient to identify patterns. For specific investigations, you can add a request flag (X-Enable-Debug-Logging: true) to force 100% sampling for that request path only." style="display:none"></div>
-          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
-          <div class="quiz__result is-hidden" aria-live="polite"><div class="quiz__result-score"></div><div class="quiz__result-label"></div><div style="margin-top:var(--space-4)"><button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button></div></div>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Ingestion throughput:</strong> 1M log lines/sec peak; 1 TB/day total volume</li>
+            <li><strong>Search latency:</strong> p99 &lt; 1 second for queries over the last 24 hours</li>
+            <li><strong>Availability:</strong> 99.9% for ingestion (logs must not be lost); best-effort for search</li>
+            <li><strong>Retention:</strong> hot 7 days (fast search), warm 30 days, cold 1 year (S3 + Athena), archive 7 years (Glacier)</li>
+            <li><strong>Security:</strong> PII scrubbing before indexing; no credit card numbers, SSNs, emails in search index</li>
+            <li><strong>Durability:</strong> at-least-once delivery; acceptable to have duplicate logs, not acceptable to lose logs</li>
+          </ul>
+          <h3>Clarifying Questions</h3>
+          <ul>
+            <li>Do we need real-time streaming (sub-second search) or near-real-time (up to 30 seconds)?</li>
+            <li>Is the system internal (engineers only) or external (customers query their own logs)?</li>
+            <li>What compliance requirements apply to log data? (SOC 2, HIPAA, PCI-DSS)</li>
+          </ul>
         </div>
       </section>
-      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)"><a href="multi-tenant-saas.html" class="btn btn--outline">&larr; Multi-Tenant SaaS</a><span>Course Complete! &#127881;</span></div>
+
+      <!-- ESTIMATION -->
+      <section class="content-section" id="estimation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Ingest Volume</h3>
+          <ul>
+            <li>1M log lines/sec × 1 KB average log size = <strong>1 GB/sec raw</strong></li>
+            <li>1 GB/sec × 86,400 sec/day = <strong>86 TB/day raw</strong> (before sampling and compression)</li>
+            <li>After log-level sampling (debug 1%, info 10%, warn 50%, error 100%): ~10 TB/day effective</li>
+            <li>After LZ4 compression (logs compress 5–10×): ~1–2 TB/day on disk</li>
+          </ul>
+          <h3>Elasticsearch Index Size</h3>
+          <ul>
+            <li>Inverted index overhead: Elasticsearch typically uses 3–5× the raw data size for the full index</li>
+            <li>Hot tier (7 days): 7 × 1.5 TB/day = 10.5 TB data + 3× index overhead = ~40 TB per hot cluster</li>
+            <li>Elasticsearch nodes: 40 TB ÷ 2 TB SSD per node (leaving headroom for merges) = 20 data nodes</li>
+            <li>With replication factor 2 = 40 data nodes total for hot tier</li>
+          </ul>
+          <h3>Kafka Sizing</h3>
+          <ul>
+            <li>1 GB/sec ingest, 24-hour retention on Kafka (for reprocessing): 86 TB of Kafka storage</li>
+            <li>Kafka brokers: 86 TB ÷ 10 TB per broker (commodity, ~50% utilization) = ~9 brokers minimum</li>
+            <li>Partitions: 1M lines/sec ÷ 100K lines/sec per partition = 10 partitions minimum; use 100 for headroom</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Senior Signal:</strong> Always separate ingestion scale from search scale. At 1M lines/sec, you cannot afford to index everything — sampling is required. The interviewer wants to hear you reason about: what must be indexed (errors always), what can be sampled (debug logs), and what should be stored but not indexed (S3 raw logs for audit).
+          </div>
+        </div>
+      </section>
+
+      <!-- SCHEMA -->
+      <section class="content-section" id="schema">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Canonical Log Event (JSON)</h3>
+          <pre><code class="language-java">// Structured log format — all services emit this exact schema
+// Enforced by the shared logging library (StructuredLogger wrapper)
+{
+  "timestamp":      "2024-03-15T10:23:45.123Z",   // ISO-8601 UTC, millisecond precision
+  "level":          "ERROR",                         // TRACE | DEBUG | INFO | WARN | ERROR | FATAL
+  "service":        "payment-service",
+  "instance":       "payment-svc-pod-7b4x9",
+  "trace_id":       "4bf92f3577b34da6a3ce929d0e0e4736",  // W3C traceparent trace ID
+  "span_id":        "00f067aa0ba902b7",
+  "correlation_id": "req-uuid-1234",               // Business request correlation ID
+  "message":        "Payment processing failed",
+  "error_type":     "PaymentGatewayException",
+  "stack_trace":    "com.example.payment.PaymentService.processPayment...",
+  "user_id":        "user_***REDACTED***",          // PII scrubbed before emit
+  "order_id":       "ord-abc123",
+  "amount_cents":   4999,
+  "duration_ms":    342,
+  "http_status":    500,
+  "environment":    "production",
+  "region":         "us-east-1",
+  "version":        "2.4.1"
+}</code></pre>
+
+          <h3>Elasticsearch Index Mapping</h3>
+          <pre><code class="language-java">// Index pattern: logs-YYYY.MM.DD (daily index rotation)
+// index.routing.allocation.require.tier: hot  (7 days) → warm (30 days) → cold (1 year)
+// ILM policy transitions indices through tiers automatically
+
+PUT _index_template/logs-template
+{
+  "index_patterns": ["logs-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 5,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "logs-ilm-policy",
+      "codec": "best_compression"  // LZ4 → zlib tradeoff: slower write, 2x less disk
+    },
+    "mappings": {
+      "dynamic": "strict",  // Reject undeclared fields — prevents mapping explosion
+      "properties": {
+        "timestamp":      { "type": "date" },
+        "level":          { "type": "keyword" },  // keyword = exact match, no tokenization
+        "service":        { "type": "keyword" },
+        "instance":       { "type": "keyword" },
+        "trace_id":       { "type": "keyword" },
+        "correlation_id": { "type": "keyword" },
+        "message":        { "type": "text",    "analyzer": "standard" },  // full-text tokenized
+        "error_type":     { "type": "keyword" },
+        "duration_ms":    { "type": "integer" },
+        "http_status":    { "type": "integer" },
+        "environment":    { "type": "keyword" },
+        "stack_trace":    { "type": "text", "index": false }  // stored but not indexed — saves space
+      }
+    }
+  }
+}</code></pre>
+
+          <h3>Kafka Topic Schema</h3>
+          <pre><code class="language-java">// Topic: logs.raw        — all log lines, partitioned by service name
+// Topic: logs.processed  — after PII scrubbing and enrichment
+// Topic: logs.errors     — error-only filtered stream (for alerting)
+// Message key: service name (for ordering within a service's log stream)
+// Message value: JSON log event (compressed with snappy per batch)</code></pre>
+        </div>
+      </section>
+
+      <!-- HLD -->
+      <section class="content-section" id="hld">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <h3>Full Pipeline (Left to Right)</h3>
+          <pre><code class="language-java">// Application Services (50+ services)
+//   → structured JSON logs written to stdout (Docker/K8s captures to log files)
+//   → OR: application uses StructuredLogger which writes to Kafka directly (async, non-blocking)
+
+// Layer 1: Log Agents (Filebeat or Fluentd, sidecar per pod)
+//   → tail log files / read from stdout pipe
+//   → add host metadata (pod name, namespace, node)
+//   → buffer locally (disk-backed queue) to survive Kafka hiccups
+//   → batch and forward to Kafka
+
+// Layer 2: Kafka (Message Bus, 100 partitions)
+//   → durable buffer, 24-hour retention
+//   → decouples producers (agents) from consumers (processors)
+//   → enables multiple consumers: log processor, real-time alerter, raw archiver
+
+// Layer 3a: Log Processor (Logstash or Apache Flink consumers)
+//   → parse unstructured logs with grok patterns
+//   → enrich: resolve IP → geo-location, resolve service → team owner
+//   → PII scrubbing: regex scrub credit cards, SSNs, emails
+//   → reservoir sampling: debug logs sampled to 1%, info to 10%
+//   → output to Elasticsearch (hot tier)
+
+// Layer 3b: Raw Archiver (Kafka consumer)
+//   → reads ALL logs (no sampling) from Kafka
+//   → writes compressed (LZ4) Parquet files to S3
+//   → partitioned by: year/month/day/hour/service
+//   → enables Athena SQL queries for ad-hoc investigation of archived logs
+
+// Layer 3c: Real-time Alerter (Kafka Streams / Flink)
+//   → reads logs.errors topic
+//   → sliding window: error count per service per 5 minutes
+//   → if error rate > threshold → PagerDuty/Slack alert
+//   → zero-downtime alert suppression (maintenance windows via config service)
+
+// Layer 4: Elasticsearch (Hot Tier → Warm Tier)
+//   → hot: 5 shards × 1 replica, SSD, 7-day ILM rollover
+//   → warm: 1 shard × 1 replica, HDD, 30-day retention
+//   → cold: read-only, S3-backed snapshots
+
+// Layer 5: Kibana / Grafana Loki UI
+//   → Kibana Discover for ad-hoc log search
+//   → Kibana Alerts for saved alert rules
+//   → Correlation view: search by trace_id → show all logs across all services</code></pre>
+
+          <h3>Elasticsearch Internals: Inverted Index</h3>
+          <p>Understanding why Elasticsearch is fast for log search requires understanding the inverted index:</p>
+          <ul>
+            <li>For <code>message: "payment failed"</code>, Elasticsearch tokenizes to <code>["payment", "failed"]</code>, builds an inverted index: <code>payment → [doc1, doc45, doc892, ...]</code>, <code>failed → [doc1, doc33, ...]</code>. Intersection gives results. This is O(log N) lookup in the posting list, not a table scan.</li>
+            <li>For <code>level: "ERROR"</code> (keyword field), Elasticsearch uses a BKD tree for efficient range queries and exact matches. No tokenization — the entire value "ERROR" is one index term.</li>
+            <li><code>stack_trace</code> is stored but <code>"index": false</code> — it is returned in results but never tokenized. This saves ~30% of index size for typical log data where stack traces are long but you search on message or error_type, not stack trace content.</li>
+          </ul>
+
+          <h3>Sharding Strategy: Index per Day</h3>
+          <p>Elasticsearch index per day (<code>logs-2024.03.15</code>) is the standard pattern for time-series log data:</p>
+          <ul>
+            <li>Time-bounded queries hit only relevant indices (Kibana adds <code>_index: logs-2024.03.*</code> automatically). No need to scan the entire index for last-7-days queries.</li>
+            <li>ILM rollover moves entire indices between hot/warm/cold, not individual documents. Simple and atomic.</li>
+            <li>5 primary shards per daily index. Each shard ~10–15 GB on hot tier. Shard size is the key performance tuning knob: shards under 10 GB are underutilized; shards over 50 GB have slow merge operations.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- APIS -->
+      <section class="content-section" id="apis">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── Log Search API (wraps Elasticsearch) ────────────────────────────────────
+POST /api/v1/logs/search
+Request: {
+  "query": "payment failed",              // full-text search on message field
+  "filters": {
+    "level": "ERROR",                     // exact match (keyword field)
+    "service": ["payment-service"],       // multi-value exact match
+    "time_range": { "from": "now-1h", "to": "now" },
+    "http_status": { "gte": 500 }        // range query
+  },
+  "page": 0,
+  "page_size": 50,
+  "sort": { "timestamp": "desc" }
+}
+Response: {
+  "total": 1234,
+  "logs": [...],
+  "took_ms": 45
+}
+
+// ─── Correlation Search API ─────────────────────────────────────────────────
+GET /api/v1/logs/trace/{trace_id}?time_range=1h
+// Returns all log lines across all services for a given trace ID.
+// Elasticsearch query: { "term": { "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736" } }
+// Sorted by timestamp ascending — shows the request flow in order.
+Response: { "spans": 47, "services": ["api-gateway", "auth", "payment"], "logs": [...] }
+
+// ─── Log Level Control API (dynamic verbosity) ───────────────────────────────
+PUT /api/v1/log-config/{service}
+Request:  { "level": "DEBUG", "duration_minutes": 15 }
+// Sets a temporary debug level override. After 15 minutes, reverts to INFO.
+// Config service broadcasts to all instances of that service via SSE or config reload.
+// Use case: production incident investigation without service restart.
+
+// ─── Alert Rules API ─────────────────────────────────────────────────────────
+POST /api/v1/alerts
+Request: {
+  "name": "Payment error spike",
+  "query": { "level": "ERROR", "service": "payment-service" },
+  "window_seconds": 300,
+  "threshold_count": 50,
+  "notification": { "type": "pagerduty", "key": "..." }
+}
+
+// ─── Archive Query API (Athena-backed, for cold logs) ───────────────────────
+POST /api/v1/logs/archive/query
+Request: {
+  "sql": "SELECT * FROM logs WHERE service='payment-service' AND date='2024-01-15' AND level='ERROR'",
+  "execution_mode": "async"    // returns query_id; poll for results
+}
+// Under the hood: Athena query on S3 Parquet files. Latency: 30s–5min depending on data scanned.</code></pre>
+        </div>
+      </section>
+
+      <!-- DEEP DIVE -->
+      <section class="content-section" id="deepdive">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Sampling Strategy at 1M Lines/Second</h3>
+          <p>Indexing everything at 1M lines/sec is financially prohibitive (40 data nodes for 7-day hot tier). The correct strategy is level-based sampling with reservoir sampling for debug logs:</p>
+          <ul>
+            <li><strong>ERROR / FATAL:</strong> 100% indexed. You cannot miss production errors. These are low volume (typically &lt;0.1% of total log volume).</li>
+            <li><strong>WARN:</strong> 50% sampled. Warnings are high-signal but often noisy; half is sufficient for trending.</li>
+            <li><strong>INFO:</strong> 10% sampled. Info logs provide context but are high volume. Sample deterministically by trace_id so all logs for a given request are included or excluded together.</li>
+            <li><strong>DEBUG:</strong> 1% sampled using reservoir sampling. Debug logs are for local development; in production they should be turned off by default and only enabled per-service for 15-minute windows during incidents.</li>
+          </ul>
+          <p><strong>Deterministic sampling by trace_id:</strong> Instead of random sampling (which means you might miss the ERROR log for a sampled-out trace), sample based on <code>hash(trace_id) % 100 &lt; SAMPLE_RATE</code>. This ensures all-or-nothing per trace — you either see the complete trace logs or none of them. Much more useful for debugging than randomly scattered logs.</p>
+
+          <h3>2. PII Scrubbing Before Indexing</h3>
+          <p>Logs frequently contain PII accidentally (user email in stack traces, credit card numbers in request logs). Scrubbing must happen in the log processor before data reaches Elasticsearch or S3:</p>
+          <pre><code class="language-java">// PII scrubbing patterns applied in Logstash grok/Ruby filter or Flink operator
+// Order matters: apply most specific patterns first
+
+CREDIT_CARD: \b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b → "***CARD***"
+SSN:         \b\d{3}-\d{2}-\d{4}\b                                              → "***SSN***"
+EMAIL:       \b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b              → "***EMAIL***"
+PHONE:       \b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b            → "***PHONE***"
+
+// For structured logs: scrub specific JSON fields by name
+// user.email, payment.card_number, auth.password → replace with "***REDACTED***"
+
+// Note: Scrubbing is best-effort. Logs containing PII from services that do not use
+// the standard logging library should be flagged for compliance review.
+// Raw S3 archives are stored in an access-controlled bucket (separate from the
+// Elasticsearch-backed hot tier) accessible only to security/compliance team.</code></pre>
+
+          <h3>3. Retention Tiers and ILM Policy</h3>
+          <p>Elasticsearch Index Lifecycle Management (ILM) automates tier transitions based on age and index size:</p>
+          <pre><code class="language-java">// ILM Policy: logs-ilm-policy
+{
+  "policy": {
+    "phases": {
+      "hot": {
+        "actions": {
+          "rollover": { "max_age": "1d", "max_size": "50gb" },  // daily index rotation
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "7d",      // move to warm tier after 7 days
+        "actions": {
+          "shrink": { "number_of_shards": 1 },    // reduce from 5 to 1 shard (less overhead)
+          "forcemerge": { "max_num_segments": 1 }, // merge segments → smaller, faster reads
+          "set_priority": { "priority": 50 },
+          "allocate": { "require": { "data": "warm" } }  // move to warm data nodes (HDD)
+        }
+      },
+      "cold": {
+        "min_age": "30d",
+        "actions": {
+          "searchable_snapshot": { "snapshot_repository": "s3-cold-repo" },
+          "set_priority": { "priority": 0 }
+        }
+      },
+      "delete": {
+        "min_age": "365d",     // delete from Elasticsearch; raw files still in S3/Glacier
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}
+
+// S3 lifecycle for raw Parquet files:
+// 0-30 days:    S3 Standard (hot, immediate query with Athena)
+// 30-365 days:  S3 Standard-IA (infrequent access, ~40% cost reduction)
+// 1-7 years:    S3 Glacier Instant Retrieval (archive, 75% cost reduction)
+// After 7 years: delete (compliance retention period expired)</code></pre>
+
+          <h3>4. Correlation IDs Across 50 Microservices</h3>
+          <p>Without correlation IDs, debugging a failed request that touched 12 services is manually correlating timestamps across 12 Kibana tabs. With correlation IDs, one query shows the complete story:</p>
+          <ul>
+            <li><strong>Generation:</strong> API gateway generates a UUID <code>correlation_id</code> for every incoming request. Also creates a W3C traceparent header for distributed tracing. Both are distinct: <code>correlation_id</code> is business-level, <code>trace_id</code> is observability-level.</li>
+            <li><strong>Propagation:</strong> Every service-to-service call (HTTP, gRPC, Kafka message) includes <code>X-Correlation-Id</code> header. Receiving service reads it and stores in SLF4J MDC: <code>MDC.put("correlation_id", incomingId)</code>. StructuredLogger reads from MDC and includes in every log line.</li>
+            <li><strong>Search:</strong> <code>GET /api/v1/logs/trace/{correlation_id}</code> queries Elasticsearch with <code>term: { correlation_id: "req-uuid-1234" }</code>. Returns all 47 log lines from all 12 services, sorted chronologically. The full story of one request in one view.</li>
+          </ul>
+
+          <h3>5. Dynamic Log Level Control</h3>
+          <p>Changing log verbosity in production traditionally requires a deployment (changing a config file and restarting). With a centralized config service, it is instant:</p>
+          <ul>
+            <li>Config service stores current log levels per service in Redis with a short TTL</li>
+            <li>Each service instance subscribes to log config updates via SSE or polling every 10 seconds</li>
+            <li>Incoming config change: set <code>payment-service</code> to <code>DEBUG</code> for 15 minutes, then auto-revert</li>
+            <li>Application code: <code>StructuredLogger</code> checks the dynamic level on every log call; if above threshold, skip. The overhead is a Redis read every 10 seconds and a volatile field check per log call — nanoseconds.</li>
+            <li>This is essential for production incident investigation: debug-level logs reveal internal state without the full debug flood being permanently on.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- EVALUATE -->
+      <section class="content-section" id="evaluate">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <h3>Failure Modes</h3>
+          <ul>
+            <li><strong>Kafka backpressure:</strong> If log processors fall behind (Flink/Logstash slow), Kafka consumer lag grows. Log data is still safe (Kafka has 24-hour retention), but Elasticsearch search is delayed. Resolution: scale Logstash workers horizontally; each consumer reads a subset of partitions.</li>
+            <li><strong>Elasticsearch disk full:</strong> ILM not configured correctly leads to hot tier filling up. Mitigation: set <code>cluster.routing.allocation.disk.watermark.high: 85%</code> — ES stops allocating new shards. Alert on 75% disk usage.</li>
+            <li><strong>Log agent crash (Filebeat OOM):</strong> Filebeat tracks its file read offset in a state file. If the agent crashes and restarts, it resumes from the last committed offset. No log loss, but possible duplication (Kafka deduplication not guaranteed — use at-least-once semantics).</li>
+            <li><strong>PII scrubbing miss:</strong> A new service formats a log message with an email in an unexpected field. Not caught by the regex scrubber. Mitigation: field-name-based scrubbing for known PII fields, plus a compliance audit that scans sampled log lines with an ML classifier for PII patterns.</li>
+          </ul>
+          <h3>Scaling Beyond 1TB/Day</h3>
+          <ul>
+            <li>At 10 TB/day, switch from Elasticsearch to ClickHouse or Apache Druid for the hot tier — column-store architecture handles time-series log queries 10–100× faster per node.</li>
+            <li>Kafka at 10 GB/sec: use Kafka with tiered storage (Confluent Platform) — offloads old partitions to S3, reducing broker disk requirements significantly.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- DELIVER -->
+      <section class="content-section" id="deliver">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Log aggregation system summary:</strong></p>
+          <ul>
+            <li><strong>Pipeline:</strong> App (StructuredLogger/MDC) → Filebeat sidecar → Kafka (100 partitions, 24h retention) → Flink processor (PII scrub + sampling) → Elasticsearch hot tier + S3 raw archive</li>
+            <li><strong>Sampling:</strong> Level-based (ERROR 100%, INFO 10%, DEBUG 1%) with deterministic sampling by trace_id to preserve complete traces</li>
+            <li><strong>Retention:</strong> ES hot (7d SSD) → ES warm (30d HDD, force-merged) → ES searchable snapshot on S3 (1yr) → Glacier (7yr). S3 raw Parquet queryable via Athena throughout.</li>
+            <li><strong>Correlation:</strong> X-Correlation-Id header propagated across all services, stored in SLF4J MDC, included in every log line. One query shows the complete request flow.</li>
+            <li><strong>Security:</strong> PII scrubbed in Flink before ES indexing. Raw logs in access-controlled S3 bucket.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- TRADE-OFFS -->
+      <section class="content-section" id="tradeoffs">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Elasticsearch (ELK)</th><th>ClickHouse</th><th>Grafana Loki</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Query model</strong></td><td>Full-text search + aggregations; excellent for unstructured logs</td><td>SQL on columns; excellent for structured metrics-like logs</td><td>LogQL label-based filtering; fast when you know the labels</td></tr>
+                <tr><td><strong>Storage cost</strong></td><td>High (3–5× raw size for inverted index)</td><td>Medium (column compression 10–50× for numeric fields)</td><td>Low (no index; just compressed label index + raw chunks)</td></tr>
+                <tr><td><strong>Ingestion speed</strong></td><td>Good (bulk API); slows at high cardinality fields</td><td>Excellent (columnar writes, async merges)</td><td>Excellent (no full indexing, just label index)</td></tr>
+                <tr><td><strong>Ad-hoc search</strong></td><td>Excellent (any field, full-text)</td><td>Good (SQL but requires knowing field names)</td><td>Poor (must filter by labels first, then grep in chunks)</td></tr>
+                <tr><td><strong>Operational complexity</strong></td><td>High (shard management, ILM, heap tuning)</td><td>Medium (fewer moving parts but less ecosystem)</td><td>Low (object storage native, no cluster management)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrapper" style="margin-top:var(--space-6)">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Fluentd</th><th>Filebeat</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Resource footprint</strong></td><td>Medium (Ruby runtime, ~200MB RAM)</td><td>Low (Go binary, ~50MB RAM)</td></tr>
+                <tr><td><strong>Plugin ecosystem</strong></td><td>800+ plugins; handles almost any input/output</td><td>Focused on Elastic Stack; fewer plugins</td></tr>
+                <tr><td><strong>Parsing capability</strong></td><td>Rich: grok, JSON, regex, custom Ruby</td><td>Basic: multiline, JSON decoding; heavy parsing goes to Logstash</td></tr>
+                <tr><td><strong>Reliability</strong></td><td>Disk-backed buffer; at-least-once to Kafka</td><td>File state tracking; resumes from last offset on restart</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- IMPLEMENTATION -->
+      <section class="content-section" id="implementation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * StructuredLogger — wraps SLF4J, enforces JSON log format, reads correlation ID from MDC.
+ * All application services use this instead of directly using Logger.
+ * The MDC (Mapped Diagnostic Context) is SLF4J's thread-local key-value store.
+ */
+public final class StructuredLogger {
+
+    private static final String MDC_CORRELATION_ID = "correlation_id";
+    private static final String MDC_TRACE_ID       = "trace_id";
+    private static final String MDC_SPAN_ID        = "span_id";
+
+    private final Logger delegate;
+    private final String serviceName;
+
+    public StructuredLogger(Class&lt;?&gt; clazz, String serviceName) {
+        this.delegate    = LoggerFactory.getLogger(clazz);
+        this.serviceName = serviceName;
+    }
+
+    /**
+     * Sets correlation context in SLF4J MDC for the duration of a request.
+     * Call at the start of each request handler; call clearContext() in finally.
+     * The logback JSON encoder reads MDC fields and includes them in the log JSON output.
+     */
+    public static void setRequestContext(String correlationId, String traceId, String spanId) {
+        MDC.put(MDC_CORRELATION_ID, correlationId);
+        MDC.put(MDC_TRACE_ID, traceId);
+        MDC.put(MDC_SPAN_ID, spanId);
+    }
+
+    public static void clearContext() {
+        MDC.clear();
+    }
+
+    public void info(String message, Object... keyValuePairs) {
+        if (delegate.isInfoEnabled()) {
+            delegate.info(buildMessage(message, keyValuePairs));
+        }
+    }
+
+    public void error(String message, Throwable cause, Object... keyValuePairs) {
+        if (delegate.isErrorEnabled()) {
+            delegate.error(buildMessage(message, keyValuePairs), cause);
+        }
+    }
+
+    private String buildMessage(String message, Object[] keyValuePairs) {
+        // In production, logback-encoder handles JSON serialization.
+        // The delegate.info() call emits: { "message": ..., "service": ..., + all MDC fields }
+        // keyValuePairs are structured fields added to the JSON output.
+        return message; // logback-encoder picks up MDC and structured arguments
+    }
+}
+
+/**
+ * KafkaLogAppender — Logback appender that writes log events directly to Kafka.
+ * Async: uses an in-memory queue to avoid blocking the application thread.
+ * Falls back to console if Kafka is unavailable (prevents logging from affecting app availability).
+ */
+public class KafkaLogAppender extends AppenderBase&lt;ILoggingEvent&gt; {
+
+    private static final String LOG_TOPIC      = "logs.raw";
+    private static final int    QUEUE_CAPACITY  = 100_000;
+    private static final int    BATCH_SIZE      = 500;
+    private static final long   BATCH_LINGER_MS = 100;
+
+    private KafkaProducer&lt;String, String&gt; kafkaProducer;
+    private final BlockingQueue&lt;ILoggingEvent&gt; eventQueue = new LinkedBlockingQueue&lt;&gt;(QUEUE_CAPACITY);
+    private volatile boolean running = true;
+
+    @Override
+    public void start() {
+        Properties kafkaProperties = buildKafkaProperties();
+        this.kafkaProducer = new KafkaProducer&lt;&gt;(kafkaProperties);
+        Thread senderThread = new Thread(this::sendLoop, "kafka-log-sender");
+        senderThread.setDaemon(true);
+        senderThread.start();
+        super.start();
+    }
+
+    @Override
+    protected void append(ILoggingEvent event) {
+        // Non-blocking: if queue is full, drop the log event rather than block the app thread.
+        // We prefer dropping low-priority logs over impacting application latency.
+        boolean offered = eventQueue.offer(event);
+        if (!offered &amp;&amp; event.getLevel().isGreaterOrEqual(Level.ERROR)) {
+            // For ERROR and above: write synchronously to stderr as fallback
+            System.err.println("[LOG_OVERFLOW] " + event.getFormattedMessage());
+        }
+    }
+
+    private void sendLoop() {
+        List&lt;ILoggingEvent&gt; batch = new ArrayList&lt;&gt;(BATCH_SIZE);
+        while (running) {
+            try {
+                ILoggingEvent firstEvent = eventQueue.poll(BATCH_LINGER_MS, TimeUnit.MILLISECONDS);
+                if (firstEvent == null) {
+                    continue;
+                }
+                batch.add(firstEvent);
+                eventQueue.drainTo(batch, BATCH_SIZE - 1);
+                sendBatch(batch);
+                batch.clear();
+            } catch (InterruptedException interruptedException) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    }
+
+    private void sendBatch(List&lt;ILoggingEvent&gt; events) {
+        for (ILoggingEvent event : events) {
+            String serviceName = event.getMDCPropertyMap().getOrDefault("service", "unknown");
+            String logJson = serializeToJson(event);
+            ProducerRecord&lt;String, String&gt; record = new ProducerRecord&lt;&gt;(LOG_TOPIC, serviceName, logJson);
+            // Key = service name: ensures all logs from same service go to same partition (ordering)
+            kafkaProducer.send(record, (metadata, exception) -&gt; {
+                if (exception != null) {
+                    System.err.println("[KAFKA_LOG_FAIL] " + exception.getMessage());
+                }
+            });
+        }
+    }
+
+    private Properties buildKafkaProperties() {
+        Properties properties = new Properties();
+        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka-1:9092,kafka-2:9092,kafka-3:9092");
+        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,   StringSerializer.class.getName());
+        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.put(ProducerConfig.ACKS_CONFIG,         "1");        // leader ack only — fast
+        properties.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy"); // 3× compression, low CPU
+        properties.put(ProducerConfig.LINGER_MS_CONFIG,    "50");       // batch for 50ms before sending
+        properties.put(ProducerConfig.BATCH_SIZE_CONFIG,   "65536");    // 64KB batch
+        return properties;
+    }
+
+    private String serializeToJson(ILoggingEvent event) {
+        // Simplified — in production use Jackson ObjectMapper with all MDC fields
+        return String.format(
+            "{\"timestamp\":\"%s\",\"level\":\"%s\",\"message\":\"%s\",\"trace_id\":\"%s\"}",
+            Instant.ofEpochMilli(event.getTimeStamp()),
+            event.getLevel(),
+            event.getFormattedMessage().replace("\"", "\\\""),
+            event.getMDCPropertyMap().getOrDefault(StructuredLogger.MDC_TRACE_ID, "")
+        );
+    }
+}
+
+/**
+ * LogSampler — reservoir sampling for debug-level logs.
+ * Reservoir sampling: first K items are always kept; each subsequent item
+ * replaces a random existing item with probability K/n.
+ * Result: a statistically representative sample of K logs from the stream.
+ */
+public class LogSampler {
+
+    private static final int RESERVOIR_SIZE = 1000;  // keep 1000 debug logs per minute window
+    private final AtomicInteger totalSeen     = new AtomicInteger(0);
+    private final AtomicReferenceArray&lt;String&gt; reservoir =
+        new AtomicReferenceArray&lt;&gt;(RESERVOIR_SIZE);
+    private final ThreadLocalRandom random = ThreadLocalRandom.current();
+
+    /**
+     * Attempts to add a log entry to the reservoir sample.
+     * Returns true if the log should be forwarded to Kafka; false if it was dropped.
+     */
+    public boolean shouldSample(String logJson, Level level) {
+        if (level.isGreaterOrEqual(Level.WARN)) {
+            return true; // WARN and above: always keep
+        }
+        if (level == Level.INFO) {
+            return Math.abs(logJson.hashCode()) % 10 == 0; // 10% deterministic sample
+        }
+        // DEBUG: reservoir sampling
+        int position = totalSeen.incrementAndGet();
+        if (position &lt;= RESERVOIR_SIZE) {
+            reservoir.set(position - 1, logJson);
+            return true;
+        }
+        int randomIndex = random.nextInt(position);
+        if (randomIndex &lt; RESERVOIR_SIZE) {
+            reservoir.set(randomIndex, logJson);
+            return true; // replaced an existing entry — still sample this one
+        }
+        return false; // dropped
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- QUIZ -->
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-log-agg-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 5</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+
+          <div data-question="Why does Elasticsearch use an inverted index for log search, and what is the key difference between a 'keyword' and 'text' field mapping?" data-options='["Elasticsearch uses B-trees for all fields; keyword and text differ only in storage format","Inverted index maps each token to the list of documents containing it — O(log N) lookup instead of full table scan. A keyword field stores the raw value unchanged (exact match, good for level, service, trace_id). A text field tokenizes the value into terms (good for message content full-text search). Storing stack_trace as keyword would make every unique stack a separate index term — mapping explosion.","The inverted index is only used for text fields; keyword fields use hash maps","Keyword fields are stored compressed; text fields are stored uncompressed"]' data-correct="1" data-explanation="The inverted index is why Elasticsearch can search billions of log lines in milliseconds. The keyword vs text distinction is a critical mapping decision: use keyword for fields you filter by exact value (level='ERROR'), use text for fields you search with natural language (message contains 'payment failed'). A common mistake is mapping high-cardinality fields like stack_trace as text — tokenization creates millions of index terms, consuming enormous memory." style="display:none"></div>
+
+          <div data-question="Why should log sampling be deterministic by trace_id rather than purely random?" data-options='["Deterministic sampling by trace_id is faster because hash functions are faster than random number generation","Random sampling might sample 5% of the INFO logs for a specific request but exclude the preceding context logs. Hashing by trace_id ensures all-or-nothing per trace: either all logs for a given request are included or none are. This makes debugging possible — you get the complete story of a request or you skip it entirely, rather than seeing fragments.","Deterministic sampling prevents duplicate logs in the Kafka topic","Random sampling would cause hot partitions in Kafka for high-traffic services"]' data-correct="1" data-explanation="Random sampling of individual log lines produces useless debug data: you see the error log for a request but not the 5 preceding INFO logs that show what led to it. By sampling at the trace level (hash(trace_id) % 100 < RATE), you get complete request stories for sampled traces. The tradeoff: if a trace_id that hashes above the sample rate has an error, that error is still captured because errors bypass sampling (100% sample rate)." style="display:none"></div>
+
+          <div data-question="A log aggregation system ingests 1 GB/sec of raw logs. Describe the storage architecture that keeps 7 years of logs economically viable." data-options='["Store all 7 years in Elasticsearch — modern SSDs make this affordable","Hot (ES SSD, 7 days, full-text indexed): ~10 TB. Warm (ES HDD, 30 days, force-merged to 1 shard): ~40 TB. Cold (S3 Standard-IA with Athena SQL query, 1 year): ~350 TB at $0.023/GB/month. Archive (S3 Glacier, 7 years): ~2.5 PB at $0.004/GB/month. Total 7-year cost driven by cold/archive tier, not Elasticsearch — ES is deleted after 1 year. Raw logs stay in S3 throughout.","All logs older than 30 days should be deleted; 7-year retention is not realistic","Compress all logs to tape storage after 1 year — tape has the lowest cost per GB"]' data-correct="1" data-explanation="The economics of 7-year log retention require tiered storage. Keeping 2.5 PB in Elasticsearch would cost ~$125K/month in storage alone. Moving old data to S3 Glacier at $0.004/GB/month costs ~$10K/month. The key insight: Elasticsearch is deleted after 1 year; the raw Parquet files on S3 are kept for the full retention period and remain queryable via Athena (pay-per-query, not pay-per-storage)." style="display:none"></div>
+
+          <div data-question="How does Kafka act as a buffer between log agents and Elasticsearch, and why does this matter for system reliability?" data-options='["Kafka is only used for performance; logs can be written directly to Elasticsearch without loss of reliability","Kafka provides durable buffering with 24-hour retention. If Elasticsearch is down for maintenance or overloaded, Kafka consumer lag grows but no logs are lost — they accumulate in Kafka. When Elasticsearch recovers, processors consume from their committed offset and replay the backlog. Without Kafka, Elasticsearch downtime = log loss. Log agents (Filebeat) also use Kafka as a destination: simpler than managing an Elasticsearch connection with retry logic.","Kafka deduplicates log messages before forwarding to Elasticsearch","Kafka is only needed for logs above WARN level; INFO and DEBUG can go directly to Elasticsearch"]' data-correct="1" data-explanation="This is the producer-consumer decoupling pattern. Log agents produce at a rate driven by application activity; Elasticsearch consumers process at a rate driven by indexing capacity. Kafka bridges the mismatch. The 24-hour retention means any downstream failure can be recovered by replaying from the consumer group's last committed offset — the foundation of at-least-once log delivery." style="display:none"></div>
+
+          <div data-question="What is the risk of using high-cardinality values (like user_id or request_id) as Elasticsearch keyword field names in dynamic mappings?" data-options='["High-cardinality keyword fields cause slow writes because Elasticsearch must sort the values before indexing","Dynamic mappings with high-cardinality fields cause mapping explosion: if 1 million unique user IDs each become a distinct field name in a dynamic mapping, the field type registry (stored in cluster state) grows to gigabytes, causing cluster instability and OOM on master nodes. Solution: use strict dynamic mappings, never allow dynamic field creation from log data, and store variable-ID data as values (term queries) not as field names.","High-cardinality fields only affect read performance, not cluster stability","Elasticsearch automatically handles high-cardinality fields by creating a separate index per unique value"]' data-correct="1" data-explanation="Mapping explosion is one of the most common Elasticsearch production incidents. Each unique dynamic field consumes cluster state memory on master nodes. If a poorly structured log like { 'user_12345_action': 'clicked' } is written, every unique user_id creates a new field — a single day's logs could create millions of fields. The fix: use 'dynamic: strict' to reject undeclared fields, and model variable data as values in a known field structure." style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="feature-flags.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Feature Flags &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="multi-tenant-saas.html" class="btn btn--outline">&larr; Multi-tenant SaaS</a>
+        <a href="feature-flags.html" class="btn btn--primary">Next: Feature Flags &rarr;</a>
+      </div>
     </main>
   </div>
   <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>

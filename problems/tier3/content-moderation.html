@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Content Moderation System — RESHADED walkthrough covering ML pipelines, human review queues, hash-based detection, and appeal systems for MAANG interviews.">
-  <title>Design Content Moderation System — MAANG System Design</title>
+  <meta name="description" content="Design a Content Moderation System like YouTube or Meta — L6 system design covering ML pipelines, hash-based detection, human review queues, adversarial evasion, and proactive vs reactive moderation.">
+  <title>Design a Content Moderation System &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -22,309 +22,969 @@
         <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
         <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
       </ul>
-      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
     </div>
   </nav>
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
       <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
-          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
-          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
-          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
-          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
-          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
-          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
-          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
-          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
           <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
           <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
           <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
         </ul>
       </nav>
       <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
-        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-moderation" style="width:100%">Mark Complete</button>
-        <a href="../../mock-interview/index.html?problem=moderation" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-content-moderation" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-content-moderation" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
-          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
           <span>Tier 3</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
-          <span class="tag">60 min</span><span class="tag">ML Systems</span>
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Trust &amp; Safety</span>
         </div>
-        <h1 class="module-header__title">Design Content Moderation System</h1>
-        <p class="module-header__desc">Content moderation at scale (500M posts/day) cannot be human-only — ML classifiers make the first decision. But ML has errors. A three-stage pipeline: automated ML → high-confidence auto-action or human review queue → human decision + feedback loop.</p>
+        <h1 class="module-header__title">Design a Content Moderation System (like YouTube / Meta)</h1>
+        <p class="module-header__desc">Content moderation is a multi-layer pipeline: hash-based detection for known-bad content (deterministic, fast, no ML), ML classifiers for novel violations, and human review for borderline cases. The key architectural tensions are proactive vs reactive (block before publish or remove after), automated vs human-reviewed, and precision vs recall trade-offs per violation type. Designing this system well requires understanding all three layers and why each exists.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, YouTube, Twitter</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">🛡️</span> Trust &amp; Safety</div>
+          <div class="module-header__meta-item">&#x1F3E2; YouTube, Meta, Twitter/X, TikTok</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+          <div class="module-header__meta-item">&#x1F4CA; 500 hr video/min, 100B images/day</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════ REQUIREMENTS ═══════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Automatically detect and remove policy-violating content (hate speech, violence, CSAM, spam)</li>
-            <li>Route ambiguous content to human reviewers</li>
-            <li>Users can appeal moderation decisions</li>
-            <li>Support text, images, and video content types</li>
-            <li>Hash-based exact matching for known harmful content (PhotoDNA for CSAM)</li>
+            <li><strong>Multi-modal detection:</strong> detect violations in images, video, text, and audio. Different models per modality.</li>
+            <li><strong>Violation categories:</strong> CSAM (child sexual abuse material), terrorism/violent extremism, graphic violence, hate speech, spam/scam, copyright infringement, misinformation. Each has different severity, legal requirements, and confidence thresholds.</li>
+            <li><strong>Hash-based matching:</strong> detect exact or near-duplicate copies of previously identified illegal content (CSAM, terrorism propaganda) via perceptual hashing and PhotoDNA. Deterministic, no false positives.</li>
+            <li><strong>ML classifiers:</strong> detect novel violations not in hash databases. Output confidence score (0-1). Route to human review if confidence is in uncertain range.</li>
+            <li><strong>Human review queue:</strong> priority-ordered queue for cases that automated systems cannot resolve with sufficient confidence. Route to reviewer with appropriate expertise.</li>
+            <li><strong>Appeals process:</strong> users can appeal moderation decisions. Appeals go to a different reviewer than the original decision.</li>
+            <li><strong>Legal hold:</strong> content flagged for law enforcement investigation must be preserved even if the user deletes it. Legal hold overrides all delete operations.</li>
+            <li><strong>Transparency reporting:</strong> publish statistics on content removed by category, appeals outcome rates, and false positive rates.</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 500M posts/day across modalities</li>
-            <li><strong>Precision vs recall:</strong> Configurable per violation category (CSAM: 100% recall, some false positives OK; hate speech: higher precision, lower recall)</li>
-            <li><strong>Latency:</strong> ML scoring: &lt;500ms; human review queue: SLA varies by severity (CSAM: &lt;1hr; hate speech: &lt;24hr)</li>
+            <li><strong>Scale:</strong> YouTube: 500 hours of video uploaded per minute. Facebook: 100B+ images uploaded per day. 99.9%+ of content handled automatically.</li>
+            <li><strong>CSAM detection latency:</strong> must detect and block before content is ever visible. &lt;1 second from upload completion to hash check result.</li>
+            <li><strong>False positive rate:</strong> &lt;0.1% for automated removals (falsely removing legitimate content). Precision is favored over recall for automated removal. Recall is favored over precision for routing to human review (better to over-review than under-review).</li>
+            <li><strong>Reviewer throughput:</strong> human reviewer handles 100-200 cases/day. With 0.1% of YouTube's 720K daily video uploads requiring review: 720 cases/day → 4-7 reviewers. At Facebook scale (billions of posts): thousands of reviewers.</li>
+            <li><strong>Audit trail:</strong> every moderation decision (automated or human) logged immutably for legal and transparency purposes.</li>
+          </ul>
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Reviewer wellbeing and trauma support systems (critically important IRL, but separate from system design)</li>
+            <li>Copyright detection beyond hash matching (Content ID system is a separate complex system)</li>
+            <li>Real-time live stream moderation (additional latency constraints, covered separately)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ ESTIMATION ═══════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
+          <h3>Scale Numbers</h3>
           <ul>
-            <li>500M posts/day = 5,800/sec → ML classifier must handle 10K/sec (with spike headroom)</li>
-            <li>ML accuracy 95% → 25M posts/day flagged for human review out of 500M</li>
-            <li>Humans review ~300 items/day → need ~83K human reviewers at full load (batched + prioritized)</li>
-            <li>Hash matching: image fingerprints ~100 bytes × 1B known hashes = 100GB hash index → fits in Redis or in-memory</li>
+            <li><strong>YouTube upload rate:</strong> 500 hours of video/minute = 8.3 hours/sec. At average 1GB/hour: 8.3GB/sec ingestion. Each video needs hash check + ML classification.</li>
+            <li><strong>Image classification throughput:</strong> Facebook 100B images/day = 1.16M images/sec. A GPU can classify ~10K images/sec per A100. Need ~120 A100 GPUs for image classification alone.</li>
+            <li><strong>Text classification:</strong> Facebook posts + Instagram captions + comments: ~1B text items/day = 11.6K items/sec. BERT inference on GPU: ~500 items/sec per GPU. Need ~25 GPUs for text moderation.</li>
+            <li><strong>Hash database size:</strong> CSAM hash database (NCMEC PhotoDNA): ~6M known hashes. Each SHA-256 hash: 32 bytes. Total: 192MB — fits entirely in memory for fast lookup. pHash database (similar size): also fits in memory.</li>
+            <li><strong>Human review queue:</strong> 0.1% automated review rate = 100K cases/day at Facebook scale. With 200 reviews/reviewer/day: need 500 reviewers globally. Actually Meta employs 15,000+ content reviewers — suggesting the 0.1% estimate is low for their scale.</li>
           </ul>
+          <div class="insight-box" style="background:linear-gradient(135deg,#f0e7ff,#ede9fe);border-left:4px solid #7c3aed;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x1F4A1; The human review math at scale:</strong> Even if automation handles 99.9% of cases, the remaining 0.1% at Facebook scale (billions of daily uploads) = millions of cases per day requiring human review. This is why content moderation at scale requires thousands of human reviewers despite 99.9%+ automation. This also means reviewer tooling, queue management, and reviewer wellness are non-trivial engineering problems.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ SCHEMA ═══════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Moderation decisions (PostgreSQL)
-moderation_decisions:
-    decision_id   UUID PRIMARY KEY,
-    content_id    UUID NOT NULL,
-    content_type  ENUM(text, image, video),
-    ml_score      FLOAT,          -- 0.0-1.0 violation confidence
-    ml_label      VARCHAR(50),    -- hate_speech, violence, spam, etc.
-    action        ENUM(approved, removed, human_review),
-    reviewer_id   UUID,           -- null if auto-actioned
-    reviewed_at   TIMESTAMP,
-    appealed      BOOLEAN DEFAULT FALSE,
-    appeal_outcome ENUM(upheld, overturned)
+          <pre><code class="language-java">// Content item (submitted for moderation)
+ContentItem {
+  contentId:      UUID
+  contentType:    enum          // IMAGE | VIDEO | TEXT | AUDIO
+  uploaderId:     UUID
+  uploadedAt:     timestamp
+  storageUri:     string        // S3/GCS location
+  status:         enum          // PENDING | APPROVED | REMOVED | UNDER_REVIEW | LEGAL_HOLD
+  legalHold:      boolean       // if true: never delete even if user requests
+  metadata:       Map&lt;String, String&gt;  // title, description, tags, language
+}
 
-// Human review queue (Redis sorted set — priority queue)
-// Key: review:queue:{category}  Score: priority (CSAM=100, violence=80, hate=50)
-// Member: content_id
+// Moderation decision (immutable audit log)
+ModerationDecision {
+  decisionId:     UUID
+  contentId:      UUID
+  decisionType:   enum      // AUTOMATED_APPROVE | AUTOMATED_REMOVE | HUMAN_APPROVE | HUMAN_REMOVE
+  violationCategory: enum   // CSAM | TERRORISM | VIOLENCE | HATE_SPEECH | SPAM | NONE
+  confidenceScore: float    // 0.0-1.0 (automated), null (human)
+  modelVersion:   string    // which model version made the automated decision
+  reviewerId:     UUID       // null for automated decisions
+  reasoning:      string    // structured reason code for automated, free text for human
+  decidedAt:      timestamp
+  isAppeal:       boolean
+}
 
-// Known harmful hash index (Redis SET or in-memory hash table)
-// Key: harmful:hashes  Member: perceptual_hash (PhotoDNA fingerprint)</code></pre>
+// Review queue item
+ReviewTask {
+  taskId:         UUID
+  contentId:      UUID
+  priority:       int       // 1=highest (CSAM) to 5=lowest (spam)
+  violationHint:  enum      // what the ML classifier suspected
+  mlConfidence:   float     // model confidence score that triggered human review
+  assignedTo:     UUID       // reviewer ID (null = unassigned)
+  assignedAt:     timestamp
+  dueBy:          timestamp  // SLA deadline
+  localeRequired: string    // some violations require reviewer who speaks that language
+}
+
+// Hash database entry
+KnownHashEntry {
+  hashValue:       string    // SHA-256 or pHash value
+  hashType:        enum      // EXACT_SHA256 | PERCEPTUAL_PHASH | PHOTODNA
+  violationCategory: enum
+  addedBy:         string    // "NCMEC" | "INTERNAL" | "PARTNER"
+  addedAt:         timestamp
+  legallyMandated: boolean   // CSAM: legally mandated to report and block
+}</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ HLD ═══════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <h3>Multi-Layer Moderation Pipeline</h3>
+          <pre><code class="language-java">Content Upload
+    │
+    ▼
+[Layer 1: Hash Matching]     ← PROACTIVE, SYNCHRONOUS (before content is published)
+    │ SHA-256 exact match → known CSAM/terrorism hash → BLOCK immediately
+    │ pHash near-duplicate match → flag for Layer 2 or block if confidence high
+    │ PhotoDNA match → CSAM → BLOCK + REPORT to NCMEC (legal mandate)
+    │
+    │ No hash match:
+    ▼
+[Layer 2: ML Classification] ← ASYNCHRONOUS (content published if not blocked by Layer 1)
+    │ Image classifier → NSFW score, violence score, hate symbol score
+    │ Video → sample frames at 1fps + audio transcript → classify each
+    │ Text → transformer classifier → hate speech, spam, misinformation score
+    │
+    │ Score &lt; LOW_THRESHOLD (e.g., 0.1):  APPROVE (no violation)
+    │ Score &gt; HIGH_THRESHOLD (e.g., 0.95): REMOVE automatically
+    │ Score in [0.1, 0.95]:               ROUTE to human review queue
+    ▼
+[Layer 3: Human Review Queue]  ← Priority-ordered, SLA-driven
+    │ Priority 1 (1hr SLA): CSAM suspected, terrorism content
+    │ Priority 2 (4hr SLA): graphic violence, credible threats
+    │ Priority 3 (24hr SLA): hate speech, severe harassment
+    │ Priority 4 (48hr SLA): spam, minor policy violations
+    │ Priority 5 (72hr SLA): copyright, misinformation
+    │
+    │ Reviewer decision: APPROVE or REMOVE
+    │ If REMOVE: user notified + 30 days to appeal
+    ▼
+[Layer 4: Appeals Process]
+    │ User submits appeal with context
+    │ Different reviewer (not original reviewer)
+    │ Decision is final (no further appeal in most cases)</code></pre>
+
+          <h3>Proactive vs Reactive Moderation</h3>
+          <p>This is the most important architectural decision:</p>
           <ul>
-            <li><strong>Ingestion:</strong> Content upload → Kafka → Moderation Pipeline fan-out (text classifier, image classifier, hash matcher in parallel).</li>
-            <li><strong>Hash Matcher:</strong> Compute perceptual hash (pHash for images, SimHash for text). Look up in known-harmful hash index (Redis). Exact match → auto-remove immediately, no ML needed.</li>
-            <li><strong>ML Classifiers:</strong> Text: fine-tuned BERT/RoBERTa. Image: CNN (ResNet/EfficientNet). Video: frame sampling + image classifier. Returns confidence score 0–1.</li>
-            <li><strong>Decision Logic:</strong> Score &gt; 0.95 → auto-remove. Score 0.6–0.95 → human review queue. Score &lt; 0.6 → approve.</li>
-            <li><strong>Human Review Queue:</strong> Redis priority queue. Reviewers pull from queue by priority. Decisions feed back into ML training data.</li>
-            <li><strong>Feedback Loop:</strong> Human reviewer decisions (especially overturns of auto-actions) are sampled for model retraining weekly.</li>
-            <li><strong>Appeals:</strong> User appeals → re-routes to senior reviewer. Overturn → restore content + adjust threshold for that user's account.</li>
+            <li><strong>Proactive (pre-publish):</strong> content is held in queue, moderation runs synchronously, content is only published if it passes. Advantage: harmful content never reaches viewers. Disadvantage: latency (legitimate content delayed), throughput bottleneck (moderation must match upload rate), false positives block legitimate posts. Mandatory for CSAM (legal requirement), appropriate for high-risk accounts.</li>
+            <li><strong>Reactive (post-publish):</strong> content published immediately, moderation runs asynchronously, violations removed after detection. Advantage: no latency for legitimate users, scales independently from upload. Disadvantage: harmful content has a visibility window between upload and removal. Acceptable for spam and minor violations. Not acceptable for CSAM or terrorism.</li>
+            <li><strong>Risk-based routing:</strong> new accounts or accounts with violation history: proactive. Established accounts: reactive. Content type: videos &gt;30 minutes: reactive (moderation takes longer than 30min). Text: reactive. Images with uploaded thumbnails that match known patterns: proactive.</li>
           </ul>
+
+          <div class="insight-box" style="background:linear-gradient(135deg,#fef2f2,#fee2e2);border-left:4px solid #dc2626;padding:var(--space-4);border-radius:8px;margin:var(--space-4) 0">
+            <strong>&#x1F534; Legal mandate for CSAM:</strong> The detection and reporting of CSAM (child sexual abuse material) is not optional. Under US law (NCMEC Cyber Tipline), platforms are legally required to report known CSAM to the National Center for Missing and Exploited Children. PhotoDNA hash matching for CSAM must be proactive (before content is published) and must result in report to NCMEC. This is a hard system requirement, not a product decision. Design must make this unbypassable.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ APIS ═══════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Internal APIs
-POST /internal/moderate          // async: submit content for moderation
-  Body: { contentId, contentType, contentUrl, userId }
+          <pre><code class="language-java">// Content submission for moderation (called internally by upload service)
+POST /internal/v1/moderation/submit
+{
+  "contentId": "img_123",
+  "contentType": "IMAGE",
+  "uploaderId": "user_456",
+  "storageUri": "s3://content-bucket/img_123",
+  "isProactive": true   // hold content until decision returned
+}
+// Response: { "contentId": "img_123", "decision": "APPROVED" | "REMOVED" | "PENDING_REVIEW" }
 
-GET  /internal/review/next?category=hate_speech   // reviewer fetches next item
-POST /internal/review/{decisionId}
-  Body: { action: remove|approve, reviewerNotes }
+// Human reviewer API
+GET /reviewer/v1/queue?reviewerId=rev_789&locale=en
+// Returns the highest-priority unassigned task for this reviewer
+// Response: { "taskId": "task_abc", "contentId": "img_123", "priority": 2,
+//             "violationHint": "GRAPHIC_VIOLENCE", "mlConfidence": 0.72 }
 
-// User-facing
-POST /v1/appeals/{contentId}     // appeal a moderation decision
-GET  /v1/appeals/{contentId}     // appeal status</code></pre>
+POST /reviewer/v1/decisions
+{
+  "taskId": "task_abc",
+  "decision": "REMOVE",
+  "violationCategory": "GRAPHIC_VIOLENCE",
+  "reasoning": "Shows real-world violence against an individual"
+}
+
+// Appeals API (public-facing)
+POST /v1/appeals
+{
+  "contentId": "img_123",
+  "appealReason": "This image is from a photojournalism project and has news value",
+  "additionalContext": "Published in New York Times, link: ..."
+}
+// Response: { "appealId": "appeal_xyz", "estimatedReviewDays": 5 }
+
+// Legal hold API (restricted, called by legal team tools)
+POST /internal/v1/legal-hold
+{
+  "contentId": "img_123",
+  "caseReference": "CASE_2024_001",
+  "reason": "Law enforcement investigation"
+}
+// Content will be preserved regardless of user delete requests until hold is lifted
+
+// Moderation decision audit log (for transparency reporting, internal audit)
+GET /internal/v1/decisions?contentId=img_123
+// Returns full audit trail: all decisions, who made them, when, why</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ DEEP DIVE ═══════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Multi-Stage Pipeline + Threshold Tuning<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Stage 1 — Hash matching (deterministic, &lt;1ms):</strong> PhotoDNA (perceptual hashing for images). SimHash for near-duplicate text spam. Any exact/near match to known-harmful content = auto-remove. No ML latency, no errors on known content.</p>
-          <p><strong>Stage 2 — ML scoring (probabilistic, 50–500ms):</strong></p>
+
+          <h3>Hash-Based Detection: Exact vs Perceptual</h3>
+          <p>Hash matching is the fastest and most reliable detection method for known-bad content. Two types serve different purposes:</p>
           <ul>
-            <li>ML score represents confidence: 0.99 = very likely violation. 0.51 = borderline.</li>
-            <li>Threshold tuning: different thresholds per category. CSAM: auto-remove at 0.80 (high recall, some false positives accepted). Hate speech: auto-remove at 0.95 (high precision, avoid censoring legitimate speech).</li>
+            <li><strong>Exact hash (SHA-256):</strong> a cryptographic hash of the exact file bytes. If even one pixel is changed, the hash changes completely. Use for: known CSAM files reported to NCMEC, known terrorism videos (e.g., Christchurch attack footage). Fast lookup: O(1) in a hash set. No false positives. Easily evaded by trivial modifications (one pixel change).</li>
+            <li><strong>Perceptual hash (pHash):</strong> a hash that is similar for visually similar images. Based on DCT (discrete cosine transform) of a downscaled version of the image. Two images with pHash distance &lt; threshold are "the same image." Robust to minor modifications (JPEG re-compression, slight cropping, color adjustment). Can have false positives (structurally similar but unrelated images). Used for: NSFW images, spam image reuse.</li>
+            <li><strong>PhotoDNA (Microsoft):</strong> hash specifically designed for CSAM detection by Microsoft, donated to NCMEC. More robust than pHash, tuned for human body image similarity. Industry standard for CSAM detection at platforms. Not open source (proprietary, licensed to platforms through NCMEC).</li>
           </ul>
-          <p><strong>Stage 3 — Human review:</strong> Ambiguous items (0.60–threshold). Humans provide ground truth. Senior reviewers handle appeals.</p>
-          <p><strong>Feedback loop quality:</strong> Track reviewer agreement rate. If two reviewers consistently disagree on a category → the category's ML training data has label noise → flag for policy clarification.</p>
+          <pre><code class="language-java">// pHash algorithm sketch:
+// 1. Resize image to 32×32 pixels
+// 2. Convert to grayscale
+// 3. Apply DCT (discrete cosine transform) to 32×32 → 32×32 frequency matrix
+// 4. Take top-left 8×8 of DCT (lowest frequencies = most image information)
+// 5. Compute mean of the 64 values
+// 6. For each of 64 values: bit = 1 if value > mean, else 0
+// 7. Result: 64-bit pHash
+//
+// Comparison: Hamming distance between two pHashes
+// Distance 0: identical images
+// Distance 1-10: near-duplicate (same image, minor modification)
+// Distance > 20: different images (false positive risk increases here)
+//
+// Lookup in database:
+// Cannot use exact match (pHash for modified copies will differ)
+// Use: bit-parallel Hamming distance computation on database of known hashes
+// Or: LSH (locality-sensitive hashing) for approximate nearest neighbor at scale</code></pre>
+
+          <h3>ML Classifier Design</h3>
+          <p>Different violation types require different model architectures:</p>
+          <ul>
+            <li><strong>Image classification (NSFW/violence/hate symbols):</strong> fine-tuned CLIP or ResNet/ViT trained on labeled violation examples. Output: confidence score per category. Challenge: CLIP learned internet semantics, may have biases toward certain demographics. Require careful fairness evaluation across demographic groups.</li>
+            <li><strong>Text classification (hate speech/spam):</strong> BERT or multilingual XLM-R fine-tuned on labeled text. Challenge: (1) multilingual — must handle 100+ languages, (2) context-dependent — the same words can be hate speech or reclaimed language depending on speaker and context, (3) sarcasm and coded language ("that's so edgy" used to praise harm), (4) adversarial evasion (substituting characters: "h@te sp33ch").</li>
+            <li><strong>Video classification:</strong> sample frames at 1-2fps, classify each frame. For audio: transcribe using ASR (Whisper or similar), then text-classify transcript. Video-specific: temporal context (isolated violent frame vs sustained violence), title + description + thumbnail as additional signals.</li>
+          </ul>
+
+          <h3>Human Review Queue Design</h3>
+          <p>The human review queue is a priority queue with SLA constraints. Design considerations:</p>
+          <ul>
+            <li><strong>Priority levels:</strong> must be fine-grained. CSAM suspected: 1-hour SLA. Terrorism: 4-hour SLA. Graphic violence: 8-hour SLA. Hate speech: 24-hour SLA. Spam: 48-72 hours. Priority is not just violation severity — it's also about potential for ongoing harm (live content &gt; archived, trending content &gt; obscure).</li>
+            <li><strong>Reviewer specialization:</strong> some violations require language expertise (hate speech in Arabic requires Arabic-speaking reviewer). Some require legal or cultural expertise (child nudity laws vary by jurisdiction). Route tasks to qualified reviewers, not just the first available reviewer.</li>
+            <li><strong>Consensus for borderline cases:</strong> for cases near the boundary (e.g., ML confidence 0.5), route to multiple reviewers (2-3). Require majority agreement. Track inter-reviewer agreement as a quality signal — low agreement indicates ambiguous policies.</li>
+            <li><strong>Reviewer bias mitigation:</strong> randomize the order in which content appears to reviewers. Don't show reviewer the previous decision on content they're reviewing. Audit reviewer decisions for systematic bias (are reviewers from country X more likely to remove content from country Y?).</li>
+            <li><strong>Queue fairness:</strong> FIFO within each priority level. Don't let a flood of low-priority tasks starve high-priority tasks. Separate queues per priority level, served in priority order.</li>
+          </ul>
+
+          <h3>Adversarial Robustness</h3>
+          <p>Bad actors actively try to evade moderation. This is a cat-and-mouse game:</p>
+          <ul>
+            <li><strong>Image evasion:</strong> add imperceptible noise to images (adversarial examples), slightly crop known CSAM images, add thin white border, flip horizontally. Counter: pHash is robust to minor modifications; detect at multiple scales; use neural hash (SSCD) that is more robust to adversarial perturbations than pHash.</li>
+            <li><strong>Text evasion:</strong> replace letters with similar-looking characters (homoglyphs: "v1agra", "h@te", "k1ll"), insert zero-width characters, use URLs that redirect to harmful content, rely on dog whistles (coded language where community knows meaning but classifier doesn't). Counter: normalization (map homoglyphs to base characters), context window (see surrounding conversation), hash-based detection for known evasion patterns.</li>
+            <li><strong>Video evasion:</strong> slightly modify known-bad video (change playback speed, add watermark, invert colors). Counter: temporal analysis (detect even frame-level modifications), audio fingerprinting.</li>
+            <li><strong>Account rotation:</strong> get banned → create new account → repeat. Counter: device fingerprinting, IP/phone number reputation, require phone number verification, velocity checks on account creation.</li>
+          </ul>
+
+          <div class="insight-box" style="background:linear-gradient(135deg,#fff7ed,#ffedd5);border-left:4px solid #ea580c;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x26A0;&#xFE0F; Precision vs recall asymmetry:</strong> The cost of false positives (removing legitimate content) is different from false negatives (missing a violation) depending on violation type. For CSAM: false negative is catastrophic (legal liability, severe harm) → maximize recall, accept false positives → route borderline cases to human review aggressively. For spam: false positive cost is low (spam poster loses post) and false negative cost is low (spam is annoying but not catastrophic) → higher threshold for automated removal, lower priority for human review. Design must encode this asymmetry explicitly, not assume one policy fits all violation types.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EVALUATE ═══════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Requirement</th><th>How met</th><th>Risk</th></tr></thead>
+              <tbody>
+                <tr><td>CSAM detection (&lt;1s, proactive)</td><td>Hash check (SHA-256 + PhotoDNA) is O(1) lookup in memory — &lt;1ms. Synchronous before publish.</td><td>New CSAM not yet in hash database requires ML + human review path</td></tr>
+                <tr><td>99.9% automated handling</td><td>Hash matching (100% precision) + ML classifier handles clear violations and clear approvals</td><td>ML model drift over time as content styles evolve; requires regular retraining</td></tr>
+                <tr><td>Human review SLAs</td><td>Priority queue with SLA-based routing; separate queues per severity level</td><td>Reviewer capacity can be overwhelmed during coordinated campaigns; need burst capacity</td></tr>
+                <tr><td>Legal hold</td><td>Soft delete model: mark deleted but retain data. Legal hold flag prevents physical deletion.</td><td>Storage cost grows indefinitely if legal holds are not lifted; need legal hold lifecycle management</td></tr>
+                <tr><td>Appeals fairness</td><td>Different reviewer for appeal, structured appeal form, policy documentation linked from notification</td><td>Reviewer bias can affect both original and appeal decision; need systematic audit</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>False Positive / False Negative Trade-off by Violation Type</h3>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Violation Type</th><th>Prefer</th><th>Automated Threshold</th><th>Rationale</th></tr></thead>
+              <tbody>
+                <tr><td>CSAM</td><td>Recall (minimize false negatives)</td><td>Very low (0.5): route almost all suspicious content to human or auto-remove</td><td>Legal mandate; any miss is catastrophic</td></tr>
+                <tr><td>Terrorism / violent extremism</td><td>Recall</td><td>Low (0.7): auto-remove high confidence, route mid-range to human</td><td>High harm; can accept some false positives</td></tr>
+                <tr><td>Hate speech</td><td>Balance</td><td>Medium (0.85): route most to human</td><td>Context-dependent; high false positive rate damages community trust</td></tr>
+                <tr><td>Spam</td><td>Precision</td><td>High (0.95): only auto-remove if very confident</td><td>Low harm; false positives are annoying; can use slower human review</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ DELIVER ═══════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Summary for the interview:</strong></p>
+          <p>Content moderation is a three-layer pipeline: (1) hash-based matching for known-bad content (deterministic, fast, no false positives, legally mandated for CSAM) — handles all known violations immediately; (2) ML classifiers for novel violations — fan-out across image/text/video models, route to human review if confidence in uncertain range; (3) human review priority queue — ordered by severity with SLA, specialist routing for language/type. The key architectural tension is proactive vs reactive: CSAM must be proactive (block before visible), spam can be reactive. Violation-type-specific thresholds encode the asymmetric cost of false positive vs false negative for each category.</p>
+          <p><strong>Phased delivery:</strong></p>
           <ul>
-            <li><strong>Adversarial evasion:</strong> Bad actors modify text/images slightly to evade classifiers. Mitigation: adversarial training (include perturbed examples in training), ensemble models, hash-based detection for known variants.</li>
-            <li><strong>False positive impact:</strong> Removing legitimate content harms free expression. Track false positive rate; alert when it spikes. For high-stakes categories (political speech), require human review instead of auto-remove.</li>
+            <li><strong>Phase 1:</strong> Hash matching (CSAM/known violations) + basic ML classifiers + human review queue. Covers legal requirements first.</li>
+            <li><strong>Phase 2:</strong> Multi-modal classifiers (image + video + text), priority queue with SLAs, appeals process, audit logging.</li>
+            <li><strong>Phase 3:</strong> Adversarial robustness improvements, reviewer quality monitoring, inter-reviewer agreement tracking, transparency reporting dashboard.</li>
           </ul>
         </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body">
-          <p>We designed a content moderation system handling 500M posts/day. Key decisions: hash matching for known content (zero ML latency), ML classifiers with configurable thresholds per category, Redis priority queue for human reviewers, and weekly feedback loops to improve model accuracy.</p>
-        </div>
-      </section>
-
+      <!-- ═══════════════════════════════ TRADEOFFS ═══════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
         <div class="content-section__body">
-          <div class="table-wrapper"><table>
-            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
-            <tbody>
-              <tr><td>ML action threshold</td><td>Configurable per category</td><td>Single global threshold</td><td>Different categories have different risk profiles. CSAM: maximize recall. Hate speech: balance precision/recall. A single threshold compromises both.</td></tr>
-              <tr><td>Review queue prioritization</td><td>Priority by severity (CSAM=100, spam=10)</td><td>FIFO queue</td><td>CSAM must be reviewed within 1hr (legal requirement). Spam can wait 24hr. Priority ensures SLAs are met even under queue backlog.</td></tr>
-              <tr><td>Hash matching</td><td>Perceptual hash (pHash)</td><td>Cryptographic hash (SHA)</td><td>SHA only matches identical bytes — one pixel change evades it. pHash is tolerant of compression/resizing artifacts. Near-duplicate detection required for re-uploaded known content.</td></tr>
-            </tbody>
-          </table></div>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Recommended</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Proactive vs reactive</strong></td>
+                  <td>Proactive: zero visibility window for harmful content, but adds upload latency, can block legitimate content, must match upload throughput</td>
+                  <td>Reactive: immediate publish, async moderation, visibility window exists for harmful content before removal</td>
+                  <td>Proactive for CSAM (legal mandate) and terrorism (severe harm). Reactive for everything else with priority-based removal timeline.</td>
+                </tr>
+                <tr>
+                  <td><strong>Hash vs ML</strong></td>
+                  <td>Hash-only: deterministic, fast, zero false positives, but only detects exact/near-duplicate known-bad content. Novel violations bypass.</td>
+                  <td>ML-only: can detect novel violations, but has false positives/negatives, requires retraining, black-box decisions</td>
+                  <td>Both layers: hashing for known violations (must run first, can short-circuit ML), ML for novel violations.</td>
+                </tr>
+                <tr>
+                  <td><strong>Automated vs human-only</strong></td>
+                  <td>Automated-only: scales infinitely, consistent, fast, no reviewer burnout, but ML errors affect millions of users</td>
+                  <td>Human-only: more accurate for nuanced cases, cultural context, but cannot scale (500hr/min on YouTube)</td>
+                  <td>Automated for clear-cut cases (both high-confidence violations and approvals); human for borderline and appeals. Never human-only at scale.</td>
+                </tr>
+                <tr>
+                  <td><strong>Centralized vs distributed review</strong></td>
+                  <td>Centralized review team (one office): consistent policy application, easier training, but single timezone coverage and single-culture bias</td>
+                  <td>Distributed global reviewers: 24/7 coverage, local language/culture expertise, but harder to maintain policy consistency</td>
+                  <td>Distributed with strong policy training and inter-reviewer agreement auditing. Essential for multilingual content at global scale.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ IMPLEMENTATION ═══════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * ModerationPipeline — orchestrates hash matching, ML scoring, and routing decisions.
- * Processes one content item through all stages and returns the moderation action.
+ * ModerationPipeline — orchestrates the multi-layer moderation decision for a content item.
+ * Layer 1: Hash matching (synchronous, fast — for CSAM and known violations)
+ * Layer 2: ML classification (parallel fan-out across modality-specific classifiers)
+ * Layer 3: Route to human review if ML confidence is in uncertain range
  */
 public class ModerationPipeline {
 
-    private static final float AUTO_REMOVE_THRESHOLD = 0.95f;
-    private static final float HUMAN_REVIEW_THRESHOLD = 0.60f;
+    private static final double AUTO_REMOVE_THRESHOLD = 0.95;   // very confident it's a violation
+    private static final double AUTO_APPROVE_THRESHOLD = 0.10;  // very confident it's benign
 
-    private final HashMatcher hashMatcher;
-    private final MlClassifier mlClassifier;
-    private final ReviewQueuePublisher reviewQueuePublisher;
-    private final ModerationDecisionStore decisionStore;
+    private final HashMatchDetector hashMatchDetector;
+    private final List&lt;ContentClassifier&gt; mlClassifiers;
+    private final ReviewQueueService reviewQueueService;
+    private final ModerationAuditLog auditLog;
+    private final ExecutorService classifierExecutorService;
 
-    public ModerationPipeline(HashMatcher hashMatcher, MlClassifier mlClassifier,
-                               ReviewQueuePublisher reviewQueuePublisher,
-                               ModerationDecisionStore decisionStore) {
-        this.hashMatcher = hashMatcher;
-        this.mlClassifier = mlClassifier;
-        this.reviewQueuePublisher = reviewQueuePublisher;
-        this.decisionStore = decisionStore;
-    }
-
-    /**
-     * Runs content through all moderation stages and persists the decision.
-     *
-     * @param contentItem  content metadata and URL
-     * @return ModerationAction indicating what happened to the content
-     */
-    public ModerationAction moderate(ContentItem contentItem) {
-        // Stage 1: Hash matching — fast, deterministic, handles known-bad content
-        if (hashMatcher.isKnownHarmful(contentItem)) {
-            ModerationDecision decision = ModerationDecision.autoRemove(
-                contentItem.getContentId(), "hash_match", 1.0f
-            );
-            decisionStore.persist(decision);
-            return ModerationAction.REMOVE;
-        }
-
-        // Stage 2: ML classification
-        ClassificationResult mlResult = mlClassifier.classify(contentItem);
-
-        if (mlResult.getScore() &gt;= AUTO_REMOVE_THRESHOLD) {
-            // High-confidence violation — auto-remove
-            ModerationDecision decision = ModerationDecision.autoRemove(
-                contentItem.getContentId(), mlResult.getLabel(), mlResult.getScore()
-            );
-            decisionStore.persist(decision);
-            return ModerationAction.REMOVE;
-        }
-
-        if (mlResult.getScore() &gt;= HUMAN_REVIEW_THRESHOLD) {
-            // Ambiguous — route to human reviewers with priority based on category
-            int reviewPriority = calculateReviewPriority(mlResult.getLabel(), mlResult.getScore());
-            reviewQueuePublisher.enqueue(contentItem.getContentId(), mlResult.getLabel(), reviewPriority);
-            ModerationDecision decision = ModerationDecision.pendingReview(
-                contentItem.getContentId(), mlResult.getLabel(), mlResult.getScore()
-            );
-            decisionStore.persist(decision);
-            return ModerationAction.PENDING_REVIEW; // content stays up until reviewed
-        }
-
-        // Low confidence — approve
-        ModerationDecision decision = ModerationDecision.approved(
-            contentItem.getContentId(), mlResult.getScore()
+    public ModerationPipeline(HashMatchDetector hashMatchDetector,
+                               List&lt;ContentClassifier&gt; mlClassifiers,
+                               ReviewQueueService reviewQueueService,
+                               ModerationAuditLog auditLog) {
+        this.hashMatchDetector = hashMatchDetector;
+        this.mlClassifiers = List.copyOf(mlClassifiers);
+        this.reviewQueueService = reviewQueueService;
+        this.auditLog = auditLog;
+        this.classifierExecutorService = Executors.newFixedThreadPool(
+            Runtime.getRuntime().availableProcessors() * 2
         );
-        decisionStore.persist(decision);
-        return ModerationAction.APPROVE;
     }
 
     /**
-     * Higher priority items reviewed first.
-     * CSAM (child safety) always gets maximum priority regardless of score.
+     * Processes a content item through the full moderation pipeline.
+     * For CSAM: blocking (synchronous) — content not published until this returns.
+     * For other violations: non-blocking (async) — content may be visible during processing.
+     *
+     * @return ModerationDecision — APPROVED, REMOVED, or PENDING_HUMAN_REVIEW
      */
-    private int calculateReviewPriority(String violationLabel, float score) {
-        int basePriority = switch (violationLabel) {
-            case "csam"        -> 100;
-            case "violence"    -> 80;
-            case "hate_speech" -> 60;
-            case "spam"        -> 20;
-            default            -> 40;
+    public ModerationDecision process(ContentItem contentItem) {
+        // Layer 1: Hash matching (always synchronous — must run before publish for CSAM)
+        HashMatchResult hashResult = hashMatchDetector.check(contentItem);
+        if (hashResult.isMatch()) {
+            ModerationDecision decision = ModerationDecision.ofAutomatedRemoval(
+                contentItem.contentId(),
+                hashResult.violationCategory(),
+                1.0,  // perfect confidence for hash match
+                "hash_match:" + hashResult.hashType() + ":" + hashResult.matchedHash()
+            );
+            auditLog.record(decision);
+
+            // CSAM: mandatory legal report to NCMEC
+            if (hashResult.violationCategory() == ViolationCategory.CSAM) {
+                reportToNcmec(contentItem, hashResult);
+            }
+
+            return decision;
+        }
+
+        // Layer 2: ML classification (fan-out to all relevant classifiers in parallel)
+        List&lt;ClassificationResult&gt; classifierResults = runClassifiersInParallel(contentItem);
+
+        // Aggregate results: take the highest severity finding across all classifiers
+        ClassificationResult highestSeverityResult = classifierResults.stream()
+            .max(Comparator.comparingDouble(ClassificationResult::confidenceScore))
+            .orElse(ClassificationResult.benign());
+
+        double maxConfidence = highestSeverityResult.confidenceScore();
+
+        // Route based on confidence
+        if (maxConfidence &gt;= AUTO_REMOVE_THRESHOLD) {
+            ModerationDecision decision = ModerationDecision.ofAutomatedRemoval(
+                contentItem.contentId(),
+                highestSeverityResult.violationCategory(),
+                maxConfidence,
+                "ml_classifier:" + highestSeverityResult.classifierName()
+            );
+            auditLog.record(decision);
+            return decision;
+        }
+
+        if (maxConfidence &lt;= AUTO_APPROVE_THRESHOLD) {
+            ModerationDecision decision = ModerationDecision.ofAutomatedApproval(
+                contentItem.contentId(), maxConfidence
+            );
+            auditLog.record(decision);
+            return decision;
+        }
+
+        // Uncertain range: route to human review queue
+        ReviewTask reviewTask = ReviewTask.builder()
+            .contentId(contentItem.contentId())
+            .priority(calculateReviewPriority(highestSeverityResult.violationCategory()))
+            .violationHint(highestSeverityResult.violationCategory())
+            .mlConfidence(maxConfidence)
+            .localeRequired(contentItem.detectedLanguage())
+            .build();
+
+        reviewQueueService.enqueue(reviewTask);
+        return ModerationDecision.ofPendingHumanReview(contentItem.contentId());
+    }
+
+    /**
+     * Runs all ML classifiers in parallel using CompletableFuture.
+     * Fans out to image, text, and video classifiers simultaneously.
+     * Collects results within a timeout; missing results default to benign.
+     */
+    private List&lt;ClassificationResult&gt; runClassifiersInParallel(ContentItem contentItem) {
+        List&lt;CompletableFuture&lt;ClassificationResult&gt;&gt; classifierFutures = mlClassifiers.stream()
+            .filter(classifier -&gt; classifier.canProcess(contentItem.contentType()))
+            .map(classifier -&gt; CompletableFuture
+                .supplyAsync(() -&gt; classifier.classify(contentItem), classifierExecutorService)
+                .orTimeout(5, TimeUnit.SECONDS)  // 5s timeout per classifier
+                .exceptionally(classifierError -&gt; {
+                    System.err.println("[ModerationPipeline] Classifier " +
+                        classifier.name() + " failed: " + classifierError.getMessage());
+                    return ClassificationResult.benign();  // Fail open for classifier errors
+                }))
+            .collect(Collectors.toList());
+
+        return classifierFutures.stream()
+            .map(CompletableFuture::join)
+            .collect(Collectors.toList());
+    }
+
+    private int calculateReviewPriority(ViolationCategory violationCategory) {
+        return switch (violationCategory) {
+            case CSAM -> 1;
+            case TERRORISM, VIOLENT_EXTREMISM -> 2;
+            case GRAPHIC_VIOLENCE, CREDIBLE_THREAT -> 3;
+            case HATE_SPEECH, SEVERE_HARASSMENT -> 4;
+            case SPAM, MISINFORMATION, COPYRIGHT -> 5;
+            default -> 5;
         };
-        // Higher ML score within a category = slightly higher priority
-        return (int) (basePriority + score * 10);
+    }
+
+    private void reportToNcmec(ContentItem contentItem, HashMatchResult hashResult) {
+        // NCMEC CyberTipline API integration - legally required for CSAM
+        System.out.println("[ModerationPipeline] Submitting CSAM report to NCMEC for content: " +
+            contentItem.contentId());
+        // Implementation: call NCMEC CyberTipline API with content details and uploader info
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HashMatchDetector — checks content against hash databases for known violations.
+// Uses SHA-256 for exact match and pHash for near-duplicate detection.
+// ─────────────────────────────────────────────────────────────────────────────
+public class HashMatchDetector {
+
+    private final Set&lt;String&gt; exactHashDatabase;           // SHA-256 hashes (in memory)
+    private final Map&lt;Long, ViolationCategory&gt; pHashDatabase;  // pHash long values (in memory)
+    private static final int PHASH_HAMMING_THRESHOLD = 10;  // max bit difference for "same image"
+
+    public HashMatchDetector(Set&lt;String&gt; exactHashDatabase,
+                              Map&lt;Long, ViolationCategory&gt; pHashDatabase) {
+        this.exactHashDatabase = Set.copyOf(exactHashDatabase);
+        this.pHashDatabase = Map.copyOf(pHashDatabase);
+    }
+
+    public HashMatchResult check(ContentItem contentItem) {
+        if (contentItem.contentType() != ContentType.IMAGE
+                &amp;&amp; contentItem.contentType() != ContentType.VIDEO) {
+            return HashMatchResult.noMatch();
+        }
+
+        byte[] contentBytes = loadContentBytes(contentItem.storageUri());
+
+        // Check 1: Exact SHA-256 hash
+        String sha256Hash = computeSha256(contentBytes);
+        if (exactHashDatabase.contains(sha256Hash)) {
+            return HashMatchResult.match(
+                HashType.EXACT_SHA256,
+                sha256Hash,
+                ViolationCategory.CSAM  // Exact hashes are primarily CSAM
+            );
+        }
+
+        // Check 2: Perceptual hash (near-duplicate)
+        long pHashValue = computePerceptualHash(contentBytes);
+        for (Map.Entry&lt;Long, ViolationCategory&gt; entry : pHashDatabase.entrySet()) {
+            int hammingDistance = Long.bitCount(pHashValue ^ entry.getKey());
+            if (hammingDistance &lt;= PHASH_HAMMING_THRESHOLD) {
+                return HashMatchResult.match(
+                    HashType.PERCEPTUAL_PHASH,
+                    String.valueOf(entry.getKey()),
+                    entry.getValue()
+                );
+            }
+        }
+
+        return HashMatchResult.noMatch();
+    }
+
+    private String computeSha256(byte[] content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(content);
+            return HexFormat.of().formatHex(hashBytes);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new RuntimeException("SHA-256 not available", impossible);
+        }
+    }
+
+    private long computePerceptualHash(byte[] imageBytes) {
+        // Simplified pHash: in production use ImageMagick or BoofCV library
+        // 1. Downscale to 8x8 pixels → 64 pixels
+        // 2. Convert to grayscale
+        // 3. Compare each pixel to mean → set bit if above mean
+        // Result: 64-bit hash where similar images have small Hamming distance
+        // Returning 0 as placeholder — real implementation uses BufferedImage
+        return 0L;
+    }
+
+    private byte[] loadContentBytes(String storageUri) {
+        // Load from S3/GCS — implementation omitted for brevity
+        return new byte[0];  // Placeholder
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PriorityReviewQueue — manages the human review task queue with SLA enforcement.
+// Uses PriorityBlockingQueue sorted by (priority, enqueuedAt) for fairness.
+// ─────────────────────────────────────────────────────────────────────────────
+public class PriorityReviewQueue {
+
+    // Priority: lower number = higher priority (1=CSAM, 5=spam)
+    private final PriorityBlockingQueue&lt;ReviewTask&gt; queue = new PriorityBlockingQueue&lt;&gt;(
+        1000,
+        Comparator.comparingInt(ReviewTask::priority)
+                  .thenComparing(ReviewTask::enqueuedAt)  // FIFO within same priority
+    );
+
+    private static final Map&lt;Integer, Duration&gt; SLA_BY_PRIORITY = Map.of(
+        1, Duration.ofHours(1),    // CSAM
+        2, Duration.ofHours(4),    // Terrorism
+        3, Duration.ofHours(8),    // Graphic violence
+        4, Duration.ofHours(24),   // Hate speech
+        5, Duration.ofHours(72)    // Spam/copyright
+    );
+
+    public void enqueue(ReviewTask task) {
+        Duration slaDuration = SLA_BY_PRIORITY.getOrDefault(task.priority(), Duration.ofHours(72));
+        ReviewTask taskWithSla = task.withDueBy(Instant.now().plus(slaDuration));
+        queue.offer(taskWithSla);
+    }
+
+    /**
+     * Assigns the next task to a reviewer.
+     * Filters by locale if reviewer has language expertise.
+     * Returns Optional.empty() if no suitable task available.
+     */
+    public Optional&lt;ReviewTask&gt; assignNextTask(String reviewerId, String reviewerLocale) {
+        // Drain queue to find a task matching reviewer's language capability
+        List&lt;ReviewTask&gt; skippedTasks = new ArrayList&lt;&gt;();
+        Optional&lt;ReviewTask&gt; assignedTask = Optional.empty();
+
+        while (!queue.isEmpty()) {
+            ReviewTask candidate = queue.poll();
+            if (candidate == null) break;
+
+            boolean localeMatch = candidate.localeRequired() == null
+                || candidate.localeRequired().equals(reviewerLocale)
+                || reviewerLocale.equals("any");  // some reviewers handle all locales
+
+            if (localeMatch) {
+                assignedTask = Optional.of(candidate.withAssignee(reviewerId, Instant.now()));
+                break;
+            } else {
+                skippedTasks.add(candidate);
+            }
+        }
+
+        // Re-enqueue skipped tasks (they'll be picked up by appropriate reviewers)
+        queue.addAll(skippedTasks);
+        return assignedTask;
+    }
+
+    public int queueDepth() { return queue.size(); }
+
+    public long slaBreachCount() {
+        return queue.stream()
+            .filter(task -&gt; task.dueBy() != null &amp;&amp; task.dueBy().isBefore(Instant.now()))
+            .count();
     }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EXTENDED IMPLEMENTATION ═══════════════════════════════ -->
+      <section class="content-section" id="extended-impl-mod" aria-labelledby="ext-impl-mod-title">
+        <h2 class="content-section__title" id="ext-impl-mod-title"><span class="content-section__title-icon">&#x2615;</span>Extended Java: ML Classifier Interface &amp; Audit Log</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ContentClassifier — interface for modality-specific ML classifiers.
+ * Each classifier handles one content type and violation category combination.
+ */
+public interface ContentClassifier {
+    String name();
+    boolean canProcess(ContentType contentType);
+    ClassificationResult classify(ContentItem contentItem);
+
+    record ClassificationResult(
+        ViolationCategory violationCategory,
+        double confidenceScore,
+        String classifierName,
+        Map&lt;String, Double&gt; categoryScores  // scores for all categories, not just top
+    ) {
+        public static ClassificationResult benign() {
+            return new ClassificationResult(ViolationCategory.NONE, 0.0, "default", Map.of());
+        }
+    }
+}
+
+/**
+ * ImageNsfwClassifier — example classifier for NSFW image detection.
+ * In production: calls a gRPC model serving endpoint (TensorFlow Serving, TorchServe).
+ */
+public class ImageNsfwClassifier implements ContentClassifier {
+
+    private static final String CLASSIFIER_NAME = "image-nsfw-v3.2";
+    private static final String MODEL_ENDPOINT = "http://model-serving:8500/nsfw/predict";
+    private final HttpClient httpClient;
+
+    public ImageNsfwClassifier(HttpClient httpClient) {
+        this.httpClient = httpClient;
+    }
+
+    @Override
+    public String name() { return CLASSIFIER_NAME; }
+
+    @Override
+    public boolean canProcess(ContentType contentType) {
+        return contentType == ContentType.IMAGE;
+    }
+
+    @Override
+    public ClassificationResult classify(ContentItem contentItem) {
+        try {
+            // In production: download image bytes, resize to model input size (224x224),
+            // normalize pixel values, send as protobuf to model serving endpoint
+            byte[] imageBytes = downloadContent(contentItem.storageUri());
+            String predictionJson = callModelEndpoint(imageBytes);
+            return parsePrediction(predictionJson);
+        } catch (Exception classificationError) {
+            System.err.println("[ImageNsfwClassifier] Failed to classify " +
+                contentItem.contentId() + ": " + classificationError.getMessage());
+            return ClassificationResult.benign();  // Fail safe: don't auto-remove on errors
+        }
+    }
+
+    private ClassificationResult parsePrediction(String predictionJson) {
+        // Parse model output: { "nsfw_score": 0.87, "violence_score": 0.12, "hate_score": 0.05 }
+        // Example: detect highest scoring category above threshold
+        // Simplified parsing — real implementation uses Jackson ObjectMapper
+        double nsfwScore = 0.87;      // Parsed from JSON
+        double violenceScore = 0.12;
+        double hateScore = 0.05;
+
+        double maxScore = Math.max(Math.max(nsfwScore, violenceScore), hateScore);
+        ViolationCategory category = ViolationCategory.NONE;
+        if (maxScore == nsfwScore) category = ViolationCategory.NSFW;
+        else if (maxScore == violenceScore) category = ViolationCategory.GRAPHIC_VIOLENCE;
+        else if (maxScore == hateScore) category = ViolationCategory.HATE_SPEECH;
+
+        return new ClassificationResult(
+            maxScore &gt; 0.1 ? category : ViolationCategory.NONE,
+            maxScore,
+            CLASSIFIER_NAME,
+            Map.of("nsfw", nsfwScore, "violence", violenceScore, "hate", hateScore)
+        );
+    }
+
+    private byte[] downloadContent(String storageUri) { return new byte[0]; }  // Placeholder
+    private String callModelEndpoint(byte[] imageBytes) { return "{}"; }       // Placeholder
+}
+
+/**
+ * ModerationAuditLog — immutable append-only audit trail for all moderation decisions.
+ * Stored in a write-once database (or event log like Kafka with infinite retention).
+ * Used for: legal discovery, transparency reporting, policy iteration, reviewer quality audits.
+ */
+public class ModerationAuditLog {
+
+    private final JdbcTemplate auditDatabase;  // Write-once table with no UPDATE/DELETE grants
+
+    public ModerationAuditLog(JdbcTemplate auditDatabase) {
+        this.auditDatabase = auditDatabase;
+    }
+
+    /**
+     * Records a moderation decision immutably.
+     * This record cannot be modified or deleted — it is the permanent audit trail.
+     *
+     * @param decision the moderation decision (automated or human)
+     */
+    public void record(ModerationDecision decision) {
+        try {
+            auditDatabase.update(
+                "INSERT INTO moderation_audit_log " +
+                "(decision_id, content_id, decision_type, violation_category, " +
+                " confidence_score, model_version, reviewer_id, reasoning, decided_at, is_appeal) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                decision.decisionId().toString(),
+                decision.contentId().toString(),
+                decision.decisionType().name(),
+                decision.violationCategory().name(),
+                decision.confidenceScore(),
+                decision.modelVersion(),
+                decision.reviewerId() != null ? decision.reviewerId().toString() : null,
+                decision.reasoning(),
+                decision.decidedAt(),
+                decision.isAppeal()
+            );
+        } catch (DataAccessException dbError) {
+            // Audit log failure is CRITICAL — should never be silently swallowed
+            // In production: retry with exponential backoff, alert on-call if fails
+            System.err.println("[ModerationAuditLog] CRITICAL: Failed to write audit record for " +
+                "content " + decision.contentId() + ": " + dbError.getMessage());
+            throw new RuntimeException("Audit log write failed — moderation decision not recorded", dbError);
+        }
+    }
+
+    /**
+     * Retrieves full audit trail for a content item.
+     * Used by: legal team for discovery, reviewers for context, transparency reports.
+     */
+    public List&lt;ModerationDecision&gt; getAuditTrail(UUID contentId) {
+        return auditDatabase.query(
+            "SELECT * FROM moderation_audit_log WHERE content_id = ? ORDER BY decided_at ASC",
+            (resultSet, rowNum) -&gt; mapRowToDecision(resultSet),
+            contentId.toString()
+        );
+    }
+
+    private ModerationDecision mapRowToDecision(java.sql.ResultSet resultSet)
+            throws java.sql.SQLException {
+        // Map result set to ModerationDecision — implementation omitted for brevity
+        return ModerationDecision.placeholder();
+    }
+}
+
+// Supporting enums
+public enum ViolationCategory {
+    NONE, CSAM, TERRORISM, VIOLENT_EXTREMISM, GRAPHIC_VIOLENCE,
+    CREDIBLE_THREAT, HATE_SPEECH, SEVERE_HARASSMENT, NSFW, SPAM,
+    MISINFORMATION, COPYRIGHT
+}
+
+public enum ContentType { IMAGE, VIDEO, TEXT, AUDIO }</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ ADDITIONAL PATTERNS ═══════════════════════════════ --> aria-labelledby="adv-mod-title">
+        <h2 class="content-section__title" id="adv-mod-title"><span class="content-section__title-icon">&#x1F4DA;</span>Advanced Moderation Patterns</h2>
+        <div class="content-section__body">
+          <h3>Coordinated Inauthentic Behavior (CIB) Detection</h3>
+          <p>Beyond individual content violations, platforms must detect coordinated campaigns — networks of accounts working together to amplify harmful content, spread misinformation, or manipulate metrics. This requires graph-level analysis, not per-content analysis:</p>
+          <ul>
+            <li><strong>Account clustering:</strong> accounts that consistently interact with each other, post similar content, were created in the same time window, share device fingerprints, or use the same IP range. Graph clustering algorithms (Louvain community detection) identify suspicious clusters.</li>
+            <li><strong>Velocity signals:</strong> a piece of content that goes from 0 to 1M shares in 2 hours is either genuinely viral or coordinated amplification. Distinguish via engagement quality metrics: are shares from diverse accounts or from a cluster? Are shares accompanied by comments or are they pure reshares (bot behavior)?</li>
+            <li><strong>Cross-platform signals:</strong> the same content or campaign appearing across Twitter, Facebook, YouTube simultaneously suggests coordination. Platforms share threat intelligence via initiatives like GIFCT (Global Internet Forum to Counter Terrorism).</li>
+          </ul>
+
+          <h3>Content Moderation Policy as Code</h3>
+          <p>Policy rules must be explicit, auditable, and testable — not just embedded in model weights. Production systems encode policy as structured rules evaluated alongside ML predictions:</p>
+          <pre><code class="language-java">// Policy rules (simplified — real systems have hundreds of these)
+// Rules are evaluated in order; first matching rule wins
+//
+// Rule 1: CSAM — unconditional block, always report
+// IF content_type IN (IMAGE, VIDEO)
+//   AND hash_match_type = PHOTODNA
+// THEN action = BLOCK_AND_REPORT, mandatory_report = NCMEC
+//
+// Rule 2: Terrorism propaganda — high-confidence auto-remove
+// IF ml_score.terrorism > 0.95
+//   AND content_length_seconds > 60  // not a short clip showing news context
+// THEN action = REMOVE, notify_user = true
+//
+// Rule 3: Graphic violence — route to human review
+// IF ml_score.graphic_violence > 0.70
+//   AND content_type = VIDEO
+//   AND uploader_account_age_days < 30  // new accounts are higher risk
+// THEN action = ROUTE_HUMAN_REVIEW, priority = 3
+//
+// Rule 4: News exception — reduce false positives for news content
+// IF ml_score.graphic_violence > 0.70
+//   AND uploader_is_verified_news_organization = true
+// THEN action = APPROVE_WITH_WARNING_LABEL  // show but label as potentially disturbing
+//
+// Policy as code benefits:
+// - Auditable: every decision can be traced to a specific rule
+// - Testable: regression tests ensure policy changes don't break existing cases
+// - Explainable: reviewer and user see which rule triggered the decision
+// - Versioned: policy history tracked in Git like source code</code></pre>
+
+          <h3>Reviewer Tool Design for Accuracy and Throughput</h3>
+          <p>Human reviewers handle millions of decisions per day at Facebook scale. Reviewer tool design directly impacts both accuracy and reviewer wellbeing:</p>
+          <ul>
+            <li><strong>Context display:</strong> show reviewer the flagged content plus context: the conversation thread it appeared in, the account's history, the account's previous violation decisions. Context reduces false positives dramatically for borderline hate speech (same words mean different things in different contexts).</li>
+            <li><strong>Structured decision forms:</strong> rather than free-text, reviewers select from a structured taxonomy (violation category → subcategory → specific policy rule). This produces machine-readable audit trails and enables systematic policy improvement.</li>
+            <li><strong>Quality calibration:</strong> periodically inject "gold standard" cases (cases with known correct answers) into the reviewer queue. Track each reviewer's accuracy on gold cases. Reviewers with low accuracy get additional training or are flagged for quality review. This ensures consistent policy enforcement across thousands of reviewers globally.</li>
+            <li><strong>Workflow efficiency:</strong> keyboard shortcuts for common decisions. Batch review of similar content (all reported content from the same account in one session). Pre-load next item while reviewer reads current item. Small UX improvements compound over millions of reviews.</li>
+          </ul>
+
+          <h3>Crisis Response: Handling Coordinated Attacks</h3>
+          <p>Real-world events (terrorist attacks, elections, breaking news) trigger coordinated mass uploads of violating content. The moderation system must handle 100x normal violation volume in minutes:</p>
+          <ul>
+            <li><strong>Hash bank rapid expansion:</strong> when the Christchurch attack video was uploaded in 2019, platforms needed to add its hash to the detection database within minutes and have that propagate to all edge nodes. The hash database update path must support emergency hot deployment.</li>
+            <li><strong>Human review surge capacity:</strong> redirect reviewers from lower-priority queues (spam, copyright) to high-priority crisis queues (terrorism). Cross-train reviewers so they can serve multiple violation categories.</li>
+            <li><strong>Auto-escalation from reactive to proactive:</strong> normally, new accounts are reactive. During a coordinated campaign, temporarily flip to proactive for all new video uploads in the affected content category until the crisis is contained.</li>
+            <li><strong>Cross-platform emergency protocols:</strong> GIFCT's Hash-Sharing Database allows platforms to share hashes of terrorist content within 2 hours of a major attack. Platforms subscribe to this database feed and ingest hashes automatically.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ QUIZ ═══════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
-        <div class="quiz" data-quiz-id="p-moderation-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-content-moderation-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Why is a perceptual hash (pHash) used for image matching rather than a cryptographic hash (SHA-256)?" data-options='["pHash is faster to compute than SHA-256","A perceptual hash is tolerant of minor changes (compression, resizing, slight color adjustments). SHA-256 changes completely when even one bit changes — a bad actor re-saving a CSAM image at different quality would evade SHA matching but not pHash matching.","pHash provides stronger collision resistance","SHA-256 cannot process image files"]' data-correct="1" data-explanation="SHA-256 is a cryptographic hash — designed to avalanche (complete change on 1-bit input change). For content matching, this is a weakness: any trivial re-encoding evades it. pHash extracts perceptual features (frequency domain, color histograms) that survive minor visual changes, enabling near-duplicate detection." style="display:none"></div>
-          <div data-question="Why should the CSAM detection threshold be set lower (e.g., 0.80) than the hate speech threshold (e.g., 0.95)?" data-options='["CSAM models are less accurate so they need a lower threshold","CSAM removal requires maximum recall — missing a CSAM item (false negative) is catastrophic and illegal. Some false positives (legitimate content incorrectly removed) are acceptable. Hate speech false positives harm free expression significantly, so a higher precision threshold is appropriate.","Lower thresholds always produce better accuracy","CSAM is easier to detect so a lower threshold is sufficient"]' data-correct="1" data-explanation="This is the precision-recall trade-off applied to policy risk. CSAM: legal mandate for removal, real harm from false negatives → minimize false negatives (high recall, lower threshold). Hate speech: legitimate speech looks similar to policy violations, cultural context matters, false positives censor users → maximize precision (higher threshold, more false negatives acceptable)." style="display:none"></div>
-          <div data-question="How does the human review feedback loop improve ML classifier accuracy over time?" data-options='["Human reviews are only used for appeals, not for model improvement","Human reviewer decisions — especially when they overturn an auto-action — are labeled training data. Overturned removals indicate false positives; overturned approvals indicate false negatives. This labeled data is used to retrain the model weekly, reducing both error types over time.","The feedback loop only works for text classifiers, not image classifiers","Human reviews automatically update model weights in real time"]' data-correct="1" data-explanation="Active learning from production: human decisions on ambiguous cases (the hard examples) provide high-value training signal. If the model consistently misclassifies a particular type of content (e.g., satire vs. hate speech), human overturns on those cases will be over-represented in the training batch, correcting the model's blind spots." style="display:none"></div>
-          <div data-question="A user appeals a removal. What is the correct process, and what should happen if the appeal is overturned?" data-options='["All appeals are automatically approved to reduce complaints","Appeal routes to a senior reviewer who re-evaluates with full context. If overturned: content is restored, the original removal is marked as a false positive, the user may receive an explanation, and the removal decision feeds into model retraining as a labeled false positive example.","Appeals must be processed by the same reviewer who made the original decision","Overturned appeals permanently disable automated moderation for that user"]' data-correct="1" data-explanation="Appeals serve two purposes: fairness (users deserve recourse) and model improvement (overturns are valuable training signal). A senior reviewer with more context is appropriate since borderline cases needed human review in the first place. Overturned decisions should be logged as false positives, improving future model calibration." style="display:none"></div>
+
+          <div data-question="Why must CSAM hash detection run synchronously before content is published, while spam ML detection can run asynchronously after publication?" data-options='["CSAM detection must be synchronous because hash computation is faster than ML inference", "CSAM is legally mandated — platforms must never allow CSAM to be visible. Under US law (NCMEC CyberTipline reporting mandate), platforms must report known CSAM and block it before publication. Hash matching for CSAM is O(1) in a memory-loaded hash set, so the synchronous path adds &lt;1ms. Spam, by contrast, has no legal mandate for zero-visibility, lower harm if briefly visible, and ML classification is slower (100ms+). Asynchronous removal within minutes is acceptable for spam.", "Spam ML detection must be asynchronous because the model requires GPU resources that are not available synchronously", "Both CSAM and spam must be handled synchronously before publication — there is no difference in the architectural requirement"]' data-correct="1" data-explanation="The synchronous vs asynchronous decision should be driven by: (1) legal requirements (CSAM = legal mandate for zero visibility), (2) harm severity (terrorism/CSAM = catastrophic if any viewer sees it), (3) technical latency of the detection method (hash = &lt;1ms, ML = 100ms+). A useful heuristic: if you would face legal liability for even one person seeing the content, it must be proactive. If removal within minutes is acceptable, reactive is more scalable." style="display:none"></div>
+
+          <div data-question="What is the difference between SHA-256 exact hashing and pHash (perceptual hashing) for content detection, and why does content moderation need both?" data-options='["SHA-256 and pHash are interchangeable — any hash algorithm can be used for content matching", "SHA-256 is cryptographic: identical files produce the same hash; one pixel changed produces a completely different hash (avalanche effect). pHash is semantic: similar-looking images produce similar hashes (Hamming distance close to 0), robust to minor modifications like re-compression, slight cropping, or brightness adjustment. Need both: SHA-256 to catch exact copies (fast, zero false positives), pHash to catch near-duplicates that evade exact matching (slightly modified known-bad content).", "pHash is more secure than SHA-256 because it is harder to forge", "SHA-256 is used for images and pHash is used for text — they operate on different content types"]' data-correct="1" data-explanation="Adversarial actors modify known-bad content to evade exact hash matching (one pixel change defeats SHA-256). pHash uses DCT of a downscaled image to produce a 64-bit fingerprint where similar images have Hamming distance &lt;10 bits. This catches common evasion techniques (JPEG re-compression, slight crop, color shift). For CSAM, PhotoDNA (Microsoft's proprietary pHash variant tuned for human body images) is the industry standard, used by Google, Facebook, Twitter, and Microsoft." style="display:none"></div>
+
+          <div data-question="How should the ML classification confidence thresholds differ for CSAM vs spam, and why is the same threshold wrong for both?" data-options='["The same threshold (e.g., 0.9) should be used for all violation types to maintain consistent policy enforcement across categories", "For CSAM: low auto-remove threshold (e.g., 0.7) and aggressive routing to human review for anything above 0.3 — the cost of a false negative (missed CSAM) is catastrophic legal liability, while false positives (legitimate content removed) are manageable. For spam: high auto-remove threshold (e.g., 0.95) and low-priority human review — false negatives (missed spam) are annoying but low-harm, and false positives (removing legitimate posts) damage community trust without legal cover.", "Lower thresholds for CSAM means more false positives which is unacceptable — all categories should use high precision thresholds", "Confidence thresholds should be set by ML engineers and do not have policy implications"]' data-correct="1" data-explanation="The threshold encodes policy: how much false positive harm are you willing to cause to prevent how much false negative harm? For CSAM, the legal and moral calculus is clear — false negative cost vastly exceeds false positive cost. For hate speech, the calculus is harder — false positives disproportionately harm marginalized communities whose language is frequently misclassified. The threshold decision must involve policy teams, not just ML engineers." style="display:none"></div>
+
+          <div data-question="A content creator's video was removed by automated ML as 'graphic violence.' They appeal saying it's historical footage from a documentary. How should the appeals system be architected?" data-options='["Appeals should go to the same reviewer who made the original decision for consistency and accountability", "The appeals system should: (1) accept structured appeal form with text explanation and supporting context (news article links, channel context); (2) route to a different reviewer than the one who made the original decision — removing confirmation bias; (3) the appeal reviewer sees the content fresh plus the creator's stated context (documentary/news/education), which the original reviewer may not have had; (4) treat the appeal as a new decision — the original automated decision is a hint, not a constraint; (5) one final decision on appeal, with policy documentation linked.", "Appeals should be processed by the same automated ML system with a re-run of the classifier", "All appeals should be automatically approved to avoid suppressing legitimate content"]' data-correct="1" data-explanation="The appeal architecture must solve two problems: confirmation bias (second reviewer not knowing what first decided) and context enrichment (creator provides context that wasn't available at moderation time). Different reviewer addresses bias. Structured context form addresses missing information. The appeal decision must be logged immutably regardless of outcome, and the policy basis must be clear to the creator. Meta, YouTube, and TikTok all publish transparency reports on appeals outcomes — this feeds back into policy improvement." style="display:none"></div>
+
+          <div data-question="How does a 'legal hold' work in content moderation storage, and why can't you simply delete held content when the user requests it?" data-options='["Legal hold is a database flag that prevents UI display of content but the underlying content bytes are physically deleted per user request", "Legal hold is a flag on the content item that prevents physical deletion regardless of any delete request. When law enforcement (via a court order or informal request) notifies the platform of an investigation, the platform places a hold on identified content. Even if the user deletes the post, the bytes remain in storage with the legal hold flag. The content is invisible to all users (treated as 'deleted' from UX), but the original bytes plus the audit trail are preserved for potential evidentiary use. The hold must be formally lifted by the legal team before physical deletion can occur.", "Legal hold requires duplicating content to a separate WORM (write-once-read-many) storage system on every upload as a precaution", "Legal hold only applies to public content — private messages cannot be subject to legal hold"]' data-correct="1" data-explanation="The technical implementation is a soft-delete model with a legal hold override. Most content uses soft delete: deleted_at timestamp is set, UI treats it as gone, but it's physically retained for 30-90 days for recovery/abuse investigation. Legal hold is a separate flag: legal_hold = true means the content is retained indefinitely regardless of soft delete TTL and regardless of user requests. The hold is set by a restricted internal API, logged in an audit trail, and requires formal legal team action to lift." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
             <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="recommendation-engine.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Recommendation Engine →</a>
+              <a href="distributed-db.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed Database &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="distributed-db.html" class="btn btn--outline">← Distributed DB</a>
-        <a href="recommendation-engine.html" class="btn btn--primary">Next: Recommendation Engine →</a>
+        <a href="recommendation-engine.html" class="btn btn--outline">&larr; Recommendation Engine</a>
+        <a href="distributed-db.html" class="btn btn--primary">Next: Distributed Database &rarr;</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>

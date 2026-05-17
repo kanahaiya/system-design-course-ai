@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Multi-tenant SaaS Platform &mdash; MAANG System Design RESHADED walkthrough.">
+  <meta name="description" content="Design Multi-tenant SaaS Platform like Salesforce or Snowflake — MAANG System Design RESHADED walkthrough covering silo, bridge, pool isolation models, tenant routing, noisy neighbor, schema migrations, and GDPR compliance.">
   <title>Design Multi-tenant SaaS Platform &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -59,142 +59,634 @@
           <span class="tag">60 min</span><span class="tag">Platform Architecture</span>
         </div>
         <h1 class="module-header__title">Design Multi-tenant SaaS Platform</h1>
-        <p class="module-header__desc">Multi-tenancy is about one platform serving many customers with guaranteed isolation. The three isolation models trade off cost, complexity, and isolation strength. The wrong choice is hard to reverse -- designing the tenant isolation model is the most important architectural decision in a SaaS system.</p>
+        <p class="module-header__desc">Multi-tenancy is about one platform serving many customers with guaranteed isolation. The three isolation models trade off cost, complexity, and isolation strength. The wrong choice is hard to reverse &mdash; designing the tenant isolation model is the most important architectural decision in a SaaS system. This is a Staff-level question: the interviewer wants to hear you reason about the operational consequences over years, not just the day-one implementation.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; Salesforce, Slack, GitHub</div>
+          <div class="module-header__meta-item">&#x1F3E2; Salesforce, Snowflake, Slack, GitHub, Zendesk</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
         </div>
       </header>
-      <section class="content-section" id="requirements"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><h3>Functional Requirements</h3><ul>
-            <li>Multiple tenants share the same infrastructure with logical isolation</li>
-            <li>Tenant data must never be visible to other tenants</li>
-            <li>Per-tenant customization: settings, feature flags, branding</li>
-            <li>Self-service tenant onboarding</li>
-            <li>Usage metering and billing per tenant</li></ul><h3>Non-Functional Requirements</h3><ul>
-            <li><strong>Isolation:</strong> Tenant A can never read, write, or infer Tenant B data</li>
-            <li><strong>Scale:</strong> 10K tenants, each with 0&ndash;100K users</li>
-            <li><strong>Latency:</strong> tenant_id filtering must not add measurable latency</li></ul></div></section>
-      <section class="content-section" id="estimation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><ul>
-            <li>10K tenants &times; avg 10K users = 100M user records total</li>
-            <li>Shared schema: one DB table, tenant_id column on every row</li>
-            <li>Most SaaS: shared DB + row-level security for small/medium tenants; separate DB for enterprise</li></ul></div></section>
-      <section class="content-section" id="schema"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Shared schema model (most common for mid-market SaaS)
-// Every table has tenant_id as first column in composite primary key
-users:     (tenant_id, user_id) PRIMARY KEY, email, name, role
-documents: (tenant_id, doc_id) PRIMARY KEY, title, content, owner_id
-settings:  (tenant_id) PRIMARY KEY, plan, feature_flags, custom_config
 
-// Row-level security (PostgreSQL RLS)
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON users
-  USING (tenant_id = current_setting('app.current_tenant_id'));
+      <!-- ═══════════════════════════════ REQUIREMENTS ═══════════════════════════════ -->
+      <section class="content-section" id="requirements">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Multiple tenants share the same application infrastructure with strict logical or physical isolation</li>
+            <li>Tenant A data must <strong>never</strong> be visible, writable, or inferable by Tenant B</li>
+            <li>Per-tenant customization: feature flags, branding, settings, role definitions</li>
+            <li>Self-service tenant onboarding with automated provisioning</li>
+            <li>Usage metering per tenant for billing (API calls, storage, compute)</li>
+            <li>Admin portal: view all tenants, override settings, trigger migrations, deactivate accounts</li>
+            <li>GDPR right-to-erasure: delete all data for a tenant or specific user on request</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Isolation:</strong> Tenant A can never read, write, or infer Tenant B data — at application layer <em>and</em> database layer</li>
+            <li><strong>Scale:</strong> 10,000 tenants, each with 0–100K active users; top-tier enterprise tenants have 1M+ records</li>
+            <li><strong>Latency:</strong> tenant_id filtering must not add measurable latency; p99 &lt; 100ms for typical queries</li>
+            <li><strong>Availability:</strong> 99.99% uptime; one tenant's DB failure must not cascade to others</li>
+            <li><strong>Compliance:</strong> SOC 2, GDPR, HIPAA-readiness (for healthcare tenants)</li>
+            <li><strong>Onboarding time:</strong> SMB tenant online within 60 seconds; enterprise tenant within 4 hours</li>
+          </ul>
+          <h3>Clarifying Questions to Ask the Interviewer</h3>
+          <ul>
+            <li>Do we need physical data residency (EU tenants' data must stay in EU datacenters)?</li>
+            <li>Are there regulated-industry tenants requiring HIPAA BAA or financial data segregation?</li>
+            <li>What is the expected tenant size distribution: thousands of small tenants vs. hundreds of enterprise?</li>
+            <li>Is schema-per-tenant customization a product requirement, or do all tenants share the same schema?</li>
+          </ul>
+        </div>
+      </section>
 
-// Thread-local tenant context (application layer)
-// Set before every DB query: SET LOCAL app.current_tenant_id = 'tenant123'</code></pre></div></section>
-      <section class="content-section" id="hld"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body"><ul>
-            <li><strong>Model 1 &mdash; Shared DB + shared schema (tenant_id column):</strong> All tenants in same tables. RLS enforces isolation. Cheapest. Risk: misconfigured query leaks cross-tenant data.</li>
-            <li><strong>Model 2 &mdash; Shared DB + separate schema (one schema per tenant):</strong> Schema isolation at DB level. Medium cost. Easy to migrate one tenant to their own DB later.</li>
-            <li><strong>Model 3 &mdash; Separate DB per tenant:</strong> Strongest isolation. Most expensive. Required for regulated industries (healthcare, finance).</li>
-            <li><strong>Hybrid (most common):</strong> SMB tenants share DB (Model 1). Enterprise tenants get dedicated DB (Model 3). Migration path: tenant grows &rarr; move to own DB.</li>
-            <li><strong>Tenant context propagation:</strong> Middleware extracts tenant_id from JWT. Sets thread-local. Query interceptor automatically adds WHERE tenant_id = ? to all queries.</li></ul></div></section>
-      <section class="content-section" id="apis"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2><div class="content-section__body"><pre><code class="language-java">// Tenant Management API (admin only)
-POST /api/v1/tenants           { name, plan, admin_email } -> { tenant_id, api_keys }
-GET  /api/v1/tenants/{id}      -> { tenant settings, usage stats }
-POST /api/v1/tenants/{id}/plan { plan: "enterprise" }  -- upgrade to dedicated DB
+      <!-- ═══════════════════════════════ ESTIMATION ═══════════════════════════════ -->
+      <section class="content-section" id="estimation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Data Volume</h3>
+          <ul>
+            <li>10,000 tenants &times; avg 10,000 users = <strong>100M user records</strong> total</li>
+            <li>Each user record ~2 KB → 200 GB for user table alone</li>
+            <li>Enterprise tenants (top 1%) likely hold 80% of data (power-law distribution)</li>
+            <li>Shared schema: 100M rows in <code>users</code> table, indexed on (tenant_id, user_id)</li>
+          </ul>
+          <h3>Traffic</h3>
+          <ul>
+            <li>Assume 100M users, 10% DAU = 10M DAU</li>
+            <li>10M DAU &times; 50 API calls/day = 500M API calls/day = ~5,800 RPS average</li>
+            <li>Peak: 10&times; average = 58,000 RPS at peak (morning login surge)</li>
+            <li>Write ratio: ~20% writes, 80% reads; DB writes = ~1,160 TPS average</li>
+          </ul>
+          <h3>Infrastructure Sizing (Shared Pool Model)</h3>
+          <ul>
+            <li>PostgreSQL: 3-node cluster (primary + 2 replicas). 200GB data fits on 1TB SSD per node with room for indexes and WAL.</li>
+            <li>Connection pooling (PgBouncer): 10K tenants &times; up to 5 concurrent connections = 50K connections. PgBouncer pools these into 200 real DB connections.</li>
+            <li>Redis for rate limiting: 10K tenants &times; 100 bytes per sliding window counter = 1 MB — trivial.</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Senior Signal:</strong> The interviewer wants you to reason about the <em>long tail</em>. Most tenants are tiny; a handful are enormous. The isolation model that works for 9,900 small tenants breaks for 100 enterprise giants. State the power-law assumption early and let it drive your hybrid model recommendation.
+          </div>
+        </div>
+      </section>
 
-// All other APIs are tenant-scoped via JWT claim
-// JWT payload: { sub: "user123", tenant_id: "tenant456", plan: "pro" }
-// Gateway extracts tenant_id, passes to service as X-Tenant-Id header
-// Service layer sets TenantContextHolder.setCurrentTenantId("tenant456")</code></pre></div></section>
-      <section class="content-section" id="deepdive"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2><div class="content-section__body">
-          <p><strong>Preventing tenant data leakage (the critical requirement):</strong></p>
+      <!-- ═══════════════════════════════ SCHEMA ═══════════════════════════════ -->
+      <section class="content-section" id="schema">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Pool Model: Shared Tables with tenant_id</h3>
+          <pre><code class="language-java">-- Every application table carries tenant_id as the first PK component.
+-- Composite PK ensures uniqueness within a tenant's scope.
+-- B-tree index on (tenant_id, created_at DESC) serves "list recent records" queries.
+
+CREATE TABLE tenants (
+    tenant_id    UUID PRIMARY KEY,
+    name         VARCHAR(255) NOT NULL,
+    plan         VARCHAR(50)  NOT NULL,  -- 'starter' | 'pro' | 'enterprise'
+    data_region  VARCHAR(20)  NOT NULL,  -- 'us-east-1' | 'eu-west-1' for data residency
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    deleted_at   TIMESTAMPTZ,            -- soft-delete for GDPR erasure workflow
+    settings     JSONB        NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE users (
+    tenant_id    UUID         NOT NULL REFERENCES tenants(tenant_id),
+    user_id      UUID         NOT NULL DEFAULT gen_random_uuid(),
+    email        VARCHAR(320) NOT NULL,
+    name         VARCHAR(255) NOT NULL,
+    role         VARCHAR(50)  NOT NULL DEFAULT 'member',
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    anonymized_at TIMESTAMPTZ,           -- set on GDPR erasure; email/name replaced
+    PRIMARY KEY (tenant_id, user_id)
+);
+CREATE UNIQUE INDEX idx_users_email ON users(tenant_id, email);
+
+CREATE TABLE documents (
+    tenant_id    UUID         NOT NULL,
+    doc_id       UUID         NOT NULL DEFAULT gen_random_uuid(),
+    owner_id     UUID         NOT NULL,  -- references users(user_id) within same tenant
+    title        VARCHAR(512) NOT NULL,
+    content      TEXT,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, doc_id)
+);
+CREATE INDEX idx_documents_tenant_updated ON documents(tenant_id, updated_at DESC);
+
+-- Row-Level Security: DB-level backstop even if application layer has a bug
+ALTER TABLE users     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_users ON users
+    USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+CREATE POLICY tenant_isolation_documents ON documents
+    USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+-- Application sets this at the start of every transaction:
+-- SET LOCAL app.current_tenant_id = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';</code></pre>
+
+          <h3>Bridge Model: Schema-per-Tenant (PostgreSQL Search Path)</h3>
+          <pre><code class="language-java">-- Each tenant gets their own schema: tenant_abc123.users, tenant_abc123.documents
+-- The application sets search_path before queries; no tenant_id column needed.
+-- Allows per-tenant schema customization (adding custom columns).
+
+SET search_path TO tenant_abc123, public;
+-- All unqualified table references now resolve to tenant_abc123.users, etc.
+
+-- Tenant schema provisioning at onboarding time:
+CREATE SCHEMA tenant_abc123;
+CREATE TABLE tenant_abc123.users (
+    user_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email     VARCHAR(320) UNIQUE NOT NULL,
+    name      VARCHAR(255) NOT NULL,
+    role      VARCHAR(50)  NOT NULL DEFAULT 'member',
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    -- No tenant_id column needed — schema IS the isolation boundary
+);</code></pre>
+
+          <h3>Metadata Tables (All Models)</h3>
+          <pre><code class="language-java">-- Tenant routing metadata: maps tenant slug/subdomain to their data location
+CREATE TABLE tenant_routing (
+    tenant_slug  VARCHAR(63)  PRIMARY KEY,  -- 'acme' from acme.app.com
+    tenant_id    UUID         NOT NULL,
+    model        VARCHAR(20)  NOT NULL,     -- 'pool' | 'bridge' | 'silo'
+    db_host      VARCHAR(255),              -- NULL for pool tenants (use shared pool)
+    schema_name  VARCHAR(63),               -- NULL for pool tenants
+    region       VARCHAR(20)  NOT NULL
+);
+-- This table is cached in Redis (TTL 5 min) — loaded on every request</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ HLD ═══════════════════════════════ -->
+      <section class="content-section" id="hld">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <h3>The Three Isolation Models in Detail</h3>
+
+          <h4>Model 1 — Silo (Separate DB per Tenant)</h4>
+          <p>Each tenant gets a dedicated database instance. The application maintains a connection string registry and routes each request to the correct DB. Used by Salesforce for their largest enterprise customers.</p>
+          <ul>
+            <li><strong>Security isolation:</strong> Maximum. DB-level access controls, no cross-tenant query possible even with a full application compromise.</li>
+            <li><strong>Cost:</strong> Extremely high. 10,000 tenants = 10,000 DB instances minimum. AWS RDS minimum ~$25/month × 10,000 = $250K/month.</li>
+            <li><strong>Operational complexity:</strong> Very high. Schema migrations must be applied to 10,000 DBs. A migration script that takes 1 second per DB takes 2.7 hours across the fleet.</li>
+            <li><strong>Data residency:</strong> Easy. Provision the DB in the tenant's required region.</li>
+            <li><strong>Noisy neighbor:</strong> Zero. Resources are not shared.</li>
+          </ul>
+
+          <h4>Model 2 — Bridge (Schema per Tenant)</h4>
+          <p>All tenants share the same PostgreSQL instance but each has their own schema. The application sets <code>search_path</code> before queries. Used by Heroku's original multi-tenant Postgres offering.</p>
+          <ul>
+            <li><strong>Security isolation:</strong> Strong. PostgreSQL schema permissions prevent cross-schema access. <code>search_path</code> injection is the main attack vector (must validate tenant slugs).</li>
+            <li><strong>Cost:</strong> Medium. One DB instance per cluster (maybe 100-200 tenants per cluster), each with separate schemas.</li>
+            <li><strong>Schema customization:</strong> Excellent. Per-tenant migrations. Enterprise tenant can have extra columns without affecting others.</li>
+            <li><strong>Operational complexity:</strong> Medium. Each new tenant requires <code>CREATE SCHEMA + run migrations</code> in the provisioning pipeline.</li>
+            <li><strong>Limit:</strong> PostgreSQL practical limit is ~10,000 schemas per instance before catalog overhead degrades performance.</li>
+          </ul>
+
+          <h4>Model 3 — Pool (Shared Tables with tenant_id)</h4>
+          <p>All tenants share the same tables. Every row has a <code>tenant_id</code> column. PostgreSQL Row-Level Security (RLS) enforces isolation. Used by the majority of mid-market SaaS (Zendesk, HubSpot core services).</p>
+          <ul>
+            <li><strong>Security isolation:</strong> Weakest by architecture. Defense-in-depth critical: application layer (query interceptor) + DB layer (RLS) + test layer (cross-tenant leakage tests).</li>
+            <li><strong>Cost:</strong> Lowest. One DB cluster for thousands of tenants. All infrastructure is shared.</li>
+            <li><strong>Noisy neighbor:</strong> Worst. One tenant's heavy query consumes shared DB resources.</li>
+            <li><strong>Schema migrations:</strong> Easiest. One ALTER TABLE affects all tenants simultaneously.</li>
+          </ul>
+
+          <h3>Hybrid Model (Production Reality)</h3>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin:var(--space-4) 0">
+            <strong>&#x1F4A1; How Salesforce actually does it:</strong> Free/starter tenants → pool. Pro tenants → bridge (schema per tenant within shared Postgres clusters). Enterprise tenants (&gt;$100K ARR) → silo. Tenant onboarding into the right tier is fully automated. When a tenant upgrades from Pro to Enterprise, an automated job: (1) exports all data from shared schema, (2) provisions new dedicated DB in tenant's required region, (3) imports data, (4) runs smoke tests, (5) flips routing table entry, (6) deprecates shared schema slot.
+          </div>
+
+          <h3>Tenant Routing: From Request to Correct Database</h3>
+          <p>Every API request must resolve to the correct data store before any business logic runs. There are three common resolution strategies:</p>
           <ol>
-            <li><strong>Query interceptor:</strong> JPA/Hibernate entity listener or Spring AOP. Intercepts all queries. Injects AND tenant_id = ? automatically. Developers cannot forget to add tenant_id filter -- it is enforced by the framework.</li>
-            <li><strong>PostgreSQL Row-Level Security (RLS):</strong> DB-level enforcement. Even if the application bug forgets the filter, RLS blocks cross-tenant reads at the database. Defense in depth.</li>
-            <li><strong>Tenant-scoped access tokens:</strong> JWTs embed tenant_id as a claim. A user cannot create a valid token for a different tenant.</li>
-            <li><strong>Integration test:</strong> Always include a cross-tenant leakage test: tenant A token cannot access tenant B resources at any endpoint.</li>
+            <li><strong>Subdomain parsing:</strong> <code>acme.app.com</code> → extract "acme" → Redis lookup → tenant metadata. Fast (Redis TTL=5min), but requires a wildcard TLS cert (<code>*.app.com</code>) and DNS configuration.</li>
+            <li><strong>JWT claim:</strong> JWT contains <code>tenant_id</code> claim. Validated and extracted by API gateway. Most common for API-first products. Eliminates one Redis lookup but requires JWT validation on every request anyway.</li>
+            <li><strong>API key lookup:</strong> <code>X-API-Key: sk_live_abc123</code> → Redis lookup by key hash → tenant_id + plan + rate limit config. Necessary for server-to-server integrations where JWTs are not used.</li>
           </ol>
-          <p><strong>Noisy neighbor problem:</strong> Tenant A runs a heavy report query, degrading performance for all other tenants sharing the same DB. Mitigation: per-tenant query quotas, read replicas for analytics, automatic migration of high-volume tenants to dedicated DB instances.</p></div></section>
-      <section class="content-section" id="evaluate"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2><div class="content-section__body"><ul>
-            <li><strong>Schema migration at scale:</strong> ALTER TABLE with millions of rows and 10K tenants all sharing one table = potentially long lock time. Mitigation: online DDL, or feature flags to roll out new columns gradually.</li>
-            <li><strong>Tenant onboarding:</strong> For shared schema: one row in tenants table + settings = minutes. For dedicated DB: provision DB instance, run migrations, configure connection pool = hours. Automate with Terraform + migration runner.</li></ul></div></section>
-      <section class="content-section" id="deliver"><h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2><div class="content-section__body"><p>Multi-tenant SaaS = shared schema (tenant_id column) + PostgreSQL RLS (DB-level backstop) + thread-local tenant context + query interceptor (auto-inject WHERE tenant_id). Hybrid model for scale: shared DB for SMB, dedicated DB for enterprise.</p></div></section>
-      <section class="content-section" id="tradeoffs"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2><div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Isolation Model</th><th>Cost</th><th>Isolation</th><th>Best For</th></tr></thead>
-            <tbody>
-              <tr><td>Shared schema (tenant_id)</td><td>Lowest</td><td>Logical only -- application-enforced</td><td>SMB SaaS, startups, &lt;1000 tenants</td></tr>
-              <tr><td>Separate schema per tenant</td><td>Medium</td><td>Schema-level -- DB-enforced</td><td>Mid-market, schema customization needed</td></tr>
-              <tr><td>Separate DB per tenant</td><td>Highest</td><td>Strongest -- full isolation</td><td>Enterprise, regulated industries, data residency requirements</td></tr>
-            </tbody>
-          </table></div></section>
-      <section class="content-section" id="implementation"><h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2><div class="content-section__body"><pre><code class="language-java">/**
- * TenantContextHolder -- stores the current tenant_id in thread-local storage.
- * Set by HTTP middleware from JWT claim; read by the query interceptor.
+
+          <h3>Request Flow (Annotated)</h3>
+          <pre><code class="language-java">// Request: GET acme.app.com/api/v1/users
+// Header: Authorization: Bearer eyJ...
+
+// Step 1: API Gateway (Kong/Nginx)
+//   → Extract subdomain "acme"
+//   → Redis GET tenant:acme → { tenant_id: "uuid-1", model: "bridge", schema: "tenant_acme" }
+//   → Validate JWT signature, extract tenant_id claim — must match Redis result
+//   → Rate check: Redis ZADD/ZCOUNT sliding window for tenant UUID
+//   → Forward to app service with headers: X-Tenant-Id, X-Tenant-Schema, X-Tenant-Plan
+
+// Step 2: Application Service
+//   → TenantFilterInterceptor reads X-Tenant-Id, sets TenantContextHolder
+//   → TenantDataSourceRouter.determineCurrentLookupKey() returns tenant_id or "shared"
+//   → DataSource resolves to the correct connection pool
+//   → Before every query: SET LOCAL app.current_tenant_id = 'uuid-1'
+//   → RLS policy enforces tenant_id filter at DB level (defense in depth)
+
+// Step 3: Response
+//   → Data returned, TenantContextHolder.clear() called in finally block
+//   → Metering: Redis INCR usage:tenant-uuid-1:api_calls:2024-01 (for billing)</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ APIS ═══════════════════════════════ -->
+      <section class="content-section" id="apis">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── Tenant Provisioning API (platform admin only) ───────────────────────────
+POST /platform/v1/tenants
+Request:  { name: "Acme Corp", plan: "pro", admin_email: "cto@acme.com", region: "us-east-1" }
+Response: { tenant_id: "uuid", slug: "acme", api_key: "sk_live_...", onboarding_job_id: "job-123" }
+// Triggers async provisioning pipeline (schema creation, seed data, billing setup)
+
+GET /platform/v1/tenants/{tenant_id}
+Response: { tenant_id, slug, plan, status, usage: { api_calls_month: 1_200_000, storage_gb: 45.2 } }
+
+POST /platform/v1/tenants/{tenant_id}/upgrade
+Request:  { target_plan: "enterprise", target_region: "eu-west-1" }
+// Triggers async migration: shared schema → dedicated DB in EU region (for GDPR)
+
+DELETE /platform/v1/tenants/{tenant_id}
+// GDPR: triggers right-to-erasure workflow. Anonymizes PII, schedules hard delete after 30-day grace.
+
+// ─── Tenant-scoped API (authenticated via JWT / API key) ────────────────────
+// All of these implicitly scope to the authenticated tenant. No tenant_id in URL path.
+// tenant_id is extracted from JWT claim or API key lookup by the API gateway.
+
+GET  /api/v1/users?page=1&page_size=50        → paginated user list for calling tenant
+POST /api/v1/users   { email, name, role }    → create user within tenant
+GET  /api/v1/users/{user_id}                  → must validate user belongs to tenant
+PUT  /api/v1/users/{user_id}   { name, role } → update user
+DELETE /api/v1/users/{user_id}                → GDPR erasure: anonymize, not hard delete by default
+
+// ─── Tenant Settings API ────────────────────────────────────────────────────
+GET /api/v1/settings                   → tenant's full configuration
+PUT /api/v1/settings/features          { feature_flag_key: true/false }
+PUT /api/v1/settings/branding          { logo_url, primary_color, custom_domain }
+
+// ─── Usage / Metering API ───────────────────────────────────────────────────
+GET /api/v1/usage?month=2024-03
+Response: { api_calls: 1_200_000, storage_gb: 45.2, active_users: 847, compute_hours: 12.5 }</code></pre>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x26A0;&#xFE0F; Security note on user_id in URLs:</strong> The <code>GET /api/v1/users/{user_id}</code> endpoint must validate that the requested <code>user_id</code> belongs to the authenticated tenant. Relying only on RLS is sufficient at the DB level, but you should <em>also</em> check at the service layer so that a 403 is returned rather than a silent empty result.
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ DEEP DIVE ═══════════════════════════════ -->
+      <section class="content-section" id="deepdive">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Preventing Tenant Data Leakage (Defense in Depth)</h3>
+          <ol>
+            <li><strong>Query interceptor (application layer):</strong> JPA/Hibernate <code>@Filter</code> or Spring AOP intercepts all repository calls and injects <code>AND tenant_id = :currentTenantId</code>. Developers cannot forget — the framework enforces it. Implementation: a <code>TenantAwareHibernateInterceptor</code> that adds the filter before every <code>Session</code> flush.</li>
+            <li><strong>PostgreSQL Row-Level Security (DB layer):</strong> Even if the application bug forgets the filter, the DB policy fires. Two independent layers means one bug does not equal a data breach. RLS uses <code>current_setting('app.current_tenant_id')</code> which the application sets via <code>SET LOCAL</code> at transaction start.</li>
+            <li><strong>Tenant-scoped access tokens:</strong> JWTs embed <code>tenant_id</code> as a signed claim. A user cannot forge a token for a different tenant without the signing key.</li>
+            <li><strong>Integration tests:</strong> Mandatory cross-tenant leakage test in CI: create resources as Tenant A, attempt to access with Tenant B's token at every endpoint, assert 403 or empty result. This test suite is the regression net against accidental RLS disablement during schema changes.</li>
+          </ol>
+
+          <h3>2. Noisy Neighbor Problem and Tenant Throttling</h3>
+          <p>In the pool model, Tenant A running a heavy monthly export query can consume 80% of the shared DB's I/O, causing p99 latency spikes for all tenants. Mitigation layers:</p>
+          <ul>
+            <li><strong>Per-tenant rate limiting:</strong> Redis sliding window counter per tenant. Plan determines the limit: <code>starter</code> → 100 RPS, <code>pro</code> → 1,000 RPS, <code>enterprise</code> → 10,000 RPS. Enforced at the API gateway before hitting the DB.</li>
+            <li><strong>Query quotas:</strong> pg_query_settings or connection-level statement timeout per tenant plan. Heavy analytics queries are routed to read replicas with <code>statement_timeout = 30s</code>.</li>
+            <li><strong>Automatic shard migration:</strong> If a tenant's per-minute query count exceeds a threshold for 3 consecutive days, an automated job moves them to their own schema or dedicated DB. The flag that enables this is set in the tenant routing table; the application adapts without redeploy.</li>
+            <li><strong>Resource isolation:</strong> For Kubernetes-hosted application services, assign each enterprise tenant to a dedicated pod group with its own resource quota. Shared tenants share a pool of pods.</li>
+          </ul>
+
+          <h3>3. Schema Migrations in Multi-tenant Systems</h3>
+          <p>Adding a column to <code>users</code> in the pool model is one <code>ALTER TABLE</code>. In the bridge or silo model, it must run against 10,000 schemas/DBs. The strategies differ:</p>
+          <ul>
+            <li><strong>Pool model migrations:</strong> Use PostgreSQL's online DDL via <code>pg_repack</code> or Flyway with <code>lock_timeout = 2s</code>. Adding a nullable column with no default is instantaneous (no table rewrite). <strong>Never</strong> add a NOT NULL column with a default in one step on a large table — use three steps: (1) add nullable column, (2) backfill in batches, (3) add NOT NULL constraint.</li>
+            <li><strong>Bridge model migrations:</strong> Flyway/Liquibase with a schema-iteration script. The migration runner iterates over all schema names in <code>information_schema.schemata</code> where <code>schema_name LIKE 'tenant_%'</code> and runs the migration in each. Rate-limited to 50 schemas/minute to avoid DB load spike.</li>
+            <li><strong>Silo model migrations:</strong> Terraform + Ansible or a custom migration orchestrator. Each DB is an independent target. Rolling deployment: migrate 10% of DBs, monitor for errors, continue if clean. Rollback: Flyway <code>undo</code> or restore from snapshot.</li>
+            <li><strong>Expand/Contract pattern:</strong> For breaking schema changes (renaming a column), use: (1) <em>Expand</em> — add the new column, write to both old and new; (2) <em>Migrate</em> — backfill new column from old; (3) <em>Contract</em> — stop writing to old column; (4) <em>Delete</em> — drop old column after next deploy. This enables zero-downtime migrations regardless of isolation model.</li>
+          </ul>
+
+          <h3>4. Tenant Onboarding Automation</h3>
+          <p>Onboarding must be fully automated. Manual steps at scale (10K tenants) are operationally impossible. The provisioning pipeline for a bridge-model tenant:</p>
+          <pre><code class="language-java">// Provisioning pipeline (async, event-driven)
+// Triggered by: POST /platform/v1/tenants
+
+// Step 1: Create DB schema (or provision DB for silo)
+CREATE SCHEMA tenant_{slug};
+-- Apply all Flyway migrations to new schema
+
+// Step 2: Seed reference data
+INSERT INTO tenant_{slug}.plans VALUES (default plan config);
+INSERT INTO tenant_{slug}.roles VALUES (default roles: owner, admin, member);
+
+// Step 3: Create admin user
+INSERT INTO tenant_{slug}.users (email, role) VALUES (admin_email, 'owner');
+-- Hash password, set email verification token
+
+// Step 4: Register in routing table
+INSERT INTO tenant_routing (slug, tenant_id, model, schema_name, region) VALUES (...);
+-- Invalidate Redis cache for this slug
+
+// Step 5: Configure billing
+billingService.createSubscription(tenant_id, plan, payment_method_id);
+
+// Step 6: Warm caches
+-- Prefetch settings and feature flags into Redis
+
+// Step 7: Send onboarding email + emit TenantProvisionedEvent
+
+// Total time: ~15 seconds for bridge model, ~4 hours for silo (DB provisioning)</code></pre>
+
+          <h3>5. GDPR Right-to-Erasure in Multi-tenant Systems</h3>
+          <p>GDPR Article 17 requires that a user's personal data be deleted within 30 days of a verified erasure request. In a shared DB with millions of rows, this is non-trivial:</p>
+          <ul>
+            <li><strong>Soft delete + anonymization (preferred):</strong> Do not hard-delete rows (foreign key constraints, audit log integrity). Instead: set <code>anonymized_at = now()</code>, replace <code>email</code> with a hash, replace <code>name</code> with "Deleted User", nullify all other PII fields. The row remains for referential integrity but contains no personal data.</li>
+            <li><strong>Hard delete for tenant-level erasure:</strong> When an entire tenant is deleted (tenant churns, GDPR deletion request), the pool model requires <code>DELETE FROM every_table WHERE tenant_id = ?</code>. Use a background job with batched deletes (1,000 rows/batch) to avoid lock contention. For silo model: drop the entire DB.</li>
+            <li><strong>Backup handling:</strong> Backups are immutable. Document in DPA that backups are purged after the stated retention period (typically 35 days for daily backups). Erased data will naturally fall out when backups older than 35 days are purged.</li>
+            <li><strong>Audit log:</strong> Keep an anonymized audit record "User (deleted) performed action X at timestamp Y." The user identity is gone; the action record is kept for compliance (SOC 2).</li>
+          </ul>
+
+          <h3>6. Data Partitioning for Non-relational Stores</h3>
+          <p>When the SaaS uses Cassandra or DynamoDB alongside PostgreSQL:</p>
+          <ul>
+            <li><strong>Cassandra:</strong> <code>tenant_id</code> as partition key. All data for a tenant on the same vnodes. Risk: if one tenant has 100M rows, their partition is a hot partition. Mitigation: composite partition key <code>(tenant_id, date_bucket)</code> to spread large tenants across vnodes.</li>
+            <li><strong>DynamoDB:</strong> <code>tenant_id</code> as PK prefix in sort key (<code>USER#user_id</code>) with tenant_id as hash key. Use DynamoDB's per-partition throughput limits (3,000 RCU / 1,000 WCU per partition) as a natural noisy-neighbor throttle.</li>
+            <li><strong>Elasticsearch:</strong> Index-per-tenant for large enterprise customers; alias-based multi-tenant index for small tenants. Routing key = tenant_id ensures all tenant documents land on the same shard (fast reads), but creates hot shards for large tenants.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ EVALUATE ═══════════════════════════════ -->
+      <section class="content-section" id="evaluate">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <h3>Cross-tenant Leakage Test Suite (Required in CI)</h3>
+          <p>The most important test category in any multi-tenant system is cross-tenant leakage tests. These must run in CI on every deploy and after every schema migration:</p>
+          <pre><code class="language-java">// Required test scenarios (run as integration tests against a real DB, not mocks):
+// 1. GET /api/v1/users/{userId} with Tenant A JWT → 403 if userId belongs to Tenant B
+// 2. GET /api/v1/documents (list) with Tenant A JWT → zero Tenant B documents in response
+// 3. Simulate RLS disabled: rerun all tests → they must FAIL (proves the suite catches the bug)
+// 4. Multi-threaded: two threads with different tenant tokens run concurrently
+//    → confirm no cross-tenant data appears (catches ThreadLocal not-cleared bug)
+
+@Test
+void tenantBTokenCannotReadTenantAData() {
+    String tenantAUserId = createUser(TENANT_A_TOKEN, "alice@acme.com");
+    // Tenant B's token should see 403 or 404, never the actual user data
+    given().header("Authorization", "Bearer " + TENANT_B_TOKEN)
+        .get("/api/v1/users/" + tenantAUserId)
+        .then()
+        .statusCode(anyOf(is(403), is(404)));
+}</code></pre>
+          <h3>What Can Go Wrong</h3>
+          <ul>
+            <li><strong>RLS accidentally disabled during migration:</strong> A DBA runs <code>ALTER TABLE users DISABLE ROW LEVEL SECURITY</code> temporarily for a migration and forgets to re-enable it. Impact: all tenants' data exposed to any authenticated user. Mitigation: CI check that verifies RLS is ENABLED on all application tables before and after every migration.</li>
+            <li><strong>Connection pool exhaustion:</strong> In the bridge model with PgBouncer, 10K tenants &times; 5 max connections each exceeds PgBouncer's pool. Mitigation: PgBouncer with session-mode pooling, max_client_conn = 10,000, pool_size = 200 per schema group. For silo model: Hikari CP with max pool size capped per DB.</li>
+            <li><strong>Thread-local not cleared:</strong> If <code>TenantContextHolder.clear()</code> is not called in the <code>finally</code> block, thread pool reuse means the next request handled by that thread inherits the previous tenant's context. This is a data leakage bug that is intermittent and hard to reproduce in testing.</li>
+            <li><strong>Schema migration timeout:</strong> Running ALTER TABLE on a 500M-row shared table during peak traffic takes a long time and holds a lock. Use <code>lock_timeout = '2s'</code>; the migration retries until it acquires the lock during a low-traffic window.</li>
+          </ul>
+          <h3>Scale Bottlenecks</h3>
+          <ul>
+            <li><strong>Pool model at 100K tenants:</strong> The routing table lookup (Redis) becomes critical path. At 100K tenants, the metadata is still small (&lt;100MB in Redis). The bottleneck is PostgreSQL connection count — move to a connection pooler like PgBouncer or pgpool-II.</li>
+            <li><strong>Silo model at 10K tenants:</strong> Schema migration across 10K DBs requires parallelism. A naive sequential loop takes hours. Build a migration orchestrator that runs 100 DBs in parallel with error isolation (one failing migration does not block the rest).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ DELIVER ═══════════════════════════════ -->
+      <section class="content-section" id="deliver">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Multi-tenant SaaS architecture summary:</strong></p>
+          <ul>
+            <li><strong>Isolation model:</strong> Hybrid — pool (tenant_id column + RLS) for SMB tenants, bridge (schema per tenant) for mid-market, silo (dedicated DB) for enterprise and regulated industries</li>
+            <li><strong>Tenant routing:</strong> API gateway resolves subdomain/JWT claim to tenant metadata (Redis cache, 5-min TTL). Sets X-Tenant-Id header forwarded to all services.</li>
+            <li><strong>Application layer:</strong> TenantContextHolder (ThreadLocal) + TenantDataSourceRouter (AbstractRoutingDataSource) + query interceptor (Hibernate @Filter). Three independent layers prevent data leakage.</li>
+            <li><strong>Noisy neighbor:</strong> Redis sliding window rate limiter per tenant at gateway. Per-tenant statement_timeout at DB. Auto-migrate high-volume tenants to dedicated infrastructure.</li>
+            <li><strong>Schema migrations:</strong> Expand/contract pattern for zero-downtime. Flyway with lock_timeout for pool model. Parallel migration orchestrator for silo model.</li>
+            <li><strong>GDPR erasure:</strong> Anonymize (don't hard-delete) individual users. Batch hard-delete for tenant-level erasure. Backups fall out naturally within 35-day backup retention window.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ TRADE-OFFS ═══════════════════════════════ -->
+      <section class="content-section" id="tradeoffs">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Silo (DB per Tenant)</th><th>Bridge (Schema per Tenant)</th><th>Pool (Shared Tables)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Security isolation</strong></td><td>Maximum — no shared infrastructure</td><td>Strong — schema-level DB enforcement</td><td>Weakest — application + RLS only</td></tr>
+                <tr><td><strong>Cost</strong></td><td>Highest — 1 DB per tenant</td><td>Medium — ~100–200 tenants per DB cluster</td><td>Lowest — thousands per cluster</td></tr>
+                <tr><td><strong>Noisy neighbor</strong></td><td>Zero — fully isolated resources</td><td>Low — same DB instance but separate buffer pools</td><td>High — shared I/O and buffer pool</td></tr>
+                <tr><td><strong>Schema migration complexity</strong></td><td>Very high — run against every DB in fleet</td><td>High — run against every schema</td><td>Low — single ALTER TABLE</td></tr>
+                <tr><td><strong>Data residency</strong></td><td>Easy — provision DB in required region</td><td>Hard — tenants share instance, must route entire instance</td><td>Hard — all pool tenants share same region</td></tr>
+                <tr><td><strong>Tenant onboarding speed</strong></td><td>Hours (DB provisioning)</td><td>Seconds (CREATE SCHEMA + run migrations)</td><td>Milliseconds (INSERT into tenants table)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ IMPLEMENTATION ═══════════════════════════════ -->
+      <section class="content-section" id="implementation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * TenantContextHolder — stores the current tenant_id in ThreadLocal storage.
+ * Set by HTTP middleware from JWT claim; read by the query interceptor and data source router.
+ * CRITICAL: clear() MUST be called in a finally block to prevent context leakage across requests.
  */
-public class TenantContextHolder {
+public final class TenantContextHolder {
+
     private static final ThreadLocal&lt;String&gt; currentTenantId = new ThreadLocal&lt;&gt;();
 
-    public static void setCurrentTenantId(String tenantId) { currentTenantId.set(tenantId); }
+    private TenantContextHolder() {}
+
+    public static void setCurrentTenantId(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            throw new IllegalArgumentException("tenantId must not be blank");
+        }
+        currentTenantId.set(tenantId);
+    }
 
     public static String getCurrentTenantId() {
         String tenantId = currentTenantId.get();
         if (tenantId == null) {
-            throw new IllegalStateException("No tenant context set -- missing tenant_id in JWT");
+            throw new TenantContextMissingException(
+                "No tenant context set — JWT claim 'tenant_id' missing or middleware not applied"
+            );
         }
         return tenantId;
     }
 
-    public static void clear() { currentTenantId.remove(); } // MUST call in finally block
+    public static void clear() {
+        currentTenantId.remove(); // Prevents context leaking to the next request on this thread
+    }
 }
 
 /**
- * TenantFilterInterceptor -- Spring MVC interceptor that sets tenant context.
- * Called before every controller method. Extracts tenant_id from JWT.
+ * TenantDataSourceRouter — Spring AbstractRoutingDataSource that routes DB connections
+ * to the correct pool based on the current tenant's isolation model.
+ * Pool tenants → shared DataSource. Bridge/silo tenants → tenant-specific DataSource.
+ */
+@Component
+public class TenantDataSourceRouter extends AbstractRoutingDataSource {
+
+    private final TenantRoutingRepository tenantRoutingRepository;
+    private final DataSourceFactory dataSourceFactory;
+
+    public TenantDataSourceRouter(
+            TenantRoutingRepository tenantRoutingRepository,
+            DataSourceFactory dataSourceFactory,
+            DataSource sharedDataSource) {
+        this.tenantRoutingRepository = tenantRoutingRepository;
+        this.dataSourceFactory = dataSourceFactory;
+        setDefaultTargetDataSource(sharedDataSource);
+    }
+
+    @Override
+    protected Object determineCurrentLookupKey() {
+        String tenantId = TenantContextHolder.getCurrentTenantId();
+        TenantRouting routing = tenantRoutingRepository.findByTenantId(tenantId);
+        // Pool tenants return null → falls through to defaultTargetDataSource (shared)
+        if (routing.getModel() == IsolationModel.POOL) {
+            return null;
+        }
+        // Bridge/silo tenants get their own DataSource, lazy-initialized on first access
+        return ensureDataSourceRegistered(routing);
+    }
+
+    private String ensureDataSourceRegistered(TenantRouting routing) {
+        String key = routing.getTenantId();
+        if (!getResolvedDataSources().containsKey(key)) {
+            DataSource dedicatedDataSource = dataSourceFactory.create(routing.getDbHost());
+            addTargetDataSource(key, dedicatedDataSource); // Thread-safe via ConcurrentHashMap
+        }
+        return key;
+    }
+}
+
+/**
+ * TenantFilterInterceptor — Spring MVC interceptor.
+ * Sets tenant context before controller execution; clears it after (in all paths).
  */
 @Component
 public class TenantFilterInterceptor implements HandlerInterceptor {
 
+    private static final String HEADER_TENANT_ID = "X-Tenant-Id";
+
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        String jwtToken = extractBearerToken(request);
-        if (jwtToken == null) { response.setStatus(401); return false; }
-        String tenantId = extractTenantIdFromJwt(jwtToken);
+    public boolean preHandle(HttpServletRequest request,
+                              HttpServletResponse response,
+                              Object handler) throws IOException {
+        // API Gateway has already validated the JWT and extracted tenant_id into a header.
+        // Never trust client-supplied tenant_id directly — the gateway is the trust boundary.
+        String tenantId = request.getHeader(HEADER_TENANT_ID);
+        if (tenantId == null || tenantId.isBlank()) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Missing tenant context");
+            return false;
+        }
         TenantContextHolder.setCurrentTenantId(tenantId);
         return true;
     }
 
     @Override
-    public void afterCompletion(HttpServletRequest req, HttpServletResponse res, Object handler, Exception ex) {
-        TenantContextHolder.clear(); // CRITICAL: prevent tenant context leaking to next request
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
+                                 Object handler, Exception exception) {
+        TenantContextHolder.clear(); // CRITICAL: always clear, even on exceptions
+    }
+}
+
+/**
+ * TenantRateLimiter — Redis sliding window rate limiter, per-tenant.
+ * Uses Lua script for atomic check-and-increment.
+ * Returns true if the request is allowed; false if the tenant is over quota.
+ */
+@Component
+public class TenantRateLimiter {
+
+    private static final int WINDOW_SECONDS = 60;
+
+    // Lua script: atomic sliding window — safe even with Redis Cluster
+    private static final String RATE_LIMIT_LUA = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local clearBefore = now - window * 1000
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', clearBefore)
+        local count = redis.call('ZCARD', key)
+        if count < limit then
+            redis.call('ZADD', key, now, now)
+            redis.call('EXPIRE', key, window)
+            return 1
+        end
+        return 0
+        """;
+
+    private final StringRedisTemplate redisTemplate;
+    private final TenantPlanService tenantPlanService;
+
+    public TenantRateLimiter(StringRedisTemplate redisTemplate, TenantPlanService tenantPlanService) {
+        this.redisTemplate = redisTemplate;
+        this.tenantPlanService = tenantPlanService;
     }
 
-    private String extractBearerToken(HttpServletRequest request) {
-        String authHeader = request.getHeader("Authorization");
-        return (authHeader != null &amp;&amp; authHeader.startsWith("Bearer "))
-               ? authHeader.substring(7) : null;
-    }
+    public boolean isAllowed(String tenantId) {
+        int limitPerMinute = tenantPlanService.getRateLimitPerMinute(tenantId);
+        String key = "ratelimit:" + tenantId + ":requests";
+        long nowMillis = System.currentTimeMillis();
 
-    private String extractTenantIdFromJwt(String token) {
-        // Production: decode and verify JWT, extract "tenant_id" claim
-        // Simplified: return claim from verified JWT payload
-        return JwtUtils.getClaim(token, "tenant_id");
+        Long result = redisTemplate.execute(
+            RedisScript.of(RATE_LIMIT_LUA, Long.class),
+            List.of(key),
+            String.valueOf(nowMillis),
+            String.valueOf(WINDOW_SECONDS),
+            String.valueOf(limitPerMinute)
+        );
+        return Long.valueOf(1L).equals(result);
     }
-}</code></pre></div></section>
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ QUIZ ═══════════════════════════════ -->
       <section class="content-section" id="quiz">
         <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-saas-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
-          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 4</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
-          <div data-question="What is the key risk of the shared-schema (tenant_id column) isolation model?" data-options='["Shared schema is more expensive than separate databases", "A single application bug (forgetting to include WHERE tenant_id = ? in a query) can expose all tenants data to any user. Defense requires multiple layers: application-level query interceptor, PostgreSQL Row-Level Security as a database-level backstop, and mandatory cross-tenant leakage tests.", "Shared schema cannot support more than 1,000 tenants", "Shared schema prevents using database indexes effectively"]' data-correct="1" data-explanation="This is why defense-in-depth is critical for multi-tenant systems. Application bugs happen. If the only isolation is in application code, one bug equals customer data breach. PostgreSQL RLS adds a database-level filter that fires even if the application forgets. Two independent layers: if either works, the leak is prevented." style="display:none"></div>
-          <div data-question="Why is thread-local storage used for tenant context rather than passing tenant_id as a function parameter?" data-options='["Thread-local storage is faster than function parameters at runtime", "Passing tenant_id through every layer (controller to service to repository to query) would require modifying every method signature in the entire codebase. Thread-local stores it once in middleware, accessible anywhere in the same request call stack without parameter threading.", "Thread-local storage prevents multi-threading issues in concurrent requests", "Function parameters cannot handle UUID-length tenant IDs correctly"]' data-correct="1" data-explanation="Thread-local storage is the standard pattern for request-scoped context (also used for database transactions, security context, MDC logging). The alternative -- method parameter threading -- requires modifying every method and makes code harder to test. Thread-local is implicit but contained: set once in middleware, cleared in a finally block." style="display:none"></div>
-          <div data-question="What is the noisy neighbor problem in a shared multi-tenant database?" data-options='["Noisy neighbors are tenants who send too many support tickets", "One tenant running heavy analytical queries consumes DB CPU and I/O, degrading response times for all other tenants sharing the same instance. Mitigation: per-tenant query quotas, routing analytics queries to read replicas, automatic migration of high-volume tenants to dedicated DB instances.", "Noisy neighbors are only a problem in shared-schema, not separate-schema models", "Noisy neighbor problems only occur in cloud databases, not on-premises deployments"]' data-correct="1" data-explanation="Shared infrastructure means shared resources. A SaaS tenant running a monthly data export at 9 AM can consume 80% of the shared DB I/O, causing timeouts for all other tenants. Detection: per-tenant query metrics. Response: rate-limit analytical queries or move high-resource tenants to dedicated infrastructure." style="display:none"></div>
-          <div data-question="How does the hybrid multi-tenant model (shared DB for SMB, dedicated DB for enterprise) affect the application architecture?" data-options='["The hybrid model requires rewriting the application code twice for each model", "The data access layer must be routing-aware: resolve tenant_id to data store location (shared pool or dedicated DB connection). Connection pool manager routes queries to the correct DB. Application code stays the same -- only the routing layer changes. New enterprise tenant onboarding triggers DB provisioning automatically.", "Hybrid models are not supported by PostgreSQL connection poolers", "Enterprise tenants must use different application servers than SMB tenants"]' data-correct="1" data-explanation="Connection routing is the key abstraction. The application calls userRepository.findById() and the repository resolves the current tenant_id, looks up which DB pool serves this tenant (shared pool or dedicated), and routes accordingly. Application business logic is tenant-agnostic -- only the infrastructure layer knows about data residency." style="display:none"></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 5</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+
+          <div data-question="In the pool (shared tables) isolation model, what is the defense-in-depth stack that prevents Tenant A from reading Tenant B data?" data-options='["JWT signature validation at the API gateway is sufficient to prevent cross-tenant access","Application query interceptor (auto-inject WHERE tenant_id = ?) as the first layer; PostgreSQL Row-Level Security policy as the DB-level backstop; mandatory cross-tenant leakage integration tests as the regression net. Three independent layers: any one prevents the leak.","Row-Level Security alone is sufficient because it operates below the application layer","Tenant-scoped JWTs prevent any cross-tenant query from ever reaching the database"]' data-correct="1" data-explanation="Defense-in-depth is the key concept. A single layer is one bug away from a breach. The query interceptor prevents the common case (developer forgetting WHERE tenant_id). RLS catches application bugs. Integration tests catch accidental RLS disablement during migrations. All three must be present simultaneously." style="display:none"></div>
+
+          <div data-question="Why must TenantContextHolder.clear() be called in a finally block rather than a regular post-handler?" data-options='["The finally block runs faster than regular post-handler code","Thread pools reuse threads across requests. If clear() is not called after an exception, the ThreadLocal retains the previous request's tenant_id. The next request handled by that same thread inherits the wrong tenant context — causing data leakage that is intermittent and hard to reproduce.","clear() in a regular post-handler causes a memory leak over time","Spring MVC does not guarantee afterCompletion() is called without a finally block"]' data-correct="1" data-explanation="ThreadLocal is a request-scoped store attached to the OS thread, not the HTTP request. Thread pool threads are reused. If tenant A's request throws an exception before clear() runs, the next request assigned to that thread reads tenant A's tenant_id. This is one of the most dangerous multi-tenant bugs: intermittent, environment-dependent, and catastrophic." style="display:none"></div>
+
+          <div data-question="A shared-schema (pool model) SaaS adds a NOT NULL column with a DEFAULT value to the users table (500M rows). What is the correct migration procedure to avoid table locks?" data-options='["Run ALTER TABLE users ADD COLUMN new_col TEXT NOT NULL DEFAULT 'value' — modern PostgreSQL handles this without a full table rewrite","Use three steps: (1) add the column as nullable with no default — instant, no lock; (2) backfill in batches of 10,000 rows with UPDATE ... WHERE user_id BETWEEN ... AND ...; (3) add NOT NULL constraint with a validation scan. This avoids the O(n) table rewrite that a single ALTER with DEFAULT causes.","Set lock_timeout = '0' to prevent the migration from waiting for locks at all","Use pg_repack to rewrite the table online while keeping it accessible"]' data-correct="1" data-explanation="In PostgreSQL < 11, adding a column with a DEFAULT required a full table rewrite — an O(n) operation that holds an AccessExclusiveLock. Even in PG 11+ where simple DEFAULT is instant, adding NOT NULL still requires a table scan. The expand-then-validate pattern (add nullable → backfill → add constraint) avoids the long lock by doing the expensive work as regular UPDATE batches." style="display:none"></div>
+
+          <div data-question="How does consistent hashing (or partition key design) prevent the noisy neighbor problem when using Cassandra in a pool model multi-tenant system?" data-options='["Using tenant_id alone as the Cassandra partition key means all data for a large tenant lands on a small subset of vnodes, creating hot partitions that consume disproportionate cluster resources. A composite partition key (tenant_id, date_bucket) distributes a large tenant's data across many vnodes, capping per-partition size and preventing hot spots.","Cassandra's built-in token-aware routing automatically balances load across all tenants without any key design changes","Noisy neighbor in Cassandra only occurs with read-heavy workloads, not writes","Setting replication_factor = 3 distributes a single tenant's data across 3 nodes, solving the noisy neighbor problem"]' data-correct="0" data-explanation="Cassandra's noisy neighbor root cause is partition hotness, not overall cluster load. If tenant_id is the partition key and one tenant has 100M rows, their partition is massive and lands on a small set of vnodes. A composite partition key like (tenant_id, month) or (tenant_id, hash_bucket) keeps individual partition sizes bounded and distributes load evenly." style="display:none"></div>
+
+          <div data-question="A tenant submits a GDPR right-to-erasure request. What is the correct approach for their data that exists in immutable S3 backups taken before the request?" data-options='["Immediately restore each backup, delete the records, and re-upload — this is legally required within 24 hours","Document in the Data Processing Agreement (DPA) that backups are purged after the stated retention period (e.g., 35 days). The personal data will naturally fall out when those backups are deleted. GDPR allows a reasonable time window for backup purge cycles — immediate backup restoration and re-encryption is not required.","Encrypt all backups with the tenant's own key and delete the key — this fulfills erasure without modifying backup files","GDPR erasure only applies to live databases, not backups"]' data-correct="1" data-explanation="GDPR Recital 65 acknowledges that backup retention is a legitimate reason for delayed erasure. The standard approach is to document the backup retention period in the DPA (usually 30–35 days), process the erasure in the live database immediately, and let the backups age out naturally within the documented window. Restoring each backup to delete one user's data would be operationally catastrophic." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
-          <div class="quiz__result is-hidden" aria-live="polite"><div class="quiz__result-score"></div><div class="quiz__result-label"></div><div style="margin-top:var(--space-4)"><button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button><a href="log-aggregation.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Log Aggregation &rarr;</a></div></div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="log-aggregation.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Log Aggregation &rarr;</a>
+            </div>
+          </div>
         </div>
       </section>
-      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)"><a href="feature-flags.html" class="btn btn--outline">&larr; Feature Flags</a><a href="log-aggregation.html" class="btn btn--primary">Next: Log Aggregation &rarr;</a></div>
+
+      <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+        <a href="feature-flags.html" class="btn btn--outline">&larr; Feature Flags</a>
+        <a href="log-aggregation.html" class="btn btn--primary">Next: Log Aggregation &rarr;</a>
+      </div>
     </main>
   </div>
   <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>

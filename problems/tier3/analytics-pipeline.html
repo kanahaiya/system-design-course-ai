@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Real-time Analytics Pipeline &mdash; MAANG System Design RESHADED walkthrough.">
+  <meta name="description" content="Design Real-time Analytics Pipeline like Google Analytics or Amplitude — MAANG System Design RESHADED walkthrough covering Lambda vs Kappa architecture, Flink sessionization, funnel analysis, Druid vs ClickHouse, and 1B events/day scale.">
   <title>Design Real-time Analytics Pipeline &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -59,216 +59,711 @@
           <span class="tag">60 min</span><span class="tag">Data Engineering</span>
         </div>
         <h1 class="module-header__title">Design Real-time Analytics Pipeline</h1>
-        <p class="module-header__desc">Analytics pipelines face a fundamental tension: stream processing is fast but approximate; batch processing is accurate but slow. Lambda architecture runs both in parallel. Kappa architecture bets that stream processing is good enough. Know both trade-offs cold.</p>
+        <p class="module-header__desc">Analytics pipelines live at the intersection of two competing requirements: the product manager wants to see metrics updating every minute; the data engineer knows that accurate metrics over historical data require batch reprocessing. Lambda architecture tries to have both; Kappa architecture argues you can reprocess streaming data. Understanding why each exists — and when to choose which — is the Staff-level insight.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; Meta, Airbnb, Uber</div>
+          <div class="module-header__meta-item">&#x1F3E2; Google Analytics, Amplitude, Mixpanel, Segment</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
         </div>
       </header>
 
-      <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+      <!-- REQUIREMENTS -->
+      <section class="content-section" id="requirements">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Ingest events in real-time (clicks, purchases, page views)</li>
-            <li>Compute aggregations with low latency: count, sum, avg, percentile</li>
-            <li>Support time-windowed queries: hourly, daily totals</li>
-            <li>Ad-hoc SQL queries over historical data</li>
-            <li>Dashboard with live metrics (seconds latency)</li></ul>
+            <li>Ingest user behavior events from web/mobile clients (page views, clicks, purchases, custom events)</li>
+            <li>Real-time dashboards: active users, events per minute, revenue per hour — updates within 60 seconds</li>
+            <li>Funnel analysis: conversion from step A → B → C, with drop-off rates at each step</li>
+            <li>Cohort analysis: group users by signup week, track retention over 8 weeks</li>
+            <li>Session analysis: group events into sessions (30-minute inactivity timeout)</li>
+            <li>Historical queries: arbitrary SQL-like queries over 1 year of event history</li>
+            <li>Segmentation: filter any analysis by user attributes (country, plan, device type)</li>
+          </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 10M events/sec, 100TB historical data</li>
-            <li><strong>Latency:</strong> Stream aggregations &lt;30s; batch queries &lt;60s</li>
-            <li><strong>Accuracy:</strong> Stream &lt;1% error for real-time; batch exact for reporting</li></ul>
+            <li><strong>Ingest throughput:</strong> 1B events/day = ~11,600 events/sec average, ~100K events/sec peak</li>
+            <li><strong>Real-time latency:</strong> dashboard metrics updated within 60 seconds of event receipt</li>
+            <li><strong>Historical query latency:</strong> p99 &lt; 10 seconds for queries over 1 year of data</li>
+            <li><strong>Data freshness:</strong> real-time metrics within 60 seconds; accurate historical metrics within 2 hours</li>
+            <li><strong>Storage:</strong> 1 PB of historical event data (1 year)</li>
+            <li><strong>Availability:</strong> event ingestion 99.99% (no events dropped); analytics query 99.9%</li>
+          </ul>
+          <h3>Clarifying Questions</h3>
+          <ul>
+            <li>Is approximate real-time data acceptable (99%+ accurate) or do we need exact accuracy for all queries?</li>
+            <li>What query patterns dominate: ad-hoc SQL or pre-defined dashboards?</li>
+            <li>Do we need user-level event history (for debugging one user's journey) or only aggregate metrics?</li>
+          </ul>
         </div>
       </section>
 
-      <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li>10M events/sec &times; 100 bytes = 1GB/sec raw data &rarr; 86TB/day</li>
-            <li>Aggregated to 1-min buckets: much smaller &mdash; ~1TB/day aggregated</li>
-            <li>Kafka: 1GB/sec across 1000 partitions = 1MB/sec/partition &mdash; manageable</li></ul></div>
-      </section>
-
-      <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Raw events (Kafka -- 7-day retention, archived to S3)
-event: { event_id, event_type, user_id, properties: JSONB, timestamp }
-
-// Stream aggregations (ClickHouse -- columnar OLAP)
-agg_metrics: (metric_name, dimensions, window_start, window_end, value)
-  // Written by Flink every 30s per metric+dimension combination
-
-// Historical raw events (S3 -- Parquet format, partitioned by date/hour)
-// Queried by Spark for batch jobs and ad-hoc analysis via Athena/Presto</code></pre></div>
-      </section>
-
-      <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Lambda Architecture:</strong> Two paths: (1) Speed layer (Kafka &rarr; Flink): seconds latency, approximate. (2) Batch layer (S3 &rarr; Spark): hours latency, exact. (3) Serving layer (ClickHouse): merges results from both.</li>
-            <li><strong>Flink streaming:</strong> Tumbling and sliding windows. State management (RocksDB backend for large state). Watermarks for late data handling.</li>
-            <li><strong>ClickHouse:</strong> Columnar OLAP. MergeTree engine. Blazing fast for aggregation queries (SUM/COUNT/GROUP BY). Handles petabytes.</li>
-            <li><strong>Kappa Alternative:</strong> Single stream processing pipeline (Kafka + Flink). Simpler ops but cannot reprocess historical data easily &mdash; must retain raw Kafka for long periods.</li></ul></div>
-      </section>
-
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Ingestion API
-POST /api/v1/events
-Body: { event_type: "purchase", user_id: "u123", properties: {...}, timestamp: ISO8601 }
-
-// Query API (Serving Layer)
-GET /api/v1/metrics?metric=revenue&from=2024-01-01&to=2024-01-02&granularity=1h
-Response: { windows: [{start, end, value}, ...] }
-
-// Real-time streaming API
-GET /api/v1/metrics/live?metric=active_users   (Server-Sent Events)</code></pre></div>
-      </section>
-
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+      <!-- ESTIMATION -->
+      <section class="content-section" id="estimation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Windowing types:</strong></p>
+          <h3>Event Volume and Storage</h3>
           <ul>
-            <li><strong>Tumbling window:</strong> Fixed, non-overlapping. "Orders per hour." Each event belongs to exactly one window. Simple, efficient.</li>
-            <li><strong>Sliding window:</strong> Overlapping. "Orders in the last 5 minutes, updated every minute." Each event may belong to multiple windows. More state.</li>
-            <li><strong>Session window:</strong> Dynamic, user-activity based. Window closes after N seconds of inactivity. Variable size.</li>
+            <li>1B events/day × 500 bytes average event size = <strong>500 GB/day raw</strong></li>
+            <li>After LZ4 compression (Parquet columnar format, ~10× for event data): ~50 GB/day on disk</li>
+            <li>1 year: 50 GB/day × 365 = ~18 TB. Well within S3 for $0.023/GB = ~$414/month.</li>
+            <li>Kafka: 500 GB/day ÷ 86,400 = ~6 MB/sec continuous ingest. 3-day retention on Kafka = 1.5 TB Kafka storage.</li>
           </ul>
-          <p><strong>Late data handling (watermarks):</strong></p>
+          <h3>Kafka Sizing</h3>
           <ul>
-            <li>Events may arrive out of order (mobile app offline 5 minutes, then bulk send).</li>
-            <li>Watermark = a marker that says all events before time T have arrived. Events before the watermark are considered complete.</li>
-            <li>Flink uses event-time watermarks: advance watermark to max(event_time) - allowed_lateness.</li>
-            <li>Events arriving after watermark: counted in a late-event side output, can trigger window recomputation.</li>
-          </ul></div>
+            <li>6 MB/sec × 3 replicas = 18 MB/sec disk writes across cluster</li>
+            <li>100K events/sec peak × 500 bytes = 50 MB/sec peak. Kafka handles this with 3 brokers + 100 partitions.</li>
+            <li>Partition count: 100K events/sec ÷ 10K events/sec per partition = 10 minimum; use 100 for headroom.</li>
+          </ul>
+          <h3>ClickHouse/Druid Cluster for Real-time Queries</h3>
+          <ul>
+            <li>Hot data: last 30 days = 30 × 50 GB = 1.5 TB compressed. 3 ClickHouse nodes with 1 TB SSD each = 3 TB, enough for hot data + indexes.</li>
+            <li>Historical queries on S3 Parquet via Athena: pay per query, ~$5/TB scanned. 100K queries/day × 1 TB scan average = $500/day — expensive. Use ClickHouse for last 30 days to avoid Athena for common queries.</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Senior Signal:</strong> State the Kappa vs Lambda choice upfront with your reasoning. For this problem: Kappa is preferred because Kafka retains 3 days (enough to handle most late-arriving data), reprocessing is possible by resetting consumer offsets, and the architecture is simpler. The only case for Lambda is if accurate reprocessing over years of data is needed frequently — in that case you need a separate batch layer.
+          </div>
+        </div>
       </section>
 
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Lambda complexity:</strong> Maintaining two separate pipelines (stream + batch) with the same business logic is error-prone. Kappa (stream-only with long Kafka retention for replay) is gaining adoption as stream frameworks mature.</li>
-            <li><strong>ClickHouse at scale:</strong> For 100TB+, use distributed ClickHouse cluster. ZooKeeper-based replication. Shard by high-cardinality dimension (user_id) to distribute write load.</li></ul></div>
+      <!-- SCHEMA -->
+      <section class="content-section" id="schema">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Canonical Event Schema</h3>
+          <pre><code class="language-java">// All events share the same top-level schema.
+// Event-specific properties are in the 'properties' JSON field.
+// This avoids schema explosion (one Kafka topic, one Parquet schema, one ClickHouse table).
+
+{
+  "event_id":    "uuid-1234",                     // idempotency key for deduplication
+  "event_type":  "page_view",                     // 'page_view' | 'click' | 'purchase' | custom
+  "user_id":     "user-abc123",                   // registered user; null for anonymous
+  "anonymous_id":"anon-xyz789",                   // device ID; always present (pre-auth events)
+  "session_id":  "sess-def456",                   // client-assigned session ID (optional)
+  "timestamp":   "2024-03-15T10:23:45.123Z",      // client timestamp (may arrive late)
+  "received_at": "2024-03-15T10:23:45.987Z",      // server timestamp (authoritative for ordering)
+  "context": {
+    "ip":          "203.0.113.1",                 // scrubbed to /24 subnet before storage
+    "user_agent":  "Mozilla/5.0...",
+    "page_url":    "https://app.example.com/checkout",
+    "referrer":    "https://google.com/search?q=...",
+    "device_type": "desktop",                     // 'desktop' | 'mobile' | 'tablet'
+    "country":     "US",                          // geo-resolved from IP
+    "os":          "macOS",
+    "browser":     "Chrome"
+  },
+  "properties": {                                 // event-specific data
+    "page_title":   "Checkout",                   // for page_view
+    "product_id":   "prod-789",                   // for purchase
+    "revenue_usd":  49.99,                        // for purchase
+    "experiment_id":"exp-abc",                    // for A/B attribution
+    "variant":      "treatment"
+  }
+}</code></pre>
+
+          <h3>ClickHouse Table Design</h3>
+          <pre><code class="language-java">-- ClickHouse: wide table, all events in one table.
+-- MergeTree family with ORDER BY (date, user_id) for efficient time-range + user queries.
+-- Partition by month enables dropping old data and parallel query execution.
+
+CREATE TABLE events
+(
+    event_id       UUID,
+    event_type     LowCardinality(String),   -- LowCardinality: dictionary-encoded, efficient for enums
+    user_id        String,
+    anonymous_id   String,
+    session_id     String,
+    timestamp      DateTime64(3, 'UTC'),
+    received_at    DateTime64(3, 'UTC'),
+    date           Date MATERIALIZED toDate(timestamp),    -- for partition pruning
+    country        LowCardinality(String),
+    device_type    LowCardinality(String),
+    page_url       String,
+    revenue_usd    Nullable(Float64),
+    properties     String                    -- JSON blob for event-specific fields
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(date)                  -- monthly partition: drop month = instant
+ORDER BY (date, user_id, timestamp)          -- primary sort: enables fast user-timeline queries
+SETTINGS index_granularity = 8192;          -- 8192 rows per index entry
+
+-- Materialized views for common aggregations (pre-computed at ingest time):
+CREATE MATERIALIZED VIEW hourly_page_views
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, page_url)
+AS SELECT
+    toStartOfHour(timestamp) AS hour,
+    page_url,
+    countIf(event_type = 'page_view') AS views,
+    uniqState(user_id) AS unique_users_state    -- HyperLogLog state for approximate distinct count
+FROM events
+GROUP BY hour, page_url;</code></pre>
+
+          <h3>S3 Parquet Layout for Historical Queries</h3>
+          <pre><code class="language-java">// Hive-partitioned S3 layout enables partition pruning in Athena:
+// s3://analytics-events/events/year=2024/month=03/day=15/hour=10/part-00001.parquet
+//
+// Athena query:
+// SELECT count(*), sum(revenue_usd) FROM events
+// WHERE year='2024' AND month='03'    -- partition pruning: only reads March files
+// AND event_type = 'purchase'
+// → Athena only scans March data, not all time. Cost = data scanned × $5/TB.</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body"><p>Lambda architecture: speed layer (Kafka + Flink) for real-time dashboards, batch layer (Spark + S3) for accurate reporting, serving layer (ClickHouse) merges both. Key insight: windowing + watermarks handle out-of-order events gracefully.</p></div>
+      <!-- HLD -->
+      <section class="content-section" id="hld">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>Lambda Architecture vs Kappa Architecture</h3>
+          <h4>Lambda Architecture (Traditional)</h4>
+          <pre><code class="language-java">// Three layers:
+// 1. Batch layer (Spark on S3): accurate, complete, slow (2-hour delay for last hour's data)
+//    → Processes all historical events from S3 Parquet
+//    → Outputs: accurate aggregates, complex metrics, ML training data
+//
+// 2. Speed layer (Flink on Kafka): approximate, fast (sub-minute freshness)
+//    → Processes only the last few hours of events from Kafka
+//    → Outputs: real-time counters (pageviews/minute), active user counts
+//
+// 3. Serving layer (ClickHouse + Redis): merges batch and speed layer outputs
+//    → For recent data: serve from speed layer (fast, approximate)
+//    → For historical data: serve from batch layer (accurate)
+//    → Dashboard API: "is this query asking about recent data? → speed layer. historical? → batch"
+//
+// Problem: two codebases doing similar logic, both must be kept in sync.
+// A bug in the batch Spark job that fixes a calculation must also be fixed in the Flink job.
+// Nathan Marz (creator of Lambda) later acknowledged this is the biggest maintenance burden.</code></pre>
+
+          <h4>Kappa Architecture (Modern Preferred Approach)</h4>
+          <pre><code class="language-java">// Single streaming pipeline (Flink on Kafka):
+// Kafka is the immutable event log. Flink processes it.
+// For reprocessing: reset consumer group offset to start of Kafka retention (3 days)
+//   OR replay from S3 Parquet (the archive) using a Flink S3 source connector.
+//
+// Key insight: a streaming job can replay historical data by reading from S3 Parquet
+// the same way it reads from Kafka — both are just ordered streams of events.
+// The Flink job is written once; it processes both real-time and historical replay.
+//
+// Advantages:
+// - One codebase for all analytics logic
+// - Reprocessing = restart job with earlier start time
+// - Simpler operational model
+//
+// Limitations:
+// - Kafka retention is bounded (3-7 days). Replay beyond that requires reading from S3.
+// - S3 replay is slower than Kafka replay (no real-time serving during reprocess).
+// - Complex stateful operations (e.g., 1-year cohort analysis) require large Flink state.</code></pre>
+
+          <h3>Full Kappa Architecture Pipeline</h3>
+          <pre><code class="language-java">// ─── Event Ingestion ──────────────────────────────────────────────────────────
+// Client SDK (JS/iOS/Android) → HTTP POST to ingestion API
+//   → API validates, enriches (geo-resolve IP → country, user-agent → device type)
+//   → Deduplication: Redis SETNX event_id (expire 24h) — drop duplicate events
+//   → Write to Kafka topic: "events.raw" (partitioned by userId for session ordering)
+//   → Write to S3 Parquet (every 5 minutes, micro-batching): archive layer
+
+// ─── Stream Processing (Flink) ────────────────────────────────────────────────
+// Flink job 1: Sessionization
+//   → Reads "events.raw"
+//   → KeyedProcessFunction keyed by userId
+//   → State: last event timestamp per user
+//   → If gap > 30 minutes: emit SessionEnd event, reset session
+//   → Enriches all events with session_id, session_number, session_duration
+//   → Outputs to "events.enriched" topic
+
+// Flink job 2: Real-time Aggregations
+//   → Reads "events.enriched"
+//   → Tumbling windows: 1-minute counts per event_type
+//   → Outputs to Redis: INCR realtime:pageviews:2024-03-15T10:23 (key per minute)
+//   → Dashboard reads from Redis: last 60 keys = last hour, chart rendered in browser
+
+// Flink job 3: Funnel Analysis
+//   → Reads "events.enriched"
+//   → Stateful windowed join: user must complete step A within 24h of step B
+//   → Outputs funnel completion events to ClickHouse
+
+// ─── Storage (Serving) ────────────────────────────────────────────────────────
+// Redis: real-time counters (last 24 hours, pre-aggregated per minute/hour)
+// ClickHouse: last 30 days of events (fast SQL queries, sub-second on aggregations)
+// S3 Parquet + Athena: full history (slow but complete, for long-range queries)</code></pre>
+
+          <h3>Real-time Dashboard Architecture</h3>
+          <p>The real-time part is the most commonly misdesigned. The naive approach (query the database every minute) creates constant read pressure. The correct approach is pre-computed counters:</p>
+          <ul>
+            <li>Flink writes to Redis: <code>INCR metric:pageviews:2024-03-15T10:23</code> (key = metric name + minute bucket). Each event increments the relevant counters atomically.</li>
+            <li>Dashboard API reads the last 60 keys (last 60 minutes) from Redis in a single MGET command → builds the time series. Total latency: ~1ms, no ClickHouse query needed.</li>
+            <li>Active users (HyperLogLog): use Redis HLL <code>PFADD active:2024-03-15T10 user123</code>. <code>PFCOUNT active:2024-03-15T10</code> returns approximate distinct count with &lt;1% error. Exact distinct count requires much more memory.</li>
+          </ul>
+        </div>
       </section>
 
-      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
-        <div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Lambda</th><th>Kappa</th></tr></thead>
-            <tbody>
-              <tr><td>Architecture</td><td>Two pipelines: stream + batch. High accuracy. High complexity.</td><td>One pipeline: stream only. Lower accuracy. Simpler ops.</td></tr>
-              <tr><td>Reprocessing</td><td>Easy: re-run Spark job over S3</td><td>Requires long Kafka retention or S3 compaction</td></tr>
-              <tr><td>Window type</td><td>Tumbling: simple, no overlap</td><td>Sliding: more insight, higher state/memory cost</td></tr>
-            </tbody>
-          </table></div>
+      <!-- APIS -->
+      <section class="content-section" id="apis">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── Event Ingestion API ──────────────────────────────────────────────────────
+POST /api/v1/events/batch
+Request: {
+  "events": [
+    { "event_type": "page_view", "user_id": "u123", "timestamp": "...", "properties": {...} },
+    { "event_type": "click",     "user_id": "u123", "timestamp": "...", "properties": {...} }
+  ]
+}
+// Batch API: clients send 50-event batches every 10 seconds (reduces connection overhead 50×)
+// Response: 202 Accepted (async — event is queued in Kafka, not yet processed)
+// Note: client timestamps may arrive up to 24 hours late (offline mobile use case)
+
+// ─── Real-time Dashboard API ──────────────────────────────────────────────────
+GET /api/v1/metrics/realtime?metric=pageviews&window=1h&granularity=1m
+// Reads from Redis pre-computed minute buckets. &lt;5ms response time.
+Response: {
+  "metric": "pageviews",
+  "data": [
+    { "timestamp": "2024-03-15T10:00:00Z", "value": 12450 },
+    { "timestamp": "2024-03-15T10:01:00Z", "value": 13021 },
+    ...  // 60 data points for the last hour
+  ]
+}
+
+// ─── Funnel Analysis API ──────────────────────────────────────────────────────
+POST /api/v1/funnels/query
+Request: {
+  "steps": [
+    { "event_type": "page_view",   "filters": { "page_url": "/product/*" } },
+    { "event_type": "add_to_cart" },
+    { "event_type": "checkout_start" },
+    { "event_type": "purchase" }
+  ],
+  "time_range":        { "from": "2024-03-01", "to": "2024-03-15" },
+  "conversion_window": "24h",   // user must complete all steps within 24 hours
+  "breakdown":         "country"  // split funnel by country
+}
+Response: {
+  "total_users_entered": 1200000,
+  "steps": [
+    { "step": "page_view",      "users": 1200000, "conversion_rate": 1.00 },
+    { "step": "add_to_cart",    "users": 360000,  "conversion_rate": 0.30 },
+    { "step": "checkout_start", "users": 180000,  "conversion_rate": 0.50 },
+    { "step": "purchase",       "users": 108000,  "conversion_rate": 0.60 }
+  ],
+  "overall_conversion": 0.09
+}
+
+// ─── Cohort Analysis API ──────────────────────────────────────────────────────
+POST /api/v1/cohorts/retention
+Request: {
+  "cohort_event":   "user_signed_up",    // cohort entry event
+  "return_event":   "session_start",     // event that counts as "retained"
+  "cohort_period":  "week",              // group by signup week
+  "periods":        8,                   // track for 8 weeks
+  "time_range":     { "from": "2024-01-01", "to": "2024-03-01" }
+}
+Response: {
+  "cohorts": [
+    { "cohort": "2024-W01", "size": 4500,
+      "retention": [1.0, 0.45, 0.32, 0.28, 0.25, 0.24, 0.23, 0.22] },
+    // week 0 = 100% (all signed up that week by definition)
+    // week 1 = 45% came back in week 2, etc.
+  ]
+}</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
-        <div class="content-section__body"><pre><code class="language-java">/**
- * StreamingAggregator -- implements tumbling window aggregation with
- * circular buffer and bounded late data acceptance.
+      <!-- DEEP DIVE -->
+      <section class="content-section" id="deepdive">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Sessionization: Stateful Flink with Timers</h3>
+          <p>Sessionization groups events into sessions based on the 30-minute inactivity timeout. This is a fundamentally stateful operation — you need to remember each user's last event time across the entire event stream:</p>
+          <pre><code class="language-java">// Flink KeyedProcessFunction: processes events keyed by userId.
+// For each event:
+//   1. Record the timestamp in state.
+//   2. Cancel any existing inactivity timer.
+//   3. Set a new inactivity timer for 30 minutes from now.
+//
+// When the timer fires (30 minutes after last event):
+//   → Session ended. Emit SessionEnd event with session_id, duration, event_count.
+//   → Clear state for this userId.
+//
+// For each event within a session:
+//   → Tag with current session_id (UUID generated at first event of session).
+//   → Emit enriched event downstream.
+//
+// Late arriving events (mobile offline, 2-hour delay):
+// Flink watermarking handles late events. Set watermark = event time - 2 hours.
+// Events arriving within 2 hours of the watermark are assigned to the correct session.
+// Events older than 2 hours are emitted to a late-data side output for separate handling.</code></pre>
+
+          <h3>2. Funnel Analysis: Ordered Event Join</h3>
+          <p>Funnel analysis requires finding users who performed event A, then event B, then event C — in order — within a time window. This is not a simple GROUP BY. It requires an ordered join:</p>
+          <pre><code class="language-java">// Approach 1: Batch SQL (ClickHouse, for historical funnels)
+// Self-join approach: each step joins to the previous step's result.
+
+WITH step1 AS (
+    SELECT user_id, min(timestamp) AS step1_time
+    FROM events
+    WHERE event_type = 'page_view'
+      AND page_url LIKE '/product/%'
+      AND date BETWEEN '2024-03-01' AND '2024-03-15'
+    GROUP BY user_id
+),
+step2 AS (
+    SELECT e.user_id, min(e.timestamp) AS step2_time
+    FROM events e
+    JOIN step1 ON e.user_id = step1.user_id
+    WHERE e.event_type = 'add_to_cart'
+      AND e.timestamp BETWEEN step1.step1_time AND step1.step1_time + INTERVAL 24 HOUR
+    GROUP BY e.user_id
+),
+step3 AS (
+    SELECT e.user_id, min(e.timestamp) AS step3_time
+    FROM events e
+    JOIN step2 ON e.user_id = step2.user_id
+    WHERE e.event_type = 'purchase'
+      AND e.timestamp BETWEEN step2.step2_time AND step2.step2_time + INTERVAL 24 HOUR
+    GROUP BY e.user_id
+)
+SELECT
+    (SELECT count(DISTINCT user_id) FROM step1) AS entered,
+    (SELECT count(DISTINCT user_id) FROM step2) AS reached_step2,
+    (SELECT count(DISTINCT user_id) FROM step3) AS converted;
+
+-- ClickHouse executes this in 2-3 seconds on 1B events (column-store, parallel reads).</code></pre>
+
+          <h3>3. Cohort Analysis: The Retention Matrix</h3>
+          <p>Cohort analysis requires two passes over event data: (1) find when each user first performed the cohort event, (2) find each subsequent period they performed the return event. In ClickHouse:</p>
+          <pre><code class="language-java">-- Step 1: Assign cohort week to each user
+WITH user_cohorts AS (
+    SELECT
+        user_id,
+        toMonday(min(timestamp)) AS cohort_week    -- ISO week of first event
+    FROM events
+    WHERE event_type = 'user_signed_up'
+    GROUP BY user_id
+),
+
+-- Step 2: For each session, compute which period (relative to cohort week) it falls in
+user_periods AS (
+    SELECT
+        e.user_id,
+        uc.cohort_week,
+        dateDiff('week', uc.cohort_week, toMonday(e.timestamp)) AS period_number
+    FROM events e
+    JOIN user_cohorts uc ON e.user_id = uc.user_id
+    WHERE e.event_type = 'session_start'
+      AND dateDiff('week', uc.cohort_week, toMonday(e.timestamp)) BETWEEN 0 AND 7
+    GROUP BY e.user_id, uc.cohort_week, period_number
+)
+
+-- Step 3: Aggregate into retention matrix
+SELECT
+    cohort_week,
+    countDistinctIf(user_id, period_number = 0)  AS week_0,   -- cohort size
+    countDistinctIf(user_id, period_number = 1)  AS week_1,
+    countDistinctIf(user_id, period_number = 2)  AS week_2,
+    -- ...
+    countDistinctIf(user_id, period_number = 7)  AS week_7
+FROM user_periods
+GROUP BY cohort_week
+ORDER BY cohort_week;</code></pre>
+
+          <h3>4. Late-arriving Events and Watermarking</h3>
+          <p>Mobile apps frequently send events after the user comes back online. An event that happened at 10:00 AM might arrive at the server at 2:00 PM (4-hour delay if the user was on a flight). How to handle this:</p>
+          <ul>
+            <li><strong>Event timestamp vs received_at:</strong> Always store both. <code>timestamp</code> = when the event happened (client's clock). <code>received_at</code> = when the server received it (server's clock). Use <code>received_at</code> for real-time streaming (to avoid out-of-order processing). Use <code>timestamp</code> for historical batch analytics (for accurate user timeline).</li>
+            <li><strong>Flink watermark:</strong> Set watermark = max(received_at) - 4 hours. Events older than the watermark trigger window closure. Events within 4 hours of the watermark are included in the current window. This handles mobile late arrivals without indefinitely delaying windows.</li>
+            <li><strong>S3 correction:</strong> For events arriving more than 4 hours late, they land in S3 with their original timestamp. The daily batch Spark job reprocesses the previous day's S3 data and produces accurate aggregate corrections, replacing the approximate real-time counts in ClickHouse.</li>
+          </ul>
+
+          <h3>5. Pre-aggregation for Real-time Dashboards</h3>
+          <p>A naive implementation queries ClickHouse for "pageviews in the last hour" every time a dashboard loads. With 100K dashboard queries/day and each requiring a full-table scan, this is expensive. Pre-aggregation solves this:</p>
+          <ul>
+            <li>Flink writes pre-aggregated results to Redis. Key: <code>metric:pageviews:2024-03-15T10:23</code>. Value: count. One Redis key per metric per minute.</li>
+            <li>Dashboard API reads 60 keys (MGET) → 1ms response, no ClickHouse query. Redis TTL = 25 hours (one day of minute-granularity data).</li>
+            <li>For HyperLogLog (approximate distinct users): Flink calls <code>PFADD active_users:hour:2024-03-15T10 {user_id}</code>. Dashboard reads <code>PFCOUNT active_users:hour:2024-03-15T10</code> → ~10,000 distinct users with &lt;1% error in 12 bytes of memory. Exact count would require storing all user IDs.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- EVALUATE -->
+      <section class="content-section" id="evaluate">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <h3>Failure Modes</h3>
+          <ul>
+            <li><strong>Duplicate events:</strong> Client SDK retries on network error. Same event sent twice. Without deduplication: pageview counted twice. Mitigation: Redis SETNX by event_id (24-hour TTL at ingestion). If SETNX returns 0 (key existed): drop the duplicate before it reaches Kafka. The 24-hour window covers retry scenarios.</li>
+            <li><strong>Kafka consumer lag during traffic spike:</strong> Black Friday: 10× normal traffic. Flink consumers fall behind Kafka producers. Real-time metrics become delayed (60 minutes instead of 60 seconds). Kafka retains 3 days so no data is lost. Resolution: auto-scale Flink taskmanager instances. Pre-scale before known traffic spikes.</li>
+            <li><strong>ClickHouse MergeTree write amplification:</strong> At 100K events/sec, small INSERTs cause many small parts. ClickHouse background merges these. If inserts are too frequent, parts exceed the limit and inserts are throttled. Solution: batch inserts (write every 1 second, not per-event) via Flink ClickHouse sink with configurable batch size.</li>
+            <li><strong>Clock skew on client devices:</strong> A mobile device with incorrect clock sends events with timestamps 1 year in the past. These events would be placed in the wrong ClickHouse partition. Mitigation: validate event timestamp at ingestion — if more than 24 hours from server time, replace with received_at. Log the original client timestamp in properties for debugging.</li>
+          </ul>
+          <h3>Scale to 10B Events/Day</h3>
+          <ul>
+            <li>Kafka: increase partition count to 1,000. Add 10 more brokers (linear scaling).</li>
+            <li>ClickHouse: add more shards. ClickHouse supports distributed tables that shard data across nodes; queries are scatter-gathered automatically.</li>
+            <li>S3 cost at 10B events/day: 5 TB/day compressed × 365 = 1.8 PB/year = $41K/year in S3 storage. Acceptable.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- DELIVER -->
+      <section class="content-section" id="deliver">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Architecture:</strong> Kappa — single Flink pipeline on Kafka. Reprocessing via S3 Parquet replay. No duplicate batch + speed codebase.</li>
+            <li><strong>Ingest:</strong> Client SDK → batch POST (50 events/10 sec) → ingestion API (validate + geo-enrich + deduplicate) → Kafka (partitioned by userId) + S3 Parquet (5-min micro-batches)</li>
+            <li><strong>Processing:</strong> Flink job 1: sessionization (stateful, 30-min timer). Job 2: real-time aggregations to Redis. Job 3: funnel/cohort computation to ClickHouse.</li>
+            <li><strong>Real-time dashboards:</strong> Redis pre-aggregated counters per minute (1ms query). HyperLogLog for distinct user counts.</li>
+            <li><strong>Historical queries:</strong> ClickHouse for last 30 days (sub-second SQL). Athena on S3 Parquet for full history (10-second queries, pay-per-scan).</li>
+            <li><strong>Data freshness:</strong> Real-time metrics &lt;60 seconds. Accurate historical metrics: next batch run (2-hour delay for late-arriving mobile events).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- TRADE-OFFS -->
+      <section class="content-section" id="tradeoffs">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Lambda Architecture</th><th>Kappa Architecture</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Accuracy for recent data</strong></td><td>Speed layer: approximate; Batch layer corrects after 1-2 hours</td><td>Single pipeline: same logic for real-time and reprocessing</td></tr>
+                <tr><td><strong>Reprocessing complexity</strong></td><td>Re-run Spark batch job on S3</td><td>Reset Flink consumer offset to beginning of Kafka or S3 archive</td></tr>
+                <tr><td><strong>Codebase complexity</strong></td><td>High — two separate pipelines (Spark + Flink) must stay in sync</td><td>Low — one Flink pipeline handles both real-time and replay</td></tr>
+                <tr><td><strong>When to choose</strong></td><td>Complex ML features that cannot be expressed as streaming transformations</td><td>Most analytics pipelines — preferred for new systems</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrapper" style="margin-top:var(--space-6)">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Apache Druid</th><th>ClickHouse</th><th>BigQuery</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Real-time ingest</strong></td><td>Excellent — native streaming ingest from Kafka</td><td>Good — requires batching (insert every 1s)</td><td>Poor — streaming inserts are slow/expensive</td></tr>
+                <tr><td><strong>Query performance on 1B rows</strong></td><td>Sub-second for pre-rolled up queries; slow for arbitrary scans</td><td>Sub-second for most analytical queries with MergeTree</td><td>10-30 seconds but scales to PBs effortlessly</td></tr>
+                <tr><td><strong>Storage model</strong></td><td>Segment-based with pre-computed rollups</td><td>Columnar MergeTree with materialized views</td><td>Columnar, serverless, automatic storage management</td></tr>
+                <tr><td><strong>Operational cost</strong></td><td>High — complex cluster (historical + real-time + broker + coordinator nodes)</td><td>Low — simple architecture, 3-node cluster works well</td><td>Zero — fully managed; pay per query</td></tr>
+                <tr><td><strong>Best for</strong></td><td>Sub-second dashboards with pre-defined metrics at very high cardinality</td><td>Flexible SQL analytics on &lt;100 TB, small team</td><td>PB-scale ad-hoc analytics, no infrastructure management</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- IMPLEMENTATION -->
+      <section class="content-section" id="implementation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * SessionizationProcessFunction — Flink stateful function that groups events into sessions.
+ * A session ends when there is 30 minutes of user inactivity.
+ * Keyed by userId so each user's state is independent.
  */
-public class StreamingAggregator {
+public class SessionizationProcessFunction
+        extends KeyedProcessFunction&lt;String, AnalyticsEvent, SessionizedEvent&gt; {
 
-    private static final int WINDOW_SIZE_SECONDS = 60;
-    private static final int LATE_ARRIVAL_GRACE_SECONDS = 30;
+    private static final long SESSION_TIMEOUT_MS = 30 * 60 * 1000L; // 30 minutes
 
-    private final long[] windowCounts;
-    private final long[] windowStartTimes;
-    private int currentWindowIndex = 0;
-    private long currentWindowStart;
+    // Flink managed state: survives task failures (checkpointed to RocksDB)
+    private ValueState&lt;String&gt;  currentSessionId;
+    private ValueState&lt;Long&gt;    lastEventTimeMs;
+    private ValueState&lt;Integer&gt; eventCountInSession;
 
-    public StreamingAggregator(int windowCount) {
-        this.windowCounts = new long[windowCount];
-        this.windowStartTimes = new long[windowCount];
-        this.currentWindowStart = System.currentTimeMillis() / 1000 / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
+    @Override
+    public void open(Configuration parameters) {
+        currentSessionId     = getRuntimeContext().getState(
+            new ValueStateDescriptor&lt;&gt;("session-id", String.class));
+        lastEventTimeMs      = getRuntimeContext().getState(
+            new ValueStateDescriptor&lt;&gt;("last-event-time", Long.class));
+        eventCountInSession  = getRuntimeContext().getState(
+            new ValueStateDescriptor&lt;&gt;("event-count", Integer.class));
     }
 
-    /**
-     * Processes an event with its event-time timestamp.
-     * Handles on-time and late events; ignores too-late events.
-     */
-    public void processEvent(long eventTimestampSeconds, long incrementValue) {
-        long eventWindowStart = eventTimestampSeconds / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
-        long ageSeconds = currentWindowStart - eventWindowStart;
+    @Override
+    public void processElement(AnalyticsEvent event,
+                                Context context,
+                                Collector&lt;SessionizedEvent&gt; output) throws Exception {
+        String sessionId = currentSessionId.value();
+        long   eventTime = event.getTimestampMs();
 
-        if (ageSeconds < 0) {
-            incrementCurrentWindow(incrementValue); // future event (clock skew)
-        } else if (ageSeconds <= LATE_ARRIVAL_GRACE_SECONDS) {
-            int targetIndex = findWindowIndex(eventWindowStart);
-            if (targetIndex >= 0) {
-                windowCounts[targetIndex] += incrementValue;
+        if (sessionId == null) {
+            // First event for this user (or first after a session expiry): start new session
+            sessionId = UUID.randomUUID().toString();
+            currentSessionId.update(sessionId);
+            eventCountInSession.update(0);
+        }
+
+        // Update last event time and event count
+        lastEventTimeMs.update(eventTime);
+        eventCountInSession.update(eventCountInSession.value() + 1);
+
+        // Cancel existing inactivity timer and set a new one
+        // (Flink allows registering multiple timers; we track via the processing-time timer API)
+        context.timerService().registerProcessingTimeTimer(
+            System.currentTimeMillis() + SESSION_TIMEOUT_MS
+        );
+
+        // Emit the event enriched with session context
+        output.collect(SessionizedEvent.from(event, sessionId, eventCountInSession.value()));
+    }
+
+    @Override
+    public void onTimer(long timerTimestamp, OnTimerContext context,
+                        Collector&lt;SessionizedEvent&gt; output) throws Exception {
+        Long lastEvent = lastEventTimeMs.value();
+        if (lastEvent == null) {
+            return;
+        }
+        long timeSinceLastEvent = System.currentTimeMillis() - lastEvent;
+        if (timeSinceLastEvent &gt;= SESSION_TIMEOUT_MS) {
+            // Session ended — emit session summary event
+            String sessionId = currentSessionId.value();
+            int eventCount   = eventCountInSession.value();
+            output.collect(SessionizedEvent.sessionEnd(
+                context.getCurrentKey(), sessionId, eventCount, lastEvent
+            ));
+            // Clear state so the next event starts a new session
+            currentSessionId.clear();
+            lastEventTimeMs.clear();
+            eventCountInSession.clear();
+        }
+        // If not yet expired: another event arrived recently, timer was superseded
+    }
+}
+
+/**
+ * EventIngestionService — HTTP endpoint that receives event batches, validates,
+ * deduplicates, and forwards to Kafka.
+ */
+@RestController
+@RequestMapping("/api/v1/events")
+public class EventIngestionService {
+
+    private static final int MAX_BATCH_SIZE     = 500;
+    private static final int MAX_EVENT_SIZE_BYTES = 10_240; // 10 KB per event
+
+    private final KafkaProducer&lt;String, String&gt; kafkaProducer;
+    private final StringRedisTemplate redisTemplate;
+    private final GeoIpResolver geoIpResolver;
+
+    public EventIngestionService(KafkaProducer&lt;String, String&gt; kafkaProducer,
+                                  StringRedisTemplate redisTemplate,
+                                  GeoIpResolver geoIpResolver) {
+        this.kafkaProducer  = kafkaProducer;
+        this.redisTemplate  = redisTemplate;
+        this.geoIpResolver  = geoIpResolver;
+    }
+
+    @PostMapping("/batch")
+    public ResponseEntity&lt;BatchResponse&gt; ingestBatch(
+            @RequestBody EventBatch batch,
+            @RequestHeader("X-Forwarded-For") String clientIp) {
+
+        if (batch.getEvents().size() &gt; MAX_BATCH_SIZE) {
+            return ResponseEntity.badRequest()
+                .body(BatchResponse.error("Batch exceeds " + MAX_BATCH_SIZE + " events"));
+        }
+
+        List&lt;String&gt; acceptedIds    = new ArrayList&lt;&gt;();
+        List&lt;String&gt; duplicateIds   = new ArrayList&lt;&gt;();
+
+        for (AnalyticsEvent event : batch.getEvents()) {
+            if (isDuplicate(event.getEventId())) {
+                duplicateIds.add(event.getEventId());
+                continue;
             }
+            AnalyticsEvent enrichedEvent = enrichEvent(event, clientIp);
+            sendToKafka(enrichedEvent);
+            acceptedIds.add(event.getEventId());
         }
-        // Too late -- drop or route to late-data side output
+
+        return ResponseEntity.accepted()
+            .body(BatchResponse.success(acceptedIds.size(), duplicateIds.size()));
     }
 
-    /**
-     * Advances to the current time window, flushing completed windows.
-     */
-    public List&lt;WindowResult&gt; advanceToCurrentTime() {
-        long nowWindowStart = System.currentTimeMillis() / 1000 / WINDOW_SIZE_SECONDS * WINDOW_SIZE_SECONDS;
-        List&lt;WindowResult&gt; completedWindows = new ArrayList&lt;&gt;();
-
-        while (currentWindowStart &lt; nowWindowStart) {
-            completedWindows.add(new WindowResult(windowStartTimes[currentWindowIndex], windowCounts[currentWindowIndex]));
-            currentWindowIndex = (currentWindowIndex + 1) % windowCounts.length;
-            currentWindowStart += WINDOW_SIZE_SECONDS;
-            windowCounts[currentWindowIndex] = 0;
-            windowStartTimes[currentWindowIndex] = currentWindowStart;
-        }
-        return completedWindows;
+    private boolean isDuplicate(String eventId) {
+        // Redis SETNX: set key only if not exists. Returns true if key was SET (not duplicate).
+        // If false: key already existed → duplicate event.
+        Boolean wasSet = redisTemplate.opsForValue()
+            .setIfAbsent("dedup:" + eventId, "1", Duration.ofHours(24));
+        return !Boolean.TRUE.equals(wasSet);
     }
 
-    private void incrementCurrentWindow(long value) { windowCounts[currentWindowIndex] += value; }
+    private AnalyticsEvent enrichEvent(AnalyticsEvent event, String clientIp) {
+        String country = geoIpResolver.resolveCountry(clientIp); // MaxMind GeoIP2 DB
+        long receivedAtMs = System.currentTimeMillis();
 
-    private int findWindowIndex(long targetWindowStart) {
-        for (int i = 0; i &lt; windowCounts.length; i++) {
-            if (windowStartTimes[i] == targetWindowStart) return i;
+        // Validate and bound the client timestamp — reject events more than 24h old
+        long eventTimeMs = event.getTimestampMs();
+        if (Math.abs(receivedAtMs - eventTimeMs) &gt; 86_400_000L) {
+            eventTimeMs = receivedAtMs; // replace with server time for extreme clock skew
         }
-        return -1;
+        return event.toBuilder()
+            .country(country)
+            .receivedAtMs(receivedAtMs)
+            .timestampMs(eventTimeMs)
+            .build();
     }
 
-    public record WindowResult(long windowStart, long count) {}
-}</code></pre></div>
+    private void sendToKafka(AnalyticsEvent event) {
+        String userId = event.getUserId() != null ? event.getUserId() : event.getAnonymousId();
+        String eventJson = JsonSerializer.serialize(event);
+        ProducerRecord&lt;String, String&gt; record = new ProducerRecord&lt;&gt;("events.raw", userId, eventJson);
+        // Async send — fire and forget with error logging
+        kafkaProducer.send(record, (metadata, exception) -&gt; {
+            if (exception != null) {
+                // Log but do not surface to client — ingestion is accepted once we decide to keep it
+                System.err.println("[KAFKA_INGEST_FAIL] eventId=" + event.getEventId()
+                    + " error=" + exception.getMessage());
+            }
+        });
+    }
+}</code></pre>
+        </div>
       </section>
 
-      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+      <!-- QUIZ -->
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-analytics-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
-          <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
-            <div class="quiz__question-text"></div>
-            <div class="quiz__options" role="group" aria-label="Answer options"></div>
-            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
-          </div>
-          <div data-question="What is the core trade-off that motivates Lambda Architecture (stream + batch) over a pure stream-only approach?" data-options='["Stream processing cannot handle JSON data", "Stream processing provides low latency (seconds) but may have slight inaccuracies (late data, approximations). Batch processing is accurate but slow (hours). Lambda runs both: stream for real-time dashboards, batch for accurate reporting. Trade-off: operational complexity of two pipelines vs guaranteed accuracy.", "Batch processing is always more cost-effective than streaming", "Stream processing requires GPU hardware that most companies do not have"]' data-correct="1" data-explanation="The Lambda Architecture trade-off is explicitly: speed vs accuracy. For ad revenue reporting (billing), you need exact counts -- batch provides this. For operational dashboards (is our conversion rate dropping right now?), exact counts from 6-hour-ago data are useless -- stream provides timely signals." style="display:none"></div>
-          <div data-question="An event with timestamp 14:00:25 arrives at the stream processor at 14:05:40. How should the system handle this late event?" data-options='["Discard all late events immediately", "Check if it falls within the allowed lateness window (e.g., 5 minutes). If the delay is within the grace period, add the event to the 14:00 window and potentially trigger a window recomputation. If beyond grace period, route to a late-data side output for batch reconciliation.", "Always add late events to the current window regardless of timestamp", "Late events indicate a data pipeline bug and should trigger a PagerDuty alert"]' data-correct="1" data-explanation="Flink uses watermarks + allowed lateness. The watermark says all events before time T have arrived. The allowed lateness gives a grace period for stragglers. Events within the grace period are counted in the correct window. Events beyond grace go to a side output for batch reconciliation." style="display:none"></div>
-          <div data-question="Why is ClickHouse preferred over PostgreSQL for time-series analytics queries?" data-options='["PostgreSQL does not support GROUP BY aggregations", "ClickHouse is columnar -- it reads only the queried columns from storage. For SELECT sum(revenue) FROM events WHERE date BETWEEN X AND Y GROUP BY country, ClickHouse reads 2 columns from compressed column files. PostgreSQL reads every column in every row -- 10-100x more I/O for wide tables.", "ClickHouse supports more SQL functions than PostgreSQL", "PostgreSQL cannot handle more than 1TB of data"]' data-correct="1" data-explanation="This is the OLAP vs OLTP distinction. OLTP (PostgreSQL): optimized for row-level operations. OLAP (ClickHouse, BigQuery): optimized for scanning millions of rows and aggregating. Columnar storage + compression + vectorized execution = ClickHouse can scan a billion rows in seconds." style="display:none"></div>
-          <div data-question="What is a session window in stream processing, and what use case does it serve?" data-options='["A session window is a fixed 30-minute window", "A session window groups events by user inactivity: the window stays open as long as events keep arriving (up to a max gap of N seconds). If no event arrives for N seconds, the window closes. Session duration = end_event_time - start_event_time. Perfect for analytics: How long did users spend on a feature?", "Session windows are only supported in Kafka Streams, not Apache Flink", "A session window is equivalent to a 60-second tumbling window"]' data-correct="1" data-explanation="Session windows are event-driven, not time-driven. A user clicking rapidly might have a 2-minute session window; a user reading slowly might have a 20-minute one. The window size is determined by the user's behavior, not a fixed clock. This is fundamentally different from tumbling or sliding windows." style="display:none"></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 5</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+
+          <div data-question="What is the fundamental difference between Lambda and Kappa architecture, and why is Kappa generally preferred for new systems?" data-options='["Lambda uses SQL; Kappa uses NoSQL — the difference is purely in the query language","Lambda has two parallel pipelines: a batch layer (Spark, accurate, 1-2 hour delay) and a speed layer (Flink, approximate, sub-minute). The serving layer merges both. Kappa eliminates the batch layer: one Flink pipeline handles both real-time processing and historical reprocessing (by replaying Kafka or S3). Kappa is preferred because one codebase reduces bugs — a bug fix applies to both real-time and historical data without keeping two implementations in sync.","Lambda architecture is only suitable for on-premises deployments; Kappa for cloud","Kappa is preferred because it is always more accurate than Lambda architecture"]' data-correct="1" data-explanation="Nathan Marz, who coined Lambda architecture, later wrote that its biggest practical problem is maintaining two codebases. The batch and speed layers implement the same logic in different frameworks (Spark vs Flink). When business logic changes (a new metric definition), both must be updated. Kappa eliminates this by using Flink for both. The key insight: a streaming job that reads from S3 Parquet is just a batch job with a streaming API." style="display:none"></div>
+
+          <div data-question="Why is Kafka partitioned by userId for the analytics event stream, rather than randomly or by event_type?" data-options='["Partitioning by userId prevents hotspots — random partitioning causes some partitions to receive more data","All events for a given user must be processed in order by the sessionization Flink job. If user u123's events go to 3 different Kafka partitions, they are handled by 3 different Flink workers. No single worker can see the complete event sequence for that user to determine session boundaries. Partitioning by userId (consistent hashing) ensures all events for one user go to one partition — one Flink worker maintains that user's session state.","Partitioning by userId enables better Kafka log compaction","Partitioning by userId is a Kafka requirement for GDPR compliance"]' data-correct="1" data-explanation="This is the co-location principle for stateful stream processing. Session boundaries depend on the time gap between consecutive events by the same user — which means you need to see all events for that user in order. Kafka's guaranteed ordering within a partition, combined with userId-based partitioning, ensures the Flink sessionization job sees each user's events in the correct sequence." style="display:none"></div>
+
+          <div data-question="A mobile user uses the app offline for 4 hours, then reconnects. Their events arrive at the server with 4-hour-old timestamps. How should the system handle these?" data-options='["Reject all events with timestamps older than 1 hour — late events pollute real-time metrics","Accept the events, store them with their original client timestamp (for accurate historical analysis) and the server received_at timestamp (for real-time stream processing). The real-time Flink pipeline uses received_at for watermarking and windowing (to avoid waiting indefinitely for late events). The historical batch pipeline uses the original timestamp (to correctly assign events to the day they occurred). S3 stores both timestamps.","Restamp all late events with the server arrival time to maintain stream ordering","Buffer late events in a queue and insert them into the stream in their correct chronological position"]' data-correct="1" data-explanation="This is the dual-timestamp pattern, fundamental to event-driven analytics. Client timestamp = when the business event happened (truth for analysis). Server timestamp = when we received it (truth for processing order). Real-time metrics use received_at so windows close on time. Historical analysis uses client timestamp so a purchase made at 11:59 PM is attributed to the correct day. Storing both enables choosing the right one for each use case." style="display:none"></div>
+
+          <div data-question="Why does funnel analysis require an ordered join rather than a simple GROUP BY and count?" data-options='["GROUP BY cannot handle multiple event types in the same query","A simple COUNT of add_to_cart events by user does not tell you if those events happened AFTER the product_view event. A user could add to cart first (from an email link), then view the product. Funnel analysis requires: user viewed product THEN (within 24h) added to cart THEN (within 24h) purchased. This ordered temporal constraint requires joining each user's events in time order, checking the sequence constraint at each step.","GROUP BY aggregates are not available in ClickHouse","Funnel analysis requires ML models that GROUP BY cannot support"]' data-correct="1" data-explanation="The ordering constraint is what makes funnel analysis hard. You need to verify that event B happened AFTER event A for the same user, within a time window. A COUNT of users who did event A and event B ignores order — some may have done B before A. The self-join approach (or window function approach) correctly enforces: step N's timestamp must be > step N-1's timestamp AND < step N-1's timestamp + conversion_window." style="display:none"></div>
+
+          <div data-question="Why is HyperLogLog used for counting distinct active users in real-time dashboards rather than exact distinct count?" data-options='["HyperLogLog is the only algorithm that works with Redis data structures","Exact distinct count requires storing the complete set of user IDs seen in the time window: 1M active users × 16 bytes per UUID = 16 MB per time bucket. With 60 minute-buckets in a dashboard, that is 960 MB of Redis memory for one metric. HyperLogLog gives a ~1% error distinct count using only 12 KB of memory regardless of cardinality — 1,300× less memory. For a dashboard showing '1,024,853 active users,' the difference between exact and 99% accurate is invisible and irrelevant.","HyperLogLog is only used because it is faster, not because of memory efficiency","HyperLogLog is required for GDPR compliance in user counting"]' data-correct="1" data-explanation="HyperLogLog (HLL) is one of the most practically important probabilistic data structures in analytics engineering. The memory tradeoff is extreme: exact count requires O(n) memory; HLL requires O(log log n) — effectively constant. Redis PFADD and PFCOUNT implement HLL natively. The 1% error is acceptable for product metrics (showing '1.02M active users' vs '1.00M active users' has zero business impact). Use exact count only when the precision matters (e.g., billing, compliance)." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="distributed-tracing.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed Tracing &rarr;</a>
+              <a href="../../index.html#problems" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Back to Problems &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="cdn.html" class="btn btn--outline">&larr; CDN</a>
-        <a href="distributed-tracing.html" class="btn btn--primary">Next: Distributed Tracing &rarr;</a>
+        <a href="distributed-tracing.html" class="btn btn--outline">&larr; Distributed Tracing</a>
+        <a href="../../index.html#problems" class="btn btn--primary">Back to Problems &rarr;</a>
       </div>
     </main>
   </div>

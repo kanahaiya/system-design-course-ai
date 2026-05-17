@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a CDN — RESHADED walkthrough covering anycast routing, origin shield, cache invalidation at scale, and push vs pull CDN for MAANG interviews.">
-  <title>Design a CDN — MAANG System Design</title>
+  <meta name="description" content="Design a Content Delivery Network like Cloudflare or Akamai — L6 system design walkthrough covering PoPs, anycast, cache hierarchy, origin shield, TTL strategy, and DDoS mitigation.">
+  <title>Design a CDN &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -22,21 +22,21 @@
         <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
         <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
       </ul>
-      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
     </div>
   </nav>
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
       <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
-          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
-          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
-          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
-          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
-          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
-          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
-          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
-          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
           <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
           <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
           <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
@@ -50,249 +50,993 @@
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
-          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
           <span>Tier 3</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
-          <span class="tag">60 min</span><span class="tag">Infrastructure / Networking</span>
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">60 min</span><span class="tag">Infrastructure</span>
         </div>
-        <h1 class="module-header__title">Design a CDN (Content Delivery Network)</h1>
-        <p class="module-header__desc">A CDN is architecturally simple (it is a cache layer at the edge) but operationally complex. The interesting interview questions: anycast routing so all PoPs share one IP, origin shields so cache misses do not hammer origin, and cache invalidation at global scale.</p>
+        <h1 class="module-header__title">Design a Content Delivery Network (like Cloudflare / Akamai)</h1>
+        <p class="module-header__desc">A CDN is a globally distributed cache network. The key insight is the cache hierarchy: L1 edge nodes serve 90% of traffic, L2 origin shield collapses thousands of L1 misses into one origin request, and the origin only sees 1-5% of total traffic. Understanding anycast routing, cache key design, and TTL strategy by content type is what separates surface-level from deep answers at L6.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Cloudflare, Akamai, AWS CloudFront</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
+          <div class="module-header__meta-item">&#x1F3E2; Cloudflare, Akamai, AWS CloudFront, Fastly</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+          <div class="module-header__meta-item">&#x1F4CA; 100Tbps capacity, 200+ PoPs, 95%+ cache hit rate</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════ REQUIREMENTS ═══════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Cache static content (images, JS, CSS, video segments) at edge nodes globally</li>
-            <li>Route users to the nearest/fastest PoP (Point of Presence)</li>
-            <li>Cache invalidation: purge content across all PoPs after origin update</li>
-            <li>SSL termination at edge</li>
-            <li>DDoS protection and rate limiting at edge</li>
+            <li><strong>Static asset delivery:</strong> serve JS, CSS, images, video, fonts from the edge with sub-10ms TTFB for cache hits.</li>
+            <li><strong>Dynamic content acceleration:</strong> forward uncacheable requests to origin over optimized TCP connections (persistent connections, TLS session reuse, anycast routing to nearest PoP).</li>
+            <li><strong>Cache control:</strong> respect origin Cache-Control headers. Support CDN-specific bypass headers. TTL configurable per content type.</li>
+            <li><strong>Content purge:</strong> URL-level purge, tag-based purge (surrogate keys), wildcard purge. Propagate purge to all PoPs within 5 seconds.</li>
+            <li><strong>SSL/TLS termination:</strong> terminate HTTPS at the edge PoP. Issue and manage TLS certificates (Let's Encrypt, custom certificates). Support TLS 1.3 with 0-RTT for repeat visitors.</li>
+            <li><strong>DDoS mitigation:</strong> absorb volumetric attacks (100Gbps+) at edge. Rate limiting by IP, ASN, and user agent. CAPTCHA challenge pages. IP reputation scoring.</li>
+            <li><strong>WebSocket and streaming:</strong> proxy long-lived connections through the CDN without buffering. TCP proxy mode for WebSocket, HTTP streaming for video.</li>
+            <li><strong>Image optimization:</strong> resize, convert format (WebP, AVIF), compress on-the-fly at the edge based on Accept header and device type.</li>
+            <li><strong>Analytics and logging:</strong> per-request logs with cache status (HIT/MISS/BYPASS/EXPIRED), latency, and country. Aggregated analytics dashboard.</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 100TB cached content, 10M requests/sec across PoPs</li>
-            <li><strong>Latency:</strong> &lt;10ms additional latency at edge vs &lt;150ms to origin</li>
-            <li><strong>Cache hit rate:</strong> &gt;95% for cacheable content</li>
+            <li><strong>Availability:</strong> 99.999% (5 nines). Single PoP failure must not affect users — anycast routes them to next-closest PoP automatically.</li>
+            <li><strong>Cache hit rate:</strong> &ge;95% for static assets, &ge;60% overall (mixing static + dynamic).</li>
+            <li><strong>TTFB for cache hits:</strong> &lt;10ms measured at the edge (not including user network latency).</li>
+            <li><strong>Purge propagation:</strong> content purge reaches all 200+ PoPs within 5 seconds.</li>
+            <li><strong>DDoS scale:</strong> sustain 100Tbps attack traffic (Cloudflare peak: 71Tbps absorbed in 2022).</li>
+            <li><strong>Origin offload:</strong> CDN should handle &ge;95% of traffic; origin receives &le;5%.</li>
+          </ul>
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Origin server implementation (CDN is a read-through cache proxy)</li>
+            <li>DNS hosting (separate concern, though CDN providers often bundle it)</li>
+            <li>Video encoding/transcoding (handled upstream before CDN ingestion)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ ESTIMATION ═══════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
+          <h3>Traffic Scale</h3>
           <ul>
-            <li>100 PoPs worldwide × 10TB storage each = 1PB CDN storage</li>
-            <li>10M req/sec × avg 100KB response = 1 Tbps egress bandwidth</li>
-            <li>Cache invalidation: 1M URLs × 100 PoPs = 100M invalidation messages per deploy</li>
+            <li><strong>Top CDN players:</strong> Cloudflare serves 45M+ HTTP requests/sec. Akamai claims 15-30% of global internet traffic. We'll design for a mid-tier CDN at 10M req/sec.</li>
+            <li><strong>Network capacity:</strong> 10M req/sec &times; 50KB avg object = 500GB/sec = 4Tbps egress. With DDoS headroom (10x): provision 40Tbps+ edge capacity across all PoPs.</li>
+            <li><strong>PoP count:</strong> 200 PoPs globally. Average 20Gbps per PoP for normal traffic. 200Gbps peak capacity per PoP for DDoS absorption.</li>
+            <li><strong>Cache storage per PoP:</strong> serve the "hot" working set. Top 1M URLs &times; 100KB avg = 100GB per edge node. 3 edge servers per PoP &rarr; 300GB per PoP (fits in RAM + SSD L2).</li>
+            <li><strong>Origin shield:</strong> without origin shield at 10M req/sec with 60% hit rate, origin sees 4M miss req/sec. Origin shield at regional level (20 shield nodes) reduces origin to 10K req/sec — 400x reduction. This is the single biggest win of multi-tier caching.</li>
           </ul>
+          <div class="insight-box" style="background:linear-gradient(135deg,#f0e7ff,#ede9fe);border-left:4px solid #7c3aed;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x1F4A1; The origin shield math:</strong> Without shield: 4M cache misses/sec hit origin. With 20 shield nodes: each shield handles 200K misses/sec, but each unique URL only misses once per shield node — thundering herd of 100 edge nodes becomes 1 request per shield. If working set is 1M URLs: origin sees at most 1M / shield_cache_size requests before they're cached at shield. At shield TTL=60s: origin max load = 1M / 60 = ~16K req/sec. That's 250x reduction.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ SCHEMA ═══════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Edge cache (each PoP is an Nginx/Varnish cluster)
-// Cache key: URL + Vary headers (Accept-Encoding, etc.)
-// TTL from Cache-Control: max-age or s-maxage header from origin
+          <h3>Cached Object Representation</h3>
+          <pre><code class="language-java">// Each edge node stores cached objects in memory (hot) + SSD (warm)
+// Key: normalized cache key (see CacheKeyBuilder below)
+CachedObject {
+  cacheKey:         string   // hash of (method + normalized URL + vary values)
+  status:           int      // HTTP status code: 200, 301, 404, etc.
+  headers:          Map&lt;String, String&gt;  // response headers from origin
+  body:             byte[]   // response body (compressed if origin sent gzip/br)
+  contentLength:    long
+  cachedAtEpoch:    long     // when cached
+  expiresAtEpoch:   long     // derived from Cache-Control max-age or Expires header
+  etag:             string   // for conditional revalidation: If-None-Match
+  lastModified:     string   // for conditional revalidation: If-Modified-Since
+  surrogateKeys:   List&lt;String&gt;  // tags for group invalidation (e.g., "product-123", "user-456")
+  hitCount:         long     // how many times served from cache (useful for eviction)
+}
 
-// Origin shield (regional aggregation cache between PoPs and origin)
-// If edge PoP misses, it requests from regional shield, not origin directly
-// Shield misses go to origin - shields aggregate miss traffic by region
+// Cache index entry (LRU/LFU metadata stored separately from body for memory efficiency)
+CacheIndexEntry {
+  cacheKey:   string
+  size:       long     // body size in bytes
+  lastHitMs:  long     // for LRU eviction
+  hitCount:   long     // for LFU eviction
+  tier:       enum     // MEMORY | SSD  (hot vs warm storage)
+}</code></pre>
 
-// Cache metadata (in-memory per PoP - LRU eviction)
-cache_entry: url_hash -> { etag, last_modified, content_ptr, ttl, size }</code></pre>
+          <h3>CDN Configuration (per domain / zone)</h3>
+          <pre><code class="language-java">// Customer CDN zone configuration
+CdnZone {
+  zoneId:            UUID
+  hostname:          string    // e.g., "assets.example.com"
+  originUrl:         string    // e.g., "https://origin.example.com"
+  originShieldPop:   string    // e.g., "IAD" (Ashburn, VA) — closest to origin
+  sslCertificate:    string    // PEM or Let's Encrypt auto
+  cacheRules:        List&lt;CacheRule&gt;
+  ddosProtection:    DdosConfig
+  rateLimiting:      RateLimitConfig
+}
+
+// Cache rules evaluated in order, first match wins
+CacheRule {
+  pathPattern:       string    // e.g., "*.js", "/api/**", "/images/**"
+  ttlSeconds:        int       // 0 = no-store, -1 = respect origin headers
+  cacheKeyFields:    List&lt;String&gt;  // additional fields beyond URL: ["Accept-Encoding"]
+  bypassCookies:     List&lt;String&gt;  // if request has these cookies: bypass cache
+  varyHeaders:       List&lt;String&gt;  // separate cache entries per these header values
+  surrogateKeyHeader: string   // response header name containing surrogate keys
+}
+
+// Surrogate key → object mapping (for group purge)
+// Stored in distributed key-value store (e.g., Cassandra or Redis)
+// Key: "stag:{zone_id}:{surrogate_key}"
+// Value: Set&lt;cache_key&gt;  — all cache keys tagged with this surrogate key</code></pre>
+
+          <h3>Purge Request</h3>
+          <pre><code class="language-java">PurgeRequest {
+  type:         enum     // URL | SURROGATE_KEY | WILDCARD | ALL
+  zoneId:       UUID
+  targets:      List&lt;String&gt;  // URLs, surrogate key values, or wildcard patterns
+  requestedAt:  timestamp
+  requestedBy:  string   // API key or user ID for audit log
+}
+
+// Purge propagated to each PoP via pub/sub (e.g., Kafka or internal gossip protocol)
+// Each PoP acknowledges receipt; control plane tracks PoP-level propagation status</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ HLD ═══════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <h3>CDN Topology</h3>
+          <pre><code class="language-java">Internet Users
+    │
+    ▼ (Anycast routing via BGP — user routes to nearest PoP automatically)
+    │
+┌───────────────────────────────────────────────────────────────┐
+│  PoP: Point of Presence  (200+ worldwide)                     │
+│                                                               │
+│  [TLS Termination]  ← Certificates managed centrally          │
+│       │                                                        │
+│  [DDoS Mitigation]  ← Volumetric attack absorption            │
+│       │                                                        │
+│  [L1 Cache: Edge Node]  ← Hot objects in RAM (100GB)          │
+│       │ HIT: return cached response (~2ms)                    │
+│       │ MISS: forward to L2                                   │
+└───────┼───────────────────────────────────────────────────────┘
+        │ cache miss
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│  L2 Cache: Origin Shield / Regional Cache  (20 worldwide)     │
+│                                                               │
+│  [L2 Cache Node]  ← Warm objects in RAM+SSD (10TB)            │
+│       │ HIT: return cached response, update L1 cache          │
+│       │ MISS: single request to origin (collapses L1 misses)  │
+└───────┼───────────────────────────────────────────────────────┘
+        │ cache miss (very rare — &lt;1% of traffic)
+        ▼
+[Origin Server]  ← Sees only &lt;5% of total CDN traffic</code></pre>
+
+          <h3>Anycast Routing Explained</h3>
+          <p>Anycast is a network addressing scheme where the same IP address is announced from multiple locations via BGP (Border Gateway Protocol). When a user's DNS resolves <code>cdn.example.com</code> to <code>104.16.0.1</code>, the internet's routing tables direct that user to the nearest network that announced that IP — which is the nearest CDN PoP. If that PoP goes down, BGP withdraws its announcement, and routers automatically reroute to the next-closest PoP. This provides both geographic load distribution and automatic failover without any DNS TTL delays.</p>
           <ul>
-            <li><strong>Anycast routing:</strong> All PoPs announce the same IP prefix via BGP. User DNS resolves to CDN IP; BGP routes their TCP connection to the nearest PoP by AS-path topology.</li>
-            <li><strong>Pull CDN (lazy):</strong> Edge PoP receives miss, requests from origin shield, shield misses go to origin. First user gets higher latency; subsequent users get cached response.</li>
-            <li><strong>Push CDN (proactive):</strong> New content deployed to origin, CDN push API broadcasts to all PoPs. Good for large files (video), popular content known in advance.</li>
-            <li><strong>Origin shield:</strong> All PoP misses go to a regional shield tier before origin. If 1,000 PoPs simultaneously miss the same URL, only the shield(s) hit origin — 1,000× reduction in origin load.</li>
-            <li><strong>Cache invalidation:</strong> Content version in URL (cache-busting). Or CDN purge API: broadcast purge message to all PoPs via internal pub/sub.</li>
+            <li><strong>No DNS changes needed on failover:</strong> the IP stays the same, BGP routing changes. Failover is sub-second vs 30-300 seconds for DNS TTL-based failover.</li>
+            <li><strong>Natural DDoS mitigation:</strong> attack traffic is distributed across all PoPs globally (not concentrated at one IP), so the full CDN capacity absorbs the attack.</li>
+            <li><strong>Unicast alternative:</strong> GeoDNS returns different IPs per region. Slower failover (DNS TTL), but allows more explicit traffic steering. CDNs use anycast for edge IPs and GeoDNS for control plane / non-anycast paths.</li>
           </ul>
+
+          <h3>Cache Hierarchy: Why Two Tiers?</h3>
+          <p>The thundering herd problem: a popular piece of content expires simultaneously on all 200 PoP edge nodes. All 200 nodes send a cache miss request to origin at the same time. Origin is overwhelmed. The origin shield solves this with the "collapse" pattern:</p>
+          <ul>
+            <li>All L1 (edge) nodes for a region send their misses to the L2 (shield) node for that region instead of directly to origin.</li>
+            <li>The L2 shield collapses concurrent misses for the same cache key into a single origin request.</li>
+            <li>The L2 receives the origin response, caches it, and serves all the waiting L1 nodes.</li>
+            <li>Result: origin sees 1 request (from shield) instead of potentially thousands (from all L1 edges in region).</li>
+          </ul>
+
+          <h3>TTL Strategy by Content Type</h3>
+          <p>TTL is the most consequential CDN configuration decision. Too short: low cache hit rate, origin overloaded. Too long: stale content served after deployments.</p>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Content Type</th><th>Example</th><th>Recommended TTL</th><th>Reasoning</th></tr></thead>
+              <tbody>
+                <tr><td>Versioned static assets</td><td>main.a3f9.js, logo.v2.png</td><td>1 year (31536000s) + <code>immutable</code></td><td>Hash in filename = content-addressed. File content never changes at that URL. Safe to cache forever. Deploy creates new URL.</td></tr>
+                <tr><td>Unversioned static assets</td><td>logo.png, styles.css</td><td>1 hour</td><td>Can change but not frequently. Balance between freshness and cache efficiency.</td></tr>
+                <tr><td>HTML pages</td><td>index.html, /product/123</td><td>5 minutes or no-store</td><td>Pages change with deployments. Short TTL or bypassed for pages with user-specific content (auth state).</td></tr>
+                <tr><td>API responses (public)</td><td>GET /products?page=1</td><td>60 seconds</td><td>Can tolerate 60s staleness. Significantly reduces origin API load for popular queries.</td></tr>
+                <tr><td>API responses (private)</td><td>GET /user/profile</td><td>no-store</td><td>User-specific. Never cache. (Or cache with user ID in cache key &mdash; complex, usually not worth it.)</td></tr>
+                <tr><td>Video segments (HLS/DASH)</td><td>segment_001.ts</td><td>Forever (content-addressed)</td><td>Video segments are immutable. The playlist (.m3u8) is what changes, with a short TTL (10-30s for live).</td></tr>
+                <tr><td>404 responses</td><td>Non-existent URLs</td><td>60 seconds</td><td>Cache negative responses to prevent origin load from requests for deleted/invalid URLs.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ APIS ═══════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// CDN Management API
-POST /api/v1/purge      { urls: ["/static/app.js", "/images/*"] }
-POST /api/v1/prefetch   { urls: [...], priority: high|low }
-GET  /api/v1/stats      { pop_id, from, to } -> { hit_rate, bandwidth, requests }
+          <h3>CDN Management API (Control Plane)</h3>
+          <pre><code class="language-java">// Zone management
+POST   /v1/zones                              // Create CDN zone for a hostname
+GET    /v1/zones/{zoneId}                     // Get zone config
+PUT    /v1/zones/{zoneId}                     // Update zone config (cache rules, origin)
+DELETE /v1/zones/{zoneId}                     // Remove zone
 
-// Edge request flow (not customer-facing API - internal)
-// 1. User requests https://cdn.example.com/static/app.js
-// 2. Anycast routes to nearest PoP
-// 3. PoP checks local cache: HIT -> return content
-// 4. MISS -> request from origin shield -> shield checks its cache
-// 5. Shield MISS -> request from origin -> cache at shield -> cache at PoP -> return</code></pre>
+// Cache rules
+POST   /v1/zones/{zoneId}/cache-rules         // Add cache rule
+       Body: { path_pattern: "*.js", ttl_seconds: 31536000, vary_headers: ["Accept-Encoding"] }
+GET    /v1/zones/{zoneId}/cache-rules         // List all cache rules
+
+// Purge API
+POST   /v1/zones/{zoneId}/purge              // Purge cached content
+       Body (URL purge):       { "type": "url", "urls": ["https://example.com/style.css"] }
+       Body (surrogate key):   { "type": "tag", "tags": ["product-123", "category-shoes"] }
+       Body (wildcard):        { "type": "prefix", "prefix": "/images/" }
+       Body (purge all):       { "type": "all" }
+       Response: { "id": "purge_xyz", "status": "pending", "estimated_seconds": 5 }
+
+// Purge status
+GET    /v1/zones/{zoneId}/purge/{purgeId}    // Check purge propagation status per PoP
+
+// Analytics
+GET    /v1/zones/{zoneId}/analytics          // Request counts, cache hit rate, bandwidth
+       Query: ?from=2024-01-01&to=2024-01-07&granularity=1h</code></pre>
+
+          <h3>Request/Response Flow (Data Plane)</h3>
+          <pre><code class="language-java">// Request headers added by CDN (forwarded to origin on cache miss)
+X-Forwarded-For: 203.0.113.5           // Original client IP
+X-Real-IP: 203.0.113.5                 // Simplified client IP
+CF-Ray: 7a3f9c2d1b4e5f6a-IAD          // CDN request ID for debugging (Cloudflare style)
+X-CDN-Cache-Status: MISS               // HIT | MISS | EXPIRED | BYPASS
+CF-Visitor: {"scheme":"https"}          // TLS info forwarded to HTTP origin
+
+// Response headers added by CDN (seen by browser)
+X-CDN-Cache-Status: HIT
+Age: 3600                               // How long in cache (seconds)
+Cache-Control: public, max-age=31536000, immutable  // Echoed from origin
+ETag: "33a64df551425fcc55e4d42a148795d9f25f89d4"    // For conditional requests
+Cf-Cache-Status: HIT                    // Cloudflare-specific
+
+// Headers the origin can set for CDN behavior
+Surrogate-Key: product-123 category-shoes   // Tags for group invalidation
+Surrogate-Control: max-age=300          // CDN TTL (different from browser Cache-Control)
+CDN-Cache-Control: no-store             // CDN-specific cache control (browser still caches)
+Vary: Accept-Encoding, Accept-Language  // Separate cache entries per these header values</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ DEEP DIVE ═══════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Anycast routing deep dive:</strong></p>
-          <p>Anycast = same IP address advertised from multiple locations. When a user's DNS resolves cdn.example.com to 1.2.3.4, BGP routes their packets to whichever AS (autonomous system) announces 1.2.3.4 with the shortest AS-path. This naturally selects the closest PoP.</p>
-          <p><strong>Benefits:</strong> No per-user geographic routing logic. BGP handles failover automatically (if a PoP goes down, BGP withdraws its announcement, traffic reroutes to next-nearest).</p>
-          <p><strong>Cache hit rate optimization:</strong></p>
+
+          <h3>Cache Key Design: The Most Critical Decision</h3>
+          <p>The cache key determines when two requests share the same cached response. Wrong cache key design leads to either cache poisoning (serving wrong user's data) or unnecessary cache misses.</p>
+          <pre><code class="language-java">// Correct cache key: method + normalized URL + selected header values
+// WRONG: include session cookies in cache key → each user has own cache entry → 0% hit rate
+// WRONG: ignore Accept-Encoding → serve gzip to client that only accepts identity
+
+// Good cache key formula:
+cache_key = SHA256(
+    http_method +            // GET vs POST (POST should bypass, but include for safety)
+    normalize_url(url) +     // lowercase host, remove default ports, sort query params
+    vary_header_values       // ONLY the headers in the origin's Vary response header
+)
+
+// URL normalization:
+// 1. Lowercase scheme and host
+// 2. Remove default port (80 for http, 443 for https)
+// 3. Decode percent-encoding where safe (e.g., %41 → A, but keep %20 as-is or normalize to +)
+// 4. Sort query parameters alphabetically (so ?b=2&a=1 and ?a=1&b=2 are same key)
+// 5. Remove cache-busting timestamp params if configured (e.g., ?_=1234567890)
+
+// Vary header handling — the most dangerous footgun:
+// If origin returns: Vary: Accept-Encoding
+//   → CDN creates separate cache entries for gzip, br, identity
+//   → This is CORRECT and expected
+// If origin returns: Vary: Cookie
+//   → CDN creates separate cache entry for EVERY unique cookie string
+//   → With session cookies, EVERY request is a cache miss
+//   → CDN cache hit rate: effectively 0%
+//   → This is a catastrophic misconfiguration
+// CDN best practice: strip Cookie from Vary if you want caching.
+//   For private content, use CDN-Cache-Control: no-store instead.</code></pre>
+
+          <h3>TLS/SSL at the Edge</h3>
+          <p>Every PoP terminates TLS before forwarding to origin. This means:</p>
           <ul>
-            <li>Cache key normalization: strip non-meaningful query params, lowercase URLs</li>
-            <li>Vary header handling: if origin returns Vary: Accept-Encoding, cache separate versions for gzip vs brotli</li>
-            <li>Long TTL for versioned assets (max-age=31536000 for /static/app.v3.js)</li>
-            <li>Short TTL or no-cache for personalized content</li>
+            <li><strong>Shorter TLS handshake:</strong> user connects to the nearest PoP (low RTT), not the origin (high RTT). TLS handshake latency = 1 RTT for TLS 1.3. User in Tokyo connecting to AWS us-east-1 origin would do ~200ms handshake; connecting to Tokyo PoP: ~5ms.</li>
+            <li><strong>TLS 1.3 0-RTT resumption:</strong> returning users send data in the first message (no handshake round-trip). Reduces TTFB to near-zero for cached responses for returning visitors. Trade-off: 0-RTT is vulnerable to replay attacks for non-idempotent requests (POST). CDN should not use 0-RTT for POST/PUT/DELETE.</li>
+            <li><strong>OCSP stapling:</strong> TLS certificate validity is checked via OCSP (Online Certificate Status Protocol). Without stapling, the browser makes an OCSP request on every new TLS connection, adding 50-200ms. With stapling, the CDN edge includes the pre-fetched OCSP response in the TLS handshake — browser doesn't need to make its own OCSP request.</li>
+            <li><strong>Certificate management:</strong> CDN integrates with Let's Encrypt (ACME protocol) for automatic certificate issuance and renewal. Custom certificates uploaded via API. Multi-domain (SAN) and wildcard certificates shared across customer zones.</li>
+            <li><strong>Certificate revocation:</strong> if a private key is compromised, the CDN must rotate the certificate across all 200+ PoPs within minutes. This is done by pushing new certificates via the control plane and having each PoP reload nginx/envoy config gracefully (zero connection interruption via <code>nginx -s reload</code> or Envoy xDS API).</li>
           </ul>
-          <p><strong>Stale-while-revalidate:</strong> Serve stale cached content immediately while fetching fresh content in the background. User gets fast response, content gets updated asynchronously. The best of both worlds for content that can tolerate slight staleness.</p>
+
+          <h3>DDoS Mitigation Architecture</h3>
+          <p>CDNs absorb DDoS attacks in layers:</p>
+          <ul>
+            <li><strong>Layer 3/4 (network layer):</strong> anycast naturally distributes volumetric attack traffic across all PoPs globally. Cloudflare's 200 PoPs collectively have 100Tbps+ capacity — any attack below that is "absorbed." BGP blackholing can drop attack traffic at the routing level before it hits CDN infrastructure.</li>
+            <li><strong>Layer 7 (application layer):</strong> rate limiting by IP, user agent, and ASN (autonomous system number). Suspicious traffic (high request rate, unusual user agent, known bad IPs) receives challenge pages (JavaScript challenge or CAPTCHA) rather than being served immediately.</li>
+            <li><strong>IP reputation:</strong> shared threat intelligence across all CDN customers. An IP attacking Customer A is rate-limited for Customer B within minutes. Cloudflare's shared intelligence across 45M HTTP properties is a key competitive advantage.</li>
+            <li><strong>Traffic fingerprinting:</strong> HTTP/2 and TLS fingerprinting to identify bots even when they fake headers. JA3 (TLS fingerprint), HTTP/2 stream settings, header order — all vary between legitimate browsers and bot frameworks.</li>
+          </ul>
+
+          <h3>Purge Propagation: How to Purge All 200 PoPs in &lt;5s</h3>
+          <p>Purge propagation is a distributed system challenge. When a customer purges a URL, the invalidation must reach every edge node that has that URL cached before the CDN serves it again.</p>
+          <pre><code class="language-java">// Purge architecture:
+// 1. Customer calls POST /v1/zones/{zoneId}/purge (via control plane API)
+// 2. Control plane writes PurgeJob to Kafka topic "purge-jobs"
+// 3. Each PoP runs a consumer subscribed to "purge-jobs" topic
+// 4. Each PoP consumer receives the purge message and:
+//    a. For URL purge: delete cache entry for normalized URL hash
+//    b. For surrogate key purge: look up all cache keys tagged with this key, delete them
+//    c. For wildcard: iterate cache index and delete matching entries
+// 5. PoP sends ack message to "purge-acks" topic with {purge_id, pop_id, completed_at}
+// 6. Control plane tracks ack receipt, marks purge "complete" when all PoPs ack
+// 7. If a PoP doesn't ack within 10s: retry or mark that PoP degraded
+
+// Why Kafka works well here:
+// - Durable: purge jobs survive PoP restarts (consumer re-reads from offset)
+// - Ordered: purge then cache of new content won't race (purge before publish pattern)
+// - Scalable: 200 consumer groups (one per PoP) all read from same topic
+
+// Surrogate key lookup for bulk purge:
+// Redis SMEMBERS "stag:{zone}:{surrogate_key}" → Set of cache keys to delete
+// This lookup is O(tag_cardinality) — potentially expensive for large tag sets
+// Optimization: batch delete in chunks of 1000, background job, not synchronous</code></pre>
+
+          <div class="insight-box" style="background:linear-gradient(135deg,#fff7ed,#ffedd5);border-left:4px solid #ea580c;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x26A0;&#xFE0F; Dangerous cache key pitfall — Vary: Cookie:</strong> If your origin accidentally returns <code>Vary: Cookie</code> (often done by frameworks when any code reads a cookie), the CDN creates a separate cache entry for every unique set of cookies. Session cookies are unique per user, so every request is a cache miss and the CDN becomes a pure proxy. This is the #1 CDN misconfiguration in production. Fix: configure the CDN to strip Cookie from the Vary header for static assets, or use <code>CDN-Cache-Control: no-store</code> for dynamic content and only cache static paths.
+          </div>
+
+          <h3>Push vs Pull CDN Model</h3>
+          <ul>
+            <li><strong>Pull CDN (most common):</strong> edge fetches content from origin on first request (cache miss). Edge is a read-through cache. No pre-warming needed. Works for unpredictably popular content. Cloudflare, Akamai, CloudFront are all pull-based.</li>
+            <li><strong>Push CDN:</strong> origin explicitly pushes content to edge nodes before the first request. Required for content that must be available instantly (live video streams, real-time sports scores). Higher operational complexity (origin must know CDN topology). CDNs like BunnyCDN support push via API.</li>
+            <li><strong>Hybrid:</strong> push high-value predictable content (latest software release, video on premiere day), pull everything else.</li>
+          </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EVALUATE ═══════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
+          <h3>Requirements Coverage Check</h3>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Requirement</th><th>How met</th><th>Remaining risk</th></tr></thead>
+              <tbody>
+                <tr><td>95%+ cache hit rate</td><td>Two-tier cache, correct TTL strategy, versioned static assets = 100% hit rate</td><td>Dynamic API responses with low TTL drag overall hit rate down</td></tr>
+                <tr><td>&lt;10ms TTFB for cache hits</td><td>In-memory cache lookup + response serialization at edge ≈ 1-3ms</td><td>Large response bodies serialization; compression must be pre-computed at cache time</td></tr>
+                <tr><td>Purge within 5s</td><td>Kafka fan-out to all PoP consumers; each consumer deletes cache entries</td><td>PoP consumer lag if Kafka consumer falls behind; need monitoring on consumer group lag</td></tr>
+                <tr><td>DDoS 100Tbps</td><td>Anycast distributes across all PoP capacity globally</td><td>Application-layer attacks (GET floods) harder than volumetric; need rate limiting</td></tr>
+                <tr><td>99.999% availability</td><td>Anycast failover, no single PoP is critical, content cached at multiple locations</td><td>Control plane outage can't be allowed to affect data plane (edge must operate independently)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Data Plane / Control Plane Separation</h3>
+          <p>This is a critical design principle: the data plane (edge nodes serving cached content) must operate completely independently of the control plane (configuration management, analytics, purge API). If the control plane goes down:</p>
           <ul>
-            <li><strong>Cache invalidation at scale:</strong> Purging 1M URLs × 100 PoPs = 100M messages. Use hierarchical invalidation: PoPs subscribe to regional invalidation channel; regional shield subscribes to global channel.</li>
-            <li><strong>Thundering herd on popular content expiry:</strong> All PoPs simultaneously expire the same popular item. Mitigation: staggered TTL (add random jitter), or serve stale while revalidating in background (SWR pattern).</li>
+            <li>Edge nodes continue serving cached content from their local cache</li>
+            <li>Cache misses forward to origin using last-known configuration</li>
+            <li>Purge operations queue up and replay when control plane recovers</li>
+            <li>Config updates are delayed but cached at edge</li>
+          </ul>
+          <p>This is why each PoP pulls zone config on startup and caches it locally with a long TTL (5-minute refresh). The edge never makes synchronous calls to the control plane in the request path.</p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ DELIVER ═══════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <p><strong>Summary for the interview:</strong></p>
+          <p>A CDN is a globally distributed cache with anycast routing. Users connect to the nearest PoP via BGP anycast. The L1 edge node serves cache hits in &lt;10ms; misses go to the L2 origin shield which collapses thousands of concurrent misses into a single origin request. Cache key = normalized URL + selected Vary headers (never Cookie for public content). TTL strategy: versioned static assets (1 year + immutable), HTML (5 min), API responses (60s), user data (no-store). Purge propagates via Kafka fan-out to all 200+ PoPs within 5 seconds. DDoS is absorbed by anycast distributing attack traffic across global capacity plus rate limiting at L7.</p>
+          <p><strong>Phased delivery:</strong></p>
+          <ul>
+            <li><strong>Phase 1:</strong> Single region, pull CDN with L1 cache, basic TTL rules, URL purge.</li>
+            <li><strong>Phase 2:</strong> Multi-region, anycast routing, origin shield (L2), surrogate key purge, TLS at edge.</li>
+            <li><strong>Phase 3:</strong> DDoS mitigation, image optimization, analytics, WAF, real-time streaming support.</li>
           </ul>
         </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body">
-          <p>Summary: CDN = anycast routing + tiered cache (edge → shield → origin) + cache invalidation via versioned URLs (preferred) or purge API. Key insight: origin shield multiplies cache hit rate by aggregating misses across PoPs.</p>
-        </div>
-      </section>
-
+      <!-- ═══════════════════════════════ TRADEOFFS ═══════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
         <div class="content-section__body">
-          <table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th></tr></thead>
-            <tbody>
-              <tr><td>CDN strategy</td><td>Pull CDN: lazy, low cost, cold start latency</td><td>Push CDN: proactive, no cold start, storage overhead</td></tr>
-              <tr><td>Cache invalidation</td><td>URL versioning (cache-busting): zero invalidation cost, requires build tooling</td><td>Purge API: flexible, high invalidation cost at scale</td></tr>
-              <tr><td>Routing</td><td>Anycast: automatic, no routing logic, BGP convergence delay on failover</td><td>GeoDNS: configurable, requires DNS record management per region</td></tr>
-              <tr><td>TTL</td><td>Long TTL (1 year): best hit rate, stale risk on updates</td><td>Short TTL (5 min): always fresh, more origin load</td></tr>
-            </tbody>
-          </table>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Recommended</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Pull vs Push CDN</strong></td>
+                  <td>Pull: origin-on-demand, zero pre-warming, edge fetches on first miss</td>
+                  <td>Push: explicit pre-population, guaranteed availability before first request, higher operational complexity</td>
+                  <td>Pull for general use; Push for guaranteed low-latency delivery of known-popular content (software releases, major events)</td>
+                </tr>
+                <tr>
+                  <td><strong>Single-tier vs multi-tier cache</strong></td>
+                  <td>Single tier: simpler, direct edge-to-origin on miss</td>
+                  <td>Two-tier with origin shield: dramatically reduces origin load (400x reduction), collapses thundering herd, adds ~10-20ms latency for shield misses</td>
+                  <td>Two-tier is essential at scale. The origin protection benefit far outweighs the added latency on cache misses.</td>
+                </tr>
+                <tr>
+                  <td><strong>Centralized purge vs distributed TTL expiry</strong></td>
+                  <td>Short TTL (no explicit purge): simple, automatic expiry, but stale window up to TTL duration</td>
+                  <td>Long TTL + purge API: maximum cache hit rate, instant invalidation, but purge system must be reliable and fast</td>
+                  <td>Long TTL + purge for versioned assets and product data. Short TTL (&lt;5 min) for HTML and API responses where purge latency matters less.</td>
+                </tr>
+                <tr>
+                  <td><strong>Anycast vs GeoDNS routing</strong></td>
+                  <td>Anycast: same IP globally, BGP-based routing, sub-second failover</td>
+                  <td>GeoDNS: different IPs per region, DNS-based failover (30s-300s TTL delay), explicit region control</td>
+                  <td>Anycast for edge delivery (lower latency, better DDoS distribution, faster failover). GeoDNS acceptable for simpler deployments or where explicit region control is needed.</td>
+                </tr>
+                <tr>
+                  <td><strong>Cache key: include query params?</strong></td>
+                  <td>Include all query params: higher accuracy (no false hits), lower cache hit rate (?utm_source= pollution creates unique keys)</td>
+                  <td>Ignore/normalize query params: higher cache hit rate, risk of serving wrong cached response if query param affects content</td>
+                  <td>Sort query params (normalize order). Optionally strip known-tracking params (utm_*, fbclid, gclid) that don't affect content. Always include params that affect content.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ IMPLEMENTATION ═══════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * OriginShieldProxy -- implements tiered cache hierarchy.
- * Edge -&gt; Shield -&gt; Origin. Reduces origin load by aggregating misses per region.
+ * CacheKeyBuilder — produces a normalized, deterministic cache key for each request.
+ *
+ * Design choices:
+ * - Sort query params to treat ?a=1&b=2 and ?b=2&a=1 as the same cache entry.
+ * - Include Vary header values (from origin response) to separate cache entries
+ *   when origin returns different content for different Accept-Encoding values.
+ * - Never include Cookie or Authorization in cache key for public content.
  */
-public class OriginShieldProxy {
-    private final Map&lt;String, CachedEntry&gt; localCache = new ConcurrentHashMap&lt;&gt;();
-    private final OriginShieldProxy regionShield;  // null if this IS the shield
-    private final OriginClient originClient;
+public class CacheKeyBuilder {
 
-    public OriginShieldProxy(OriginShieldProxy regionShield, OriginClient originClient) {
-        this.regionShield = regionShield;
-        this.originClient = originClient;
+    private final Set&lt;String&gt; trackingParamsToStrip;
+
+    public CacheKeyBuilder(Set&lt;String&gt; trackingParamsToStrip) {
+        this.trackingParamsToStrip = Set.copyOf(trackingParamsToStrip);
     }
 
     /**
-     * Serves a request from cache, regional shield, or origin.
-     * Implements stale-while-revalidate: serve stale immediately, refresh async.
+     * Builds the cache key for a request.
+     *
+     * @param method       HTTP method (only GET/HEAD should be cached)
+     * @param rawUrl       Full URL including query string
+     * @param varyHeaders  Map of header-name to header-value for headers listed in Vary
+     * @return SHA-256 hex string suitable as a cache key
      */
-    public CachedResponse serve(String cacheKey) {
-        CachedEntry localEntry = localCache.get(cacheKey);
+    public String build(String method, String rawUrl, Map&lt;String, String&gt; varyHeaders) {
+        String normalizedUrl = normalizeUrl(rawUrl);
+        String varyString = buildVaryString(varyHeaders);
 
-        if (localEntry != null &amp;&amp; !localEntry.isExpired()) {
-            return CachedResponse.fromCache(localEntry.getContent(), "HIT");
-        }
+        String keyInput = method.toUpperCase() + "|" + normalizedUrl + "|" + varyString;
 
-        if (localEntry != null &amp;&amp; localEntry.isStaleWithinGracePeriod()) {
-            // Serve stale, refresh async (stale-while-revalidate)
-            refreshAsync(cacheKey);
-            return CachedResponse.fromCache(localEntry.getContent(), "STALE");
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(keyInput.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hashBytes);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new RuntimeException("SHA-256 not available", impossible);
         }
-
-        // Cache miss -- request from regional shield (or origin if we are the shield)
-        CachedResponse upstreamResponse = fetchFromUpstream(cacheKey);
-        if (upstreamResponse.isCacheable()) {
-            localCache.put(cacheKey, new CachedEntry(
-                upstreamResponse.getContent(),
-                System.currentTimeMillis() + upstreamResponse.getTtlMs(),
-                upstreamResponse.getTtlMs() + 30_000  // 30s grace period for stale
-            ));
-        }
-        return upstreamResponse;
     }
 
-    private CachedResponse fetchFromUpstream(String cacheKey) {
-        if (regionShield != null) {
-            return regionShield.serve(cacheKey);  // ask regional shield
+    private String normalizeUrl(String rawUrl) {
+        try {
+            URI uri = new URI(rawUrl);
+
+            String scheme = uri.getScheme().toLowerCase();
+            String host = uri.getHost().toLowerCase();
+            int port = uri.getPort();
+            String normalizedHost = isDefaultPort(scheme, port)
+                ? host
+                : host + ":" + port;
+
+            String path = uri.getPath().isEmpty() ? "/" : uri.getPath();
+            String normalizedQuery = normalizeQueryString(uri.getQuery());
+
+            return scheme + "://" + normalizedHost + path +
+                   (normalizedQuery.isEmpty() ? "" : "?" + normalizedQuery);
+        } catch (URISyntaxException parseError) {
+            // Fall back to raw URL if parsing fails
+            return rawUrl.toLowerCase();
         }
-        return originClient.fetch(cacheKey);  // we are the shield -- go to origin
     }
 
-    private void refreshAsync(String cacheKey) {
-        Thread.ofVirtual().start(() -&gt; {
-            CachedResponse freshContent = fetchFromUpstream(cacheKey);
-            if (freshContent.isCacheable()) {
-                localCache.put(cacheKey, new CachedEntry(
-                    freshContent.getContent(),
-                    System.currentTimeMillis() + freshContent.getTtlMs(),
-                    freshContent.getTtlMs() + 30_000
-                ));
+    private String normalizeQueryString(String rawQuery) {
+        if (rawQuery == null || rawQuery.isEmpty()) return "";
+
+        // Parse, filter tracking params, sort, reassemble
+        return Arrays.stream(rawQuery.split("&"))
+            .map(param -> param.split("=", 2))
+            .filter(parts -> parts.length == 2)
+            .filter(parts -> !trackingParamsToStrip.contains(parts[0].toLowerCase()))
+            .sorted(Comparator.comparing(parts -> parts[0]))
+            .map(parts -> parts[0] + "=" + parts[1])
+            .collect(Collectors.joining("&"));
+    }
+
+    private String buildVaryString(Map&lt;String, String&gt; varyHeaders) {
+        // Sort by header name for deterministic ordering
+        return varyHeaders.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .map(entry -> entry.getKey().toLowerCase() + "=" + entry.getValue())
+            .collect(Collectors.joining(";"));
+    }
+
+    private boolean isDefaultPort(String scheme, int port) {
+        return port == -1
+            || (scheme.equals("http") &amp;&amp; port == 80)
+            || (scheme.equals("https") &amp;&amp; port == 443);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CacheTtlPolicy — determines the appropriate TTL for a cached response
+// based on response headers and content type.
+// ─────────────────────────────────────────────────────────────────────────────
+public class CacheTtlPolicy {
+
+    private static final int TTL_STATIC_VERSIONED_S = 365 * 24 * 3600;  // 1 year
+    private static final int TTL_STATIC_UNVERSIONED_S = 3600;            // 1 hour
+    private static final int TTL_HTML_S = 300;                           // 5 minutes
+    private static final int TTL_API_RESPONSE_S = 60;                    // 1 minute
+    private static final int TTL_NO_CACHE = 0;                           // bypass
+
+    private final Map&lt;String, CacheRuleConfig&gt; pathRules;
+
+    public CacheTtlPolicy(Map&lt;String, CacheRuleConfig&gt; pathRules) {
+        this.pathRules = pathRules;
+    }
+
+    /**
+     * Determines TTL for caching a response.
+     * Priority: CDN-specific override &gt; Surrogate-Control &gt; Cache-Control &gt; Content-type heuristic.
+     *
+     * @return ttl in seconds. 0 = do not cache.
+     */
+    public int determineTtl(String requestPath, Map&lt;String, String&gt; responseHeaders, int statusCode) {
+        // 5xx errors: never cache
+        if (statusCode &gt;= 500) return TTL_NO_CACHE;
+
+        // CDN-Cache-Control header takes highest priority (allows different CDN vs browser TTL)
+        String cdnCacheControl = responseHeaders.get("CDN-Cache-Control");
+        if (cdnCacheControl != null) {
+            if (cdnCacheControl.contains("no-store")) return TTL_NO_CACHE;
+            int maxAge = extractMaxAge(cdnCacheControl);
+            if (maxAge &gt;= 0) return maxAge;
+        }
+
+        // Surrogate-Control (Fastly / Varnish convention)
+        String surrogateControl = responseHeaders.get("Surrogate-Control");
+        if (surrogateControl != null) {
+            int maxAge = extractMaxAge(surrogateControl);
+            if (maxAge &gt;= 0) return maxAge;
+        }
+
+        // Standard Cache-Control header
+        String cacheControl = responseHeaders.get("Cache-Control");
+        if (cacheControl != null) {
+            if (cacheControl.contains("no-store") || cacheControl.contains("private")) return TTL_NO_CACHE;
+            int maxAge = extractMaxAge(cacheControl);
+            if (maxAge &gt;= 0) return maxAge;
+        }
+
+        // Heuristic TTL based on content type and path
+        return heuristicTtl(requestPath, responseHeaders.get("Content-Type"));
+    }
+
+    private int heuristicTtl(String path, String contentType) {
+        // Versioned assets (hash in filename): cache for 1 year
+        if (path.matches(".*\\.[a-f0-9]{8,}\\.(js|css|png|jpg|woff2?).*")) {
+            return TTL_STATIC_VERSIONED_S;
+        }
+
+        if (contentType == null) return TTL_HTML_S;
+
+        if (contentType.startsWith("application/json")) return TTL_API_RESPONSE_S;
+        if (contentType.startsWith("text/html")) return TTL_HTML_S;
+        if (contentType.startsWith("image/") || contentType.startsWith("font/")) return TTL_STATIC_UNVERSIONED_S;
+        if (contentType.startsWith("text/javascript") || contentType.contains("css")) return TTL_STATIC_UNVERSIONED_S;
+        if (contentType.startsWith("video/") || contentType.startsWith("audio/")) return TTL_STATIC_VERSIONED_S;
+
+        return TTL_HTML_S;  // Conservative default
+    }
+
+    private int extractMaxAge(String cacheControlValue) {
+        // Parse "max-age=3600" from Cache-Control header value
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+            .compile("max-age=(\\d+)")
+            .matcher(cacheControlValue);
+        if (matcher.find()) return Integer.parseInt(matcher.group(1));
+        return -1;  // Not found
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OriginShieldRouter — routes cache misses to the appropriate L2 origin shield node.
+// Uses consistent hashing to ensure the same URL always hits the same shield node.
+// ─────────────────────────────────────────────────────────────────────────────
+public class OriginShieldRouter {
+
+    private final List&lt;String&gt; shieldNodes;    // e.g., ["shield-iad.cdn.internal", "shield-fra.cdn.internal"]
+    private final ConsistentHashRing hashRing;  // Virtual nodes for even distribution
+
+    public OriginShieldRouter(List&lt;String&gt; shieldNodes) {
+        this.shieldNodes = List.copyOf(shieldNodes);
+        this.hashRing = new ConsistentHashRing(shieldNodes, 150);  // 150 virtual nodes per real node
+    }
+
+    /**
+     * Returns the shield node that should handle a cache miss for the given cache key.
+     *
+     * Consistent hashing ensures: same cache key → same shield node.
+     * This prevents thundering herd: 100 L1 edge nodes all missing the same URL
+     * → all route to the same L2 shield node → shield collapses them into 1 origin request.
+     */
+    public String routeMissToShield(String cacheKey) {
+        return hashRing.getNode(cacheKey);
+    }
+
+    private static class ConsistentHashRing {
+        private final TreeMap&lt;Integer, String&gt; ring = new TreeMap&lt;&gt;();
+
+        ConsistentHashRing(List&lt;String&gt; nodes, int virtualNodesPerNode) {
+            for (String node : nodes) {
+                for (int virtualNode = 0; virtualNode &lt; virtualNodesPerNode; virtualNode++) {
+                    int hash = hash(node + ":" + virtualNode);
+                    ring.put(hash, node);
+                }
             }
-        });
+        }
+
+        String getNode(String key) {
+            if (ring.isEmpty()) throw new IllegalStateException("No shield nodes available");
+            int keyHash = hash(key);
+            // Find the first node with hash &gt;= keyHash (clockwise on the ring)
+            Map.Entry&lt;Integer, String&gt; entry = ring.ceilingEntry(keyHash);
+            if (entry == null) entry = ring.firstEntry();  // Wrap around
+            return entry.getValue();
+        }
+
+        private int hash(String input) {
+            try {
+                MessageDigest digest = MessageDigest.getInstance("MD5");
+                byte[] bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+                return ((bytes[0] &amp; 0xFF) &lt;&lt; 24) | ((bytes[1] &amp; 0xFF) &lt;&lt; 16)
+                     | ((bytes[2] &amp; 0xFF) &lt;&lt; 8)  | (bytes[3] &amp; 0xFF);
+            } catch (NoSuchAlgorithmException impossible) {
+                return input.hashCode();
+            }
+        }
     }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EXTENDED IMPLEMENTATION ═══════════════════════════════ -->
+      <section class="content-section" id="extended-impl" aria-labelledby="ext-impl-title">
+        <h2 class="content-section__title" id="ext-impl-title"><span class="content-section__title-icon">&#x2615;</span>Extended Java: Edge Cache Manager</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * EdgeCacheManager — manages a local LRU cache at a CDN edge node.
+ * Handles cache lookup, storage, eviction, and TTL-based expiry.
+ *
+ * Two-tier: hot objects in ConcurrentHashMap (RAM), overflow on SSD (omitted for brevity).
+ * LRU eviction using LinkedHashMap access-order mode wrapped in synchronization.
+ */
+public class EdgeCacheManager {
+
+    private static final int MAX_ENTRIES = 200_000;  // ~100GB at 500KB avg
+
+    // Access-ordered LinkedHashMap: LRU eviction when size exceeds MAX_ENTRIES
+    private final Map&lt;String, CachedObject&gt; cacheStore;
+    private final CacheTtlPolicy ttlPolicy;
+    private final CacheKeyBuilder cacheKeyBuilder;
+
+    // Metrics
+    private final AtomicLong hitCount = new AtomicLong(0);
+    private final AtomicLong missCount = new AtomicLong(0);
+    private final AtomicLong evictionCount = new AtomicLong(0);
+
+    public EdgeCacheManager(CacheTtlPolicy ttlPolicy, CacheKeyBuilder cacheKeyBuilder) {
+        this.ttlPolicy = ttlPolicy;
+        this.cacheKeyBuilder = cacheKeyBuilder;
+        // LinkedHashMap with access order: eldest entry evicted when over capacity
+        this.cacheStore = Collections.synchronizedMap(
+            new LinkedHashMap&lt;String, CachedObject&gt;(MAX_ENTRIES, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry&lt;String, CachedObject&gt; eldest) {
+                    if (size() &gt; MAX_ENTRIES) {
+                        evictionCount.incrementAndGet();
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        );
+    }
+
+    /**
+     * Attempts to serve the request from cache.
+     * Returns CacheHitResult if hit, null if miss.
+     *
+     * @param method        HTTP method
+     * @param url           Full request URL
+     * @param requestHeaders request headers (for Vary header matching)
+     * @return CachedObject if cache hit, null if miss or expired
+     */
+    public CachedObject get(String method, String url, Map&lt;String, String&gt; requestHeaders) {
+        if (!isCacheable(method)) return null;
+
+        // We don't know Vary headers until we have a cached response to check
+        // First lookup without Vary, then verify Vary headers match
+        String baseKey = cacheKeyBuilder.build(method, url, Map.of());
+        CachedObject cached = cacheStore.get(baseKey);
+
+        if (cached == null) {
+            // Try with common Vary header combinations
+            String varyKey = buildVaryAwareKey(method, url, requestHeaders, cached);
+            cached = cacheStore.get(varyKey);
+        }
+
+        if (cached == null) {
+            missCount.incrementAndGet();
+            return null;
+        }
+
+        // Check TTL expiry
+        if (System.currentTimeMillis() / 1000L &gt; cached.expiresAtEpoch()) {
+            cacheStore.remove(baseKey);  // Evict expired entry
+            missCount.incrementAndGet();
+            return null;  // Return MISS so edge fetches fresh copy from shield/origin
+        }
+
+        hitCount.incrementAndGet();
+        return cached;
+    }
+
+    /**
+     * Stores a response in cache.
+     * Determines TTL from response headers and content type.
+     *
+     * @param method          HTTP method
+     * @param url             Request URL
+     * @param responseStatus  HTTP response status code
+     * @param responseHeaders Response headers from origin/shield
+     * @param responseBody    Response body bytes
+     * @param varyValues      Values of headers listed in Vary response header
+     */
+    public void put(String method, String url, int responseStatus,
+                    Map&lt;String, String&gt; responseHeaders, byte[] responseBody,
+                    Map&lt;String, String&gt; varyValues) {
+        if (!isCacheable(method) || !isCacheableStatus(responseStatus)) return;
+
+        int ttlSeconds = ttlPolicy.determineTtl(extractPath(url), responseHeaders, responseStatus);
+        if (ttlSeconds == 0) return;  // Cache policy says do not cache
+
+        String cacheKey = cacheKeyBuilder.build(method, url, varyValues);
+        long now = System.currentTimeMillis() / 1000L;
+
+        CachedObject cachedObject = new CachedObject(
+            cacheKey,
+            responseStatus,
+            Map.copyOf(responseHeaders),
+            responseBody,
+            responseBody.length,
+            now,
+            now + ttlSeconds,
+            responseHeaders.getOrDefault("ETag", null),
+            responseHeaders.getOrDefault("Last-Modified", null),
+            extractSurrogateKeys(responseHeaders)
+        );
+
+        cacheStore.put(cacheKey, cachedObject);
+    }
+
+    /**
+     * Purges a specific cache entry by URL.
+     * Called when CDN receives a purge instruction from control plane.
+     */
+    public boolean purgeByUrl(String method, String url) {
+        String baseKey = cacheKeyBuilder.build(method, url, Map.of());
+        boolean removed = cacheStore.remove(baseKey) != null;
+        // Also try to remove any Vary-keyed variants (simplified: remove by prefix scan)
+        cacheStore.entrySet().removeIf(entry -&gt; entry.getValue().cacheKey().startsWith(baseKey));
+        return removed;
+    }
+
+    /**
+     * Purges all entries tagged with a given surrogate key.
+     * More expensive O(N) scan — background operation only.
+     */
+    public int purgeBySurrogateKey(String surrogateKey) {
+        int removedCount = 0;
+        Iterator&lt;Map.Entry&lt;String, CachedObject&gt;&gt; iterator = cacheStore.entrySet().iterator();
+        while (iterator.hasNext()) {
+            CachedObject entry = iterator.next().getValue();
+            if (entry.surrogateKeys().contains(surrogateKey)) {
+                iterator.remove();
+                removedCount++;
+            }
+        }
+        return removedCount;
+    }
+
+    private boolean isCacheable(String method) {
+        return "GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method);
+    }
+
+    private boolean isCacheableStatus(int status) {
+        return status == 200 || status == 301 || status == 302
+            || status == 304 || status == 404 || status == 410;
+    }
+
+    private String extractPath(String url) {
+        int queryIndex = url.indexOf('?');
+        String withoutQuery = queryIndex &gt;= 0 ? url.substring(0, queryIndex) : url;
+        int pathIndex = withoutQuery.indexOf('/', 8);  // skip "https://"
+        return pathIndex &gt;= 0 ? withoutQuery.substring(pathIndex) : "/";
+    }
+
+    private List&lt;String&gt; extractSurrogateKeys(Map&lt;String, String&gt; responseHeaders) {
+        String surrogateKeyHeader = responseHeaders.get("Surrogate-Key");
+        if (surrogateKeyHeader == null) return List.of();
+        return Arrays.asList(surrogateKeyHeader.split("\\s+"));
+    }
+
+    private String buildVaryAwareKey(String method, String url,
+                                      Map&lt;String, String&gt; requestHeaders,
+                                      CachedObject existingEntry) {
+        // If we have an existing entry, use its Vary headers to build the right key
+        // Otherwise, try common Vary headers (Accept-Encoding first)
+        Map&lt;String, String&gt; varyValues = new LinkedHashMap&lt;&gt;();
+        String acceptEncoding = requestHeaders.get("Accept-Encoding");
+        if (acceptEncoding != null) varyValues.put("Accept-Encoding", acceptEncoding);
+        return cacheKeyBuilder.build(method, url, varyValues);
+    }
+
+    public double hitRate() {
+        long total = hitCount.get() + missCount.get();
+        return total == 0 ? 0.0 : (double) hitCount.get() / total;
+    }
+
+    public record CachedObject(
+        String cacheKey,
+        int status,
+        Map&lt;String, String&gt; headers,
+        byte[] body,
+        long contentLength,
+        long cachedAtEpoch,
+        long expiresAtEpoch,
+        String etag,
+        String lastModified,
+        List&lt;String&gt; surrogateKeys
+    ) {}
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ ADDITIONAL DEEP DIVE ═══════════════════════════════ -->
+      <section class="content-section" id="advanced-cdn-patterns" aria-labelledby="adv-cdn-title">
+        <h2 class="content-section__title" id="adv-cdn-title"><span class="content-section__title-icon">&#x1F4DA;</span>Advanced CDN Patterns</h2>
+        <div class="content-section__body">
+          <h3>Edge-Side Includes (ESI) and Edge Compute</h3>
+          <p>Modern CDNs like Cloudflare Workers and AWS Lambda@Edge allow executing code at the edge PoP — inside the CDN, before the response reaches the user. This enables patterns beyond simple caching:</p>
+          <ul>
+            <li><strong>A/B testing at the edge:</strong> edge function reads experiment assignment cookie, rewrites the URL to the appropriate variant backend without a round-trip to origin. Zero latency overhead for experiment routing.</li>
+            <li><strong>Personalization at the edge:</strong> edge function injects user's country or language segment into the cache key, serving country-specific content (currency, language, promotions) from the correct cached variant.</li>
+            <li><strong>Authentication offload:</strong> edge function validates JWT or session cookie. Unauthorized requests are rejected at the PoP — origin never receives unauthenticated traffic. Same pattern as API gateway auth but at the CDN layer for static+dynamic hybrid apps.</li>
+            <li><strong>Request coalescing:</strong> multiple concurrent requests for the same uncached URL are "coalesced" — the first request fetches from origin, subsequent ones wait and receive the same response. This is the edge node implementing the same thundering herd protection that origin shield provides at the regional level, but now at the individual PoP level.</li>
+          </ul>
+
+          <h3>Video Delivery: HLS/DASH Streaming Architecture</h3>
+          <p>Video is the highest-traffic use case for CDNs (Netflix, YouTube together generate ~25% of all internet traffic). The adaptive bitrate streaming architecture (HLS/DASH) is designed to work exceptionally well with CDNs:</p>
+          <pre><code class="language-java">// HLS (HTTP Live Streaming) URL structure:
+//
+// Master playlist (changes rarely — list of quality variants):
+// https://cdn.netflix.com/video_123/master.m3u8
+// TTL: 60 seconds (can change as new quality levels are added)
+//
+// Variant playlist (changes during live, static for VOD):
+// https://cdn.netflix.com/video_123/1080p/playlist.m3u8
+// TTL: VOD: 1 year (immutable). Live: 2-5 seconds (constantly updated).
+//
+// Video segments (immutable, content-addressed):
+// https://cdn.netflix.com/video_123/1080p/seg_001.ts
+// https://cdn.netflix.com/video_123/1080p/seg_002.ts
+// TTL: Forever (1 year + immutable). Segment content never changes.
+//
+// CDN cache behavior:
+// 1. Player requests master.m3u8 → likely cached (60s TTL)
+// 2. Player requests 1080p/playlist.m3u8 → cached for TTL, then refresh
+// 3. Player requests seg_001.ts → cache HIT on first playback by any user in this PoP
+//    All subsequent viewers at this PoP serve from cache — origin offload: 99%+
+//
+// The key insight: video segments are perfect for CDN caching because:
+// a. They are large (2-10MB each) → fewer cache entries needed
+// b. They are immutable (content hash in filename)
+// c. Multiple users watch the same content → excellent cache hit rate
+// d. Sequential access pattern is predictable → CDN can prefetch next segments</code></pre>
+
+          <h3>CDN Security: WAF (Web Application Firewall) Integration</h3>
+          <p>Beyond DDoS mitigation, CDNs integrate WAF rules that inspect Layer 7 (HTTP) traffic:</p>
+          <ul>
+            <li><strong>OWASP Top 10 protection:</strong> SQL injection, XSS, CSRF, path traversal patterns detected in URL and POST body before reaching origin. Cloudflare and AWS WAF maintain rule sets updated against new attack patterns.</li>
+            <li><strong>Bot management:</strong> distinguish legitimate bots (Googlebot, Bingbot) from malicious scrapers using TLS fingerprinting (JA3), HTTP/2 fingerprinting (GREASE, header order), and behavioral analysis (too-regular request intervals, no-JS execution).</li>
+            <li><strong>Rate limiting at WAF:</strong> challenge or block IPs exceeding request rate thresholds. Challenge (CAPTCHA) rather than block when origin could be legitimate (shared NAT with many users behind same IP).</li>
+            <li><strong>Credential stuffing detection:</strong> login endpoint: detect automated credential testing (many failed logins from distributed IPs, common password dictionaries). Rate limit + CAPTCHA at CDN edge before requests hit your auth service.</li>
+          </ul>
+
+          <h3>Cache Warming Strategy for Major Events</h3>
+          <p>When a major event drives sudden traffic spikes (product launch, sports final, news event), cold CDN caches result in a thundering herd hitting origin simultaneously. Proactive cache warming:</p>
+          <ul>
+            <li><strong>Pre-populate before event:</strong> send synthetic requests to all PoPs 30-60 minutes before the expected traffic spike. The CDN fetches from origin, populates the cache. Event traffic hits warm cache.</li>
+            <li><strong>Staggered warm-up:</strong> warm PoPs closest to expected traffic first. US event: warm US PoPs first, then global PoPs as traffic spreads.</li>
+            <li><strong>Reduced TTL before purge:</strong> for content that changes at event start (product page revealing new price), set TTL to 30 seconds in the 5 minutes before launch. After launch, purge stale content and set normal TTL. This bounds the "flash of wrong content" window.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ QUIZ ═══════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-cdn-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Which routing mechanism ensures a user's request reaches the nearest CDN PoP automatically?" data-options='["GeoDNS -- DNS returns different IPs per geographic region","Anycast routing -- all PoPs announce the same IP prefix via BGP; the network automatically routes packets to the topologically nearest PoP","HTTP 302 redirect to nearest PoP URL","Client-side JavaScript detects nearest PoP by ping timing"]' data-correct="1" data-explanation="Anycast is elegant: the infrastructure itself does the routing, not application code. BGP selects paths with the fewest AS hops. GeoDNS is also valid but requires DNS record per region and cannot adapt to real-time network conditions like BGP can." style="display:none"></div>
-          <div data-question="What problem does the origin shield solve?" data-options='["Origin shields provide DDoS protection","When a popular piece of content expires simultaneously across 1,000 PoPs, all 1,000 immediately request it from origin -- a thundering herd. Origin shield aggregates all PoP misses at a regional tier; only the shield hits origin, reducing a 1,000-request spike to 1.","Origin shields store backup copies of the entire CDN","Origin shields improve SSL handshake performance"]' data-correct="1" data-explanation="Without an origin shield, N PoPs x M simultaneous misses = N*M origin requests. With an origin shield, the shield hits origin once. For viral content or synchronized TTL expiry events, this difference is the distinction between origin surviving and falling over." style="display:none"></div>
-          <div data-question="Why is cache key normalization important for CDN cache hit rate?" data-options='["Cache key normalization reduces storage usage by deduplicating content","The same content may be requested with different URL forms: uppercase/lowercase, extra query params, different query param order. Normalizing ensures all variants map to the same cache key, dramatically improving cache hit rate.","Normalization is required to support HTTP/2 push","Cache keys must be normalized for SSL termination to work correctly"]' data-correct="1" data-explanation="Without normalization, /page?utm_source=email&id=1 and /page?id=1&utm_source=email are different cache keys. Stripping tracking parameters (utm_*, fbclid) alone can increase cache hit rate by 10-20% for marketing-heavy sites." style="display:none"></div>
-          <div data-question="Content versioning (e.g., /static/app.v42.js) is preferred over CDN cache purging for static assets. Why?" data-options='["CDN purge APIs are too expensive","Versioned URLs allow setting max-age=31536000 (1 year) -- the client caches forever and CDN hit rate is near 100%. Cache purging requires broadcasting invalidation to all PoPs (potentially 100M messages) and takes 10-60 seconds to propagate. Versioning eliminates this entirely.","CDN purge is not supported by all CDN providers","Versioned URLs are required by browser security policy"]' data-correct="1" data-explanation="This is cache-busting via URL change: when content changes, its URL changes. Old URL stays cached harmlessly. New URL is a miss, fetched once, then cached forever. One deploy = zero invalidation overhead. CDN purge is appropriate for content that cannot be versioned (e.g., /index.html)." style="display:none"></div>
+
+          <div data-question="How does anycast routing work, and why does it provide better failover than GeoDNS?" data-options='["Anycast requires special DNS configuration that routes users to the nearest server based on geographic location lookups", "Anycast advertises the same IP address from multiple PoPs via BGP. The internet routing infrastructure routes each user to the PoP that BGP considers closest. If a PoP fails, it withdraws its BGP announcement and routers re-route to the next-closest PoP within seconds — no DNS TTL delay. GeoDNS failover requires waiting for DNS TTL expiry (30-300 seconds), during which clients continue routing to the failed server.", "Anycast is only useful for DDoS protection and does not improve normal request latency", "Anycast requires the CDN to maintain a database of user IP-to-location mappings for routing decisions"]' data-correct="1" data-explanation="BGP convergence after a PoP failure is typically 10-30 seconds for anycast, vs 30-300 seconds for DNS TTL-based GeoDNS failover. For a system targeting 99.999% availability (5.26 minutes downtime per year), faster failover directly improves SLA. The additional DDoS benefit — distributing attack traffic across all PoP capacity globally — is why Cloudflare can absorb 100Tbps attacks that would overwhelm any single datacenter." style="display:none"></div>
+
+          <div data-question="Why is 'Vary: Cookie' catastrophic for CDN cache hit rates, and how do you fix it?" data-options='["Vary: Cookie is fine — it simply means the CDN caches one copy of the content per unique cookie value, which is efficient", "Vary: Cookie instructs the CDN to cache a separate response for every unique Cookie header value. Since session cookies are unique per user, every request creates a new cache entry — the cache hit rate drops to effectively 0% and the CDN becomes a pure proxy. Fix: configure the CDN to ignore Cookie in the Vary calculation for cacheable content, or have origin return CDN-Cache-Control: no-store for user-specific content and cache only public content.", "Vary: Cookie only affects performance if there are more than 1000 concurrent users", "Vary: Cookie can be fixed by increasing CDN cache storage capacity"]' data-correct="1" data-explanation="The Vary header is a powerful but dangerous mechanism. Vary: Accept-Encoding is safe (only gzip, br, identity — 3 variants). Vary: Accept-Language is risky (potentially 50+ language variants). Vary: Cookie is catastrophic (as many variants as users). The CDN-Cache-Control header (Fastly, Varnish) or surrogate-specific headers allow separate CDN and browser cache control, letting origin keep browser caching for session tokens while stripping Cookie from the CDN's cache key calculation." style="display:none"></div>
+
+          <div data-question="What is the origin shield (L2 cache), and how does it solve the thundering herd problem?" data-options='["Origin shield is a backup origin server that takes over if the primary origin fails", "Origin shield is a mid-tier cache layer between L1 edge nodes and origin. Without it: when content expires simultaneously on 200 L1 edge nodes, all 200 send cache miss requests to origin (thundering herd). With origin shield: all 200 L1 edge nodes route their misses to a single regional shield node, which collapses concurrent misses for the same URL into one origin request. The shield fetches once, caches the response, and serves all 200 L1 nodes. Origin sees 1 request instead of 200.", "The origin shield prevents DDoS attacks from reaching the origin by blocking all direct traffic", "Origin shield refers to SSL certificate management that prevents MITM attacks on origin-to-CDN traffic"]' data-correct="1" data-explanation="Thundering herd math: 1M req/sec with 60% cache hit rate = 400K misses/sec hitting origin. With 20 shield nodes (one per region): 400K misses → 20 shield nodes → at most 1 request per unique URL per shield node per TTL period. Working set 1M URLs, TTL 60s: max origin load = 1M/60 ≈ 16K req/sec. That's 25x reduction in origin load — all from adding an L2 caching tier. Consistent hashing in the OriginShieldRouter ensures the same cache key always routes to the same shield node for maximum collapse efficiency." style="display:none"></div>
+
+          <div data-question="An e-commerce site has 1M product images. After deploying a design refresh that changes 500K images, cache hit rate drops to near zero. What went wrong with their TTL strategy and how do you fix it?" data-options='["The issue is insufficient CDN storage capacity — they need more disk space to cache 1M images", "Their images likely use URL patterns like /images/product_123.jpg (unversioned URLs). After replacing image content at the same URL, the CDN serves stale cached versions until TTL expires (possibly 1 hour or more). Fix: use content-addressed versioned URLs — include a content hash in the filename: /images/product_123.a3f9c2.jpg. Now TTL can be 1 year + immutable. When image changes, the URL changes (new hash). Old URL can be purged. New URL cold-starts with 100% miss then warms quickly.", "They should reduce TTL to 1 second so images are always fresh after deployment", "CDN cache invalidation cannot be done for images — only for HTML pages"]' data-correct="1" data-explanation="Content-addressed versioning is the standard solution: hash the file content, include the hash in the URL. This gives you the best of both worlds: indefinite caching (1 year + immutable) for existing URLs (their content literally cannot change), and instant freshness for new content (new hash = new URL = cold cache = fresh origin fetch). All modern build tools (Webpack, Vite, Parcel) generate content-hashed filenames by default. The HTML page itself references the new hashed URL." style="display:none"></div>
+
+          <div data-question="How does purge propagation work when a product changes and the CDN needs to invalidate all cached responses tagged with 'product-456' across 200+ PoPs globally within 5 seconds?" data-options='["The origin server broadcasts the purge directly to each of the 200+ PoP servers via HTTP DELETE requests", "The control plane publishes a purge message to a Kafka topic. Each PoP runs a consumer subscribed to that topic. When a PoP consumer receives the surrogate key purge for 'product-456', it queries the surrogate key index (Redis SMEMBERS 'stag:zone:product-456') to get all cache keys tagged with that surrogate, deletes those entries from the local cache, and publishes an ack. The control plane tracks acks from all PoPs and marks the purge complete when all 200+ PoPs have acknowledged.", "Purge propagation requires a 5-second cache TTL — you cannot proactively purge CDN caches", "Each PoP is notified via DNS record updates that trigger cache invalidation"]' data-correct="1" data-explanation="Kafka fan-out to 200 consumer groups (one per PoP) achieves sub-5-second propagation at scale. The key advantage over direct HTTP: durability (if a PoP is temporarily offline, it replays the purge from its Kafka offset when it comes back), ordering (purge before cache of new content), and decoupling (control plane doesn't need to know current PoP addresses). Surrogate key indexing in Redis enables O(tag_cardinality) bulk purge without iterating the full cache." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
             <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="analytics-pipeline.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Analytics Pipeline →</a>
+              <a href="recommendation-engine.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Recommendation Engine &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="recommendation-engine.html" class="btn btn--outline">← Recommendation Engine</a>
-        <a href="analytics-pipeline.html" class="btn btn--primary">Next: Analytics Pipeline →</a>
+        <a href="api-gateway.html" class="btn btn--outline">&larr; API Gateway</a>
+        <a href="recommendation-engine.html" class="btn btn--primary">Next: Recommendation Engine &rarr;</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>

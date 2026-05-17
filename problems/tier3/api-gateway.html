@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design an API Gateway &mdash; MAANG System Design RESHADED walkthrough.">
+  <meta name="description" content="Design an API Gateway like AWS API Gateway or Kong — L6 system design walkthrough covering plugin pipeline, rate limiting, JWT auth, circuit breaking, and canary routing.">
   <title>Design an API Gateway &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -58,114 +58,503 @@
           <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
           <span class="tag">60 min</span><span class="tag">Infrastructure</span>
         </div>
-        <h1 class="module-header__title">Design an API Gateway</h1>
-        <p class="module-header__desc">An API gateway is a reverse proxy with a plugin/middleware pipeline: auth, rate limit, request transform, route, load balance, circuit break, response transform, cache. Each plugin is a single concern. Understanding this pipeline and when to put logic in the gateway vs the service is the interview signal.</p>
+        <h1 class="module-header__title">Design an API Gateway (like AWS API Gateway / Kong)</h1>
+        <p class="module-header__desc">An API gateway is a reverse proxy that implements a composable plugin pipeline: TLS termination, authentication, rate limiting, request transformation, routing, load balancing, circuit breaking, and response transformation. The gateway is in the hot path of every external request, so correctness, latency, and fault tolerance are all critical. Understanding plugin ordering, JWT vs opaque token trade-offs, and how the gateway relates to a service mesh separates senior from staff-level answers.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; Kong, AWS API Gateway, Nginx</div>
+          <div class="module-header__meta-item">&#x1F3E2; Kong, AWS API Gateway, Nginx, Envoy</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
+          <div class="module-header__meta-item">&#x1F4CA; 1M req/sec, &lt;5ms overhead, 99.999% SLA</div>
         </div>
       </header>
+
+      <!-- ═══════════════════════════════ REQUIREMENTS ═══════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
         <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><h3>Functional Requirements</h3><ul>
-            <li>Route requests to appropriate backend services based on path and method</li>
-            <li>Authentication and authorization (JWT validation, API key verification)</li>
-            <li>Rate limiting per client or API key</li>
-            <li>Request and response transformation (add headers, strip sensitive fields)</li>
-            <li>SSL termination, load balancing, circuit breaking</li>
-            <li>API composition: aggregate multiple service responses into one</li></ul><h3>Non-Functional Requirements</h3><ul>
-            <li><strong>Scale:</strong> 1M requests/sec across all services</li>
-            <li><strong>Latency overhead:</strong> &lt;5ms added by gateway</li>
-            <li><strong>Availability:</strong> 99.999% &mdash; gateway is in the hot path of every request</li></ul></div>
+        <div class="content-section__body">
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li><strong>Request routing:</strong> route to backend services based on URL path, HTTP method, and host header. Support path-based, header-based, and weighted routing.</li>
+            <li><strong>Authentication &amp; authorization:</strong> validate JWT tokens (offline signature check), verify API keys (Redis lookup), introspect OAuth2 opaque tokens (cached external call).</li>
+            <li><strong>Rate limiting:</strong> enforce per-API-key, per-user, per-IP, and per-route limits. Sliding window with Redis. Return 429 with Retry-After header.</li>
+            <li><strong>Request/response transformation:</strong> add/remove headers, rewrite paths, inject correlation IDs, strip sensitive response fields.</li>
+            <li><strong>SSL/TLS termination:</strong> accept HTTPS from clients, forward plain HTTP to internal services. Manage certificates via Let's Encrypt or ACM.</li>
+            <li><strong>Load balancing:</strong> distribute traffic across backend instances using round-robin, least connections, or consistent hash.</li>
+            <li><strong>Circuit breaking:</strong> track per-backend error rate; open circuit when threshold exceeded; protect backends from being overwhelmed during recovery.</li>
+            <li><strong>Response caching:</strong> cache idempotent responses (GET/HEAD) by cache key. Respect Cache-Control, ETag, and Vary headers.</li>
+            <li><strong>Canary routing:</strong> send a configurable percentage of traffic to a new backend version. Support header-based and random-hash-based splitting.</li>
+            <li><strong>API composition (BFF):</strong> fan-out to multiple upstream services in parallel, merge responses into a single client response.</li>
+            <li><strong>Plugin extensibility:</strong> define a plugin interface so teams can add new cross-cutting concerns without modifying the core gateway.</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Throughput:</strong> 1M requests/sec sustained across a horizontally scaled fleet.</li>
+            <li><strong>Latency overhead:</strong> gateway adds &lt;5ms p99 to every request (the entire pipeline, not per plugin).</li>
+            <li><strong>Availability:</strong> 99.999% (5 nines) &mdash; the gateway is in the hot path of every API call. Any downtime is customer-visible.</li>
+            <li><strong>Observability:</strong> per-route request rate, latency histograms (p50/p99/p999), error rate, and circuit breaker state exported to metrics system.</li>
+            <li><strong>Config propagation:</strong> route and plugin configuration changes propagate to all gateway instances within 30 seconds.</li>
+            <li><strong>Security:</strong> no credentials logged, sensitive headers stripped from logs, rate limit keys use HMAC of IP/user to avoid PII in Redis keys.</li>
+          </ul>
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Service-to-service (east-west) traffic &mdash; that is the service mesh's responsibility</li>
+            <li>Business logic, data storage, or application-level orchestration</li>
+            <li>Developer portal (API documentation, key provisioning UX)</li>
+          </ul>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ ESTIMATION ═══════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
         <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li>1M req/sec &rarr; multiple stateless gateway instances behind load balancer</li>
-            <li>Rate limiting state (sliding window counters): 10M API keys &times; 16 bytes = 160MB &rarr; Redis Cluster</li>
-            <li>Circuit breaker state: O(services) in-memory per gateway instance &mdash; trivial</li></ul></div>
+        <div class="content-section__body">
+          <h3>Traffic &amp; Scale Numbers</h3>
+          <ul>
+            <li><strong>Target throughput:</strong> 1M req/sec across the fleet. A single Nginx/Envoy instance handles ~50K-100K req/sec. Implies 10-20 gateway instances minimum, with headroom for 2x burst &rarr; provision 40 instances.</li>
+            <li><strong>Latency budget:</strong> 5ms total gateway overhead. TLS termination: ~0.5ms. Auth (JWT offline): ~0.5ms. Rate limit (Redis): ~1ms. Routing + backend call setup: ~1ms. Leaves 2ms for other plugins. This rules out synchronous external calls in the hot path.</li>
+            <li><strong>Rate limit state in Redis:</strong> 10M active API keys &times; 2 counters (current + previous minute window) &times; 8 bytes each = 160MB. Comfortably fits in a Redis Cluster with 3 shards.</li>
+            <li><strong>Circuit breaker state:</strong> stored in-memory per gateway instance. O(backend_services) = typically &lt;1000 entries. Memory cost is negligible (&lt;1MB).</li>
+            <li><strong>Canary routing state:</strong> stored in control plane DB, pushed to gateway instances on change. No per-request state needed &mdash; stateless hash or RNG decision.</li>
+            <li><strong>Response cache:</strong> edge cache (Varnish/nginx) with 1GB RAM per instance holds ~200K cached responses at 5KB average. Cache hit rate target: 30% for GET endpoints.</li>
+          </ul>
+          <div class="insight-box" style="background:linear-gradient(135deg,#f0e7ff,#ede9fe);border-left:4px solid #7c3aed;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Key insight for the interview:</strong> The 5ms latency budget forces all hot-path operations to be either local (JWT validation, circuit breaker state) or single Redis round-trip (&lt;1ms on same AZ). Any design that requires an external HTTP call per request will blow the latency budget. This is why JWT is preferred over opaque token introspection in the hot path.
+          </div>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ SCHEMA ═══════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
         <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Route registry (loaded at gateway startup, refreshed every 60s)
-routes: path_pattern, method, backend_service_url, auth_required, rate_limit_tier
+        <div class="content-section__body">
+          <h3>Control Plane Data Model</h3>
+          <pre><code class="language-java">// Routes table (PostgreSQL in control plane)
+// Loaded at gateway startup, refreshed every 30s via polling or pushed via WebSocket
+Route {
+  id:              UUID
+  path_pattern:    string        // e.g. "/payments/**"  (Ant-style glob)
+  http_methods:    string[]      // ["GET","POST"] or ["*"]
+  host_header:     string        // optional: "api.payments.example.com"
+  backend_url:     string        // e.g. "http://payments-service:8080"
+  canary_url:      string        // optional: new version backend
+  canary_percent:  int           // 0-100: % sent to canary_url
+  auth_policy:     enum          // NONE | API_KEY | JWT | OAUTH2
+  rate_limit_tier: string        // "free" | "pro" | "enterprise"
+  plugins:         string[]      // ordered list: ["cors","transform-request"]
+  timeout_ms:      int           // upstream call timeout
+  cache_ttl_s:     int           // 0 = no cache
+}
 
-// Rate limit counters (Redis - sliding window)
-// Key: rate:{api_key}:{window_minute}  TTL: 2 minutes
-// INCR + EXPIRE on each request
+// API Keys table
+ApiKey {
+  key_hash:         string    // SHA-256 of raw key (never store raw key)
+  owner_id:         UUID
+  rate_limit_tier:  string
+  is_active:        boolean
+  created_at:       timestamp
+  last_used_at:     timestamp
+}</code></pre>
 
-// Circuit breaker state (in-memory per gateway instance)
-circuit_states: service_id -> {state: CLOSED|OPEN|HALF_OPEN, failure_count, last_failure}</code></pre></div>
+          <h3>Runtime State (Redis)</h3>
+          <pre><code class="language-java">// Rate limit sliding window (per API key, per minute bucket)
+// Key pattern: "rl:{hmac_of_api_key}:{unix_minute}"
+// Value: integer counter
+// TTL: 120 seconds (covers current + previous minute for sliding window)
+// Example: INCR rl:a3f9...:28123456  →  current count = 47
+
+// OAuth2 token introspection cache
+// Key: "oauth2:introspect:{sha256_of_token}"
+// Value: JSON { active: true, sub: "user123", exp: 1720000000 }
+// TTL: set to (token_exp - now) capped at 60 seconds
+
+// Circuit breaker state (stored in Redis for cross-instance consistency)
+// Key: "cb:{service_id}"
+// Value: { state: "CLOSED"|"OPEN"|"HALF_OPEN", failure_count: 12, opened_at: 1720000000 }
+// TTL: none (long-lived)
+
+// Response cache
+// Key: "cache:{sha256_of(method+url+vary_headers)}"
+// Value: { status: 200, headers: {...}, body: "..." }
+// TTL: set by cache_ttl_s from route config</code></pre>
+
+          <h3>Request Context Object (in-memory, per request)</h3>
+          <pre><code class="language-java">// Passed through plugin chain, mutated by each plugin
+GatewayContext {
+  // Populated by request parsing
+  String requestId;         // UUID injected by gateway
+  String method;            // GET, POST, etc.
+  String path;              // /payments/v1/charge
+  Map&lt;String, String&gt; requestHeaders;
+  byte[] requestBody;
+
+  // Populated by auth plugin
+  String authenticatedUserId;
+  String authenticatedApiKeyId;
+  List&lt;String&gt; scopes;
+
+  // Populated by route lookup plugin
+  Route matchedRoute;
+  String resolvedBackendUrl;  // accounts for canary split
+
+  // Populated during response
+  int responseStatus;
+  Map&lt;String, String&gt; responseHeaders;
+  byte[] responseBody;
+  long upstreamLatencyMs;
+}</code></pre>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ HLD ═══════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
         <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Request pipeline (chain of responsibility):</strong> Auth &rarr; Rate Limit &rarr; Request Transform &rarr; Route Lookup &rarr; Load Balance &rarr; Circuit Breaker &rarr; Backend Call &rarr; Response Transform &rarr; Cache.</li>
-            <li><strong>Auth:</strong> JWT validation (offline -- verify signature with public key, no DB call). API key validation (Redis lookup). OAuth 2.0 token introspection (external call -- cache results).</li>
-            <li><strong>Rate limiting:</strong> Sliding window counter per (api_key, minute). Redis INCR + TTL. Reject with 429 if over limit.</li>
-            <li><strong>Circuit breaker:</strong> Track failure rate per backend service. CLOSED &rarr; OPEN at 50% failure rate. OPEN &rarr; reject immediately with 503. HALF_OPEN &rarr; try one request, close if succeeds.</li>
-            <li><strong>API composition:</strong> Fan out to multiple services in parallel, merge responses. Useful for BFF (Backend For Frontend) pattern.</li></ul></div>
+        <div class="content-section__body">
+          <h3>System Components</h3>
+          <ul>
+            <li><strong>Load Balancer (L4/L7):</strong> AWS ALB or GCP Load Balancer in front of the gateway fleet. DNS-based failover across AZs. Health checks every 5 seconds.</li>
+            <li><strong>Gateway Fleet:</strong> 40+ stateless instances (Nginx+Lua, Envoy, or custom JVM service). Stateless means any instance can serve any request &mdash; rate limit state is in Redis, not local.</li>
+            <li><strong>Control Plane:</strong> manages route config, plugin configuration, API key issuance. PostgreSQL for persistence. Pushes config changes to gateways via WebSocket or polling.</li>
+            <li><strong>Redis Cluster:</strong> rate limit counters, OAuth2 token cache, circuit breaker state. 3 shards &times; 2 replicas. Same AZ as gateway to keep latency &lt;1ms.</li>
+            <li><strong>Backend Services:</strong> downstream microservices. Gateway forwards requests via HTTP/1.1 or HTTP/2.</li>
+            <li><strong>Observability Pipeline:</strong> gateway emits access logs (JSON) and metrics (Prometheus). Grafana for dashboards. PagerDuty alerts on error rate &gt; 1% or p99 latency &gt; 500ms.</li>
+          </ul>
+
+          <h3>Plugin Pipeline (Chain of Responsibility)</h3>
+          <p>Every request flows through a fixed-order plugin chain. Plugin order is critical &mdash; you must authenticate before rate limiting (otherwise you can't identify who to rate limit), and rate limit before routing (no point routing a request you'll reject). The chain:</p>
+          <pre><code class="language-java">Client Request
+    │
+    ▼
+[1] TLS Termination        ← Handled by Nginx/Envoy before JVM plugins
+    │
+    ▼
+[2] Request ID Injection   ← Inject X-Request-Id UUID for tracing
+    │
+    ▼
+[3] Auth Plugin            ← JWT validate / API key lookup / OAuth2 introspect
+    │  (short-circuits with 401 if invalid)
+    ▼
+[4] Rate Limit Plugin      ← Check Redis counter; short-circuit with 429 if exceeded
+    │
+    ▼
+[5] Request Transform      ← Add X-User-Id header, rewrite path, strip internal headers
+    │
+    ▼
+[6] Route Lookup           ← Match path pattern, resolve backend URL, apply canary split
+    │
+    ▼
+[7] Cache Check            ← For GET/HEAD: return cached response if cache hit
+    │
+    ▼
+[8] Circuit Breaker        ← Check circuit state for this backend; short-circuit if OPEN
+    │
+    ▼
+[9] Backend Call           ← Forward request to upstream service; record latency/status
+    │
+    ▼
+[10] Response Transform    ← Strip internal headers, add CORS headers, inject trace ID
+    │
+    ▼
+[11] Cache Store           ← For cacheable responses: store in Redis with TTL
+    │
+    ▼
+[12] Metrics &amp; Logging     ← Emit access log entry, increment request/error counters
+    │
+    ▼
+Client Response</code></pre>
+
+          <h3>API Gateway vs. Service Mesh</h3>
+          <div class="insight-box" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-left:4px solid #059669;padding:var(--space-4);border-radius:8px;margin:var(--space-4) 0">
+            <strong>&#x1F7E2; Architecture clarification interviewers love:</strong>
+            <ul style="margin-top:var(--space-2)">
+              <li><strong>API Gateway = north-south traffic:</strong> external clients (browsers, mobile apps, third-party services) to internal backend services. The gateway authenticates, rate-limits, and routes.</li>
+              <li><strong>Service Mesh (Istio/Linkerd) = east-west traffic:</strong> service-to-service calls inside the cluster. The mesh handles mTLS, retries, load balancing, and observability for internal calls.</li>
+              <li><strong>They complement, not replace each other.</strong> The gateway handles the external boundary; the mesh handles the internal network. Running both is the standard production architecture at companies like Airbnb, Lyft, and Netflix.</li>
+              <li><strong>Duplication to avoid:</strong> don't implement JWT validation in both the gateway and the service mesh. The gateway validates and forwards user context (X-User-Id header). The mesh handles mTLS between services. Services trust the gateway's validated context.</li>
+            </ul>
+          </div>
+
+          <h3>Canary Routing</h3>
+          <p>Two strategies for splitting traffic:</p>
+          <ul>
+            <li><strong>Header-based:</strong> if <code>X-Canary: true</code> in request, route to canary backend. Used for internal testing and opted-in beta users. Deterministic (same user always hits canary).</li>
+            <li><strong>Hash-based:</strong> <code>hash(userId) % 100 &lt; canary_percent</code>. Deterministic: same user always hits same backend. Avoids session inconsistency (user doesn't bounce between v1 and v2 on different requests).</li>
+            <li><strong>Random-based:</strong> <code>random() &lt; canary_percent/100</code>. Simple but non-sticky: same user may hit v1 for one request and v2 for the next. Acceptable for stateless APIs.</li>
+          </ul>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ APIS ═══════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
         <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Gateway management API
-GET  /api/v1/routes           -- list all configured routes
-POST /api/v1/routes           -- add new route { path, method, backend, rate_limit_tier }
-GET  /api/v1/circuit-breakers -- list circuit breaker states per service
+        <div class="content-section__body">
+          <h3>Control Plane Management API</h3>
+          <pre><code class="language-java">// Route management
+GET    /admin/v1/routes                        // List all configured routes
+POST   /admin/v1/routes                        // Create route
+       Body: { path_pattern, backend_url, auth_policy, rate_limit_tier, ... }
+GET    /admin/v1/routes/{routeId}              // Get single route
+PUT    /admin/v1/routes/{routeId}              // Update route (propagates to fleet in 30s)
+DELETE /admin/v1/routes/{routeId}              // Remove route
 
-// All client APIs pass through -- not a specific endpoint
-// Example proxied call:
+// Plugin configuration
+GET    /admin/v1/plugins                       // List available plugin types
+GET    /admin/v1/routes/{routeId}/plugins      // Get plugins for a route
+POST   /admin/v1/routes/{routeId}/plugins      // Attach plugin to route
+       Body: { plugin_type: "rate-limit", config: { rpm: 1000 } }
+
+// Circuit breaker management
+GET    /admin/v1/circuit-breakers              // All circuit breaker states
+POST   /admin/v1/circuit-breakers/{serviceId}/reset  // Manually reset OPEN circuit
+
+// API key management
+POST   /admin/v1/api-keys                      // Issue new API key
+       Body: { owner_id, rate_limit_tier }
+       Response: { key: "ak_live_...", key_hash: "sha256..." }  // raw key shown once
+DELETE /admin/v1/api-keys/{keyHash}            // Revoke key</code></pre>
+
+          <h3>Proxied Requests (Runtime Path)</h3>
+          <pre><code class="language-java">// All client requests are proxied — the gateway is transparent
 // Client: POST https://api.example.com/payments/v1/charge
-// Gateway: Auth -> RateLimit -> route to payments-service:8080/v1/charge
+//   Gateway receives, runs plugin chain, forwards to:
+//   http://payments-service-internal:8080/v1/charge
 
-// Health check
-GET /health  -> { status: "ok", circuit_breakers: {...}, rate_limit_redis: "connected" }</code></pre></div>
+// Request headers injected by gateway:
+//   X-Request-Id: a3f9c2d1-...   (UUID, injected by gateway)
+//   X-User-Id:    user_123       (extracted from validated JWT)
+//   X-Forwarded-For: 203.0.113.5 (original client IP)
+//   X-Gateway-Version: 2.4.1     (for debugging)
+
+// Response headers added by gateway:
+//   X-Request-Id: a3f9c2d1-...   (echo back for client correlation)
+//   X-RateLimit-Limit: 1000
+//   X-RateLimit-Remaining: 947
+//   X-RateLimit-Reset: 1720000060
+
+// Health check (load balancer uses this)
+GET /health
+// Response: { "status": "ok", "redis": "connected", "circuit_breakers": { "payments-service": "CLOSED" } }
+// HTTP 200 = healthy, HTTP 503 = unhealthy (load balancer removes from rotation)</code></pre>
+
+          <h3>Authentication Flows</h3>
+          <pre><code class="language-java">// Flow 1: JWT (most common, offline validation)
+// Client: Authorization: Bearer eyJhbGciOiJSUzI1NiJ9...
+// Gateway:
+//   1. Split header/payload/signature
+//   2. Decode header → algorithm = RS256
+//   3. Load public key from local key ring (refreshed hourly from JWKS endpoint)
+//   4. Verify RSA signature over (header + "." + payload)
+//   5. Check exp claim > now, iss claim matches expected issuer
+//   6. Extract sub (user ID), scope (permissions) from payload
+//   7. Set X-User-Id header, continue chain
+// No network call. ~0.5ms CPU.
+
+// Flow 2: API Key
+// Client: X-Api-Key: ak_live_xK9mP2...
+// Gateway:
+//   1. HMAC-SHA256 of raw key → lookup key in Redis hash "apikeys:{hmac}"
+//   2. If found and active: extract owner_id and rate_limit_tier
+//   3. Set X-Api-Key-Owner header, continue chain
+// One Redis GET. ~1ms.
+
+// Flow 3: OAuth2 opaque token (avoid in hot path if possible)
+// Client: Authorization: Bearer opaque_token_xyz...
+// Gateway:
+//   1. Hash token → check introspection cache in Redis
+//   2. Cache hit: return cached result (active/inactive + claims)
+//   3. Cache miss: POST to auth-service /introspect with token
+//   4. Cache result in Redis for min(token_remaining_ttl, 60s)
+// Cache hit: ~1ms. Cache miss: ~5-20ms external call (blows latency budget for high-traffic routes)</code></pre>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ DEEP DIVE ═══════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
         <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Chain of Responsibility pattern for middleware:</strong></p>
-          <p>Each plugin implements: <code>void handle(Request req, Response res, Runnable next)</code>. Calling <code>next.run()</code> passes control to the next plugin. Not calling <code>next</code> short-circuits (e.g., auth plugin rejects with 401).</p>
-          <p>This is the same pattern as Express.js middleware, Servlet filters in Java, and Django middleware.</p>
-          <p><strong>Why put auth in the gateway vs each service?</strong></p>
+
+          <h3>Plugin Architecture: Why Ordering Matters</h3>
+          <p>The plugin chain is not a bag of middleware you can order arbitrarily. Each plugin has dependencies on what the previous plugin produced:</p>
           <ul>
-            <li>Gateway: single enforcement point. Services receive pre-validated user context. Services trust the gateway (internal network -- accept X-User-Id header).</li>
-            <li>Each service: defense in depth. Services do not trust the gateway. Higher latency (each service validates independently).</li>
-            <li>Compromise: gateway validates JWT signature (fast, offline). Services check authorization (does this user have permission to this resource).</li>
+            <li><strong>Auth must run before Rate Limit:</strong> rate limiting is per-identity. Without auth, you can only rate limit by IP (trivially bypassed with proxies). Auth populates the identity that rate limit uses.</li>
+            <li><strong>Rate Limit must run before Backend Call:</strong> there is no point forwarding a request to the backend if you're going to reject it. Fail fast, save upstream capacity.</li>
+            <li><strong>Circuit Breaker must run before Backend Call:</strong> same reason &mdash; if the circuit is OPEN, return 503 immediately without attempting the network call.</li>
+            <li><strong>Request Transform must run before Backend Call:</strong> the transform injects X-User-Id into the request. The backend depends on this header being present.</li>
+            <li><strong>Cache Check runs after auth but before backend:</strong> we check cache after auth because some caches are user-specific (private cache). For shared public caches, you could check before auth, but this risks serving one user's private data to another.</li>
           </ul>
-          <p><strong>Circuit breaker states:</strong></p>
+
+          <h3>Rate Limiting: Redis Sliding Window Algorithm</h3>
+          <p>Fixed window counters (reset every minute) have a burst problem: a client can make 1000 requests at 11:59:59 and another 1000 at 12:00:01. In a 2-second window they sent 2000 requests. The sliding window algorithm prevents this:</p>
+          <pre><code class="language-java">// Sliding window implementation using two Redis keys:
+// Current window key: "rl:{identity}:{current_minute}"
+// Previous window key: "rl:{identity}:{previous_minute}"
+//
+// Algorithm:
+//   elapsed_in_current_window = now_ms % 60_000  (milliseconds into current minute)
+//   weight_of_previous = 1.0 - (elapsed_in_current_window / 60_000.0)
+//
+//   estimated_count = (previous_window_count * weight_of_previous) + current_window_count
+//
+//   if estimated_count >= limit: reject with 429
+//   else: INCR current_window_count
+//
+// Example: limit = 1000
+//   Previous minute count: 800, current minute elapsed: 30s (50% through)
+//   Weight of previous: 0.5
+//   Estimated: 800 * 0.5 + 200 (current) = 600 → allow request
+//
+// The two Redis calls (GET prev, INCR curr) can be done in a single Lua script
+// for atomicity. Or use Redis pipeline (not atomic but close enough for rate limiting).</code></pre>
+
+          <h3>Distributed Rate Limiting Trade-offs</h3>
+          <p>Rate limiting state can live in three places, each with different consistency/latency trade-offs:</p>
           <ul>
-            <li>CLOSED: normal operation. Track failure rate.</li>
-            <li>OPEN: failure rate exceeded threshold. Reject all requests immediately. Start timer.</li>
-            <li>HALF-OPEN: timer expired. Allow one request through. If succeeds: CLOSED. If fails: back to OPEN.</li>
-          </ul></div>
+            <li><strong>Local in-memory (per gateway instance):</strong> Zero latency. But 10 gateway instances each allow N requests &rarr; effective limit is 10N. Incorrect for strict global limits. OK for very loose limits where a 10x burst is acceptable.</li>
+            <li><strong>Redis (centralized):</strong> 1ms round-trip. Accurate global counting. Redis becomes a hot dependency &mdash; Redis failure means rate limiting fails open (all requests allowed) or fails closed (all requests rejected). Choose fail-open for availability.</li>
+            <li><strong>Token bucket with Redis:</strong> more forgiving for burst traffic. Tokens refill continuously. INCR + Lua script for atomic check-and-decrement.</li>
+          </ul>
+          <p>At 1M req/sec with 10M API keys, Redis rate limit calls = 1M ops/sec. A Redis Cluster with 3 shards handles ~300K-500K ops/sec per shard. Need careful sharding by API key hash to avoid hot shards.</p>
+
+          <h3>Circuit Breaker State Machine</h3>
+          <p>The circuit breaker is a state machine that protects backends from being called when they are failing. Without it, a single slow backend can exhaust all gateway threads waiting for responses, cascading the failure to all routes.</p>
+          <pre><code class="language-java">// State machine:
+//
+//   CLOSED (normal operation)
+//     → track success/failure count in sliding window (e.g., last 10 seconds)
+//     → if failure_rate > threshold (e.g., 50%) AND min_calls (e.g., 20) exceeded:
+//         transition to OPEN
+//
+//   OPEN (circuit tripped)
+//     → all requests immediately fail with 503 (no upstream call)
+//     → start timer (e.g., 30 seconds)
+//     → when timer expires: transition to HALF_OPEN
+//
+//   HALF_OPEN (probe state)
+//     → allow exactly ONE request through to upstream
+//     → if request succeeds: transition to CLOSED (backend recovered)
+//     → if request fails: transition back to OPEN (reset timer)
+//
+// Why HALF_OPEN matters: without it, after 30s OPEN you go straight to CLOSED
+// and might immediately re-trip because the backend isn't actually recovered.
+// HALF_OPEN provides a safe probe with a single request.
+//
+// Key configuration parameters:
+//   failure_threshold: 50%    (below this, stay CLOSED)
+//   min_request_volume: 20    (don't open circuit on 1-of-1 failures)
+//   measurement_window: 10s   (sliding window for failure rate calculation)
+//   open_duration: 30s        (how long to stay OPEN before HALF_OPEN probe)
+//   half_open_max_calls: 1    (probe with exactly 1 request)</code></pre>
+
+          <h3>Observability: What to Measure at the Gateway</h3>
+          <p>The gateway is the ideal observability point: every request passes through it, and it can record data before the backend even receives the request.</p>
+          <ul>
+            <li><strong>Per-route metrics:</strong> request rate (req/sec), error rate (4xx/5xx separately), latency histogram (p50, p99, p999). Label by route ID, auth policy, and backend service.</li>
+            <li><strong>Rate limit metrics:</strong> rate_limit_allowed_total, rate_limit_rejected_total. Alert if rejection rate spikes (could indicate API abuse or misconfigured limits).</li>
+            <li><strong>Circuit breaker metrics:</strong> cb_state{service="payments"} = 0 (CLOSED), 1 (OPEN), 2 (HALF_OPEN). Alert immediately when any circuit opens.</li>
+            <li><strong>Cache metrics:</strong> cache_hit_rate per route. If hit rate drops below expected baseline, could indicate cache invalidation bug or TTL misconfiguration.</li>
+            <li><strong>Upstream latency:</strong> measure time from request forwarded to response received. Separate from total latency to distinguish gateway overhead from backend slowness.</li>
+          </ul>
+
+          <div class="insight-box" style="background:linear-gradient(135deg,#fff7ed,#ffedd5);border-left:4px solid #ea580c;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x26A0;&#xFE0F; Common interview mistake:</strong> Candidates often describe rate limiting as "check if user has exceeded limit, if not increment and proceed." This is a race condition under concurrent requests from the same key. Two goroutines both read count=999, both see it's under 1000, both increment to 1000 and 1001. Use Redis INCR (atomic) followed by a check, or a Lua script for atomic check-and-increment. The pattern: <code>if INCR(key) > limit: DECR(key); reject;</code>
+          </div>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ EVALUATE ═══════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
         <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Gateway as SPOF:</strong> Multiple gateway instances behind a load balancer. Stateless design (rate limit state in Redis, circuit state local per instance). Horizontal scaling: add instances as traffic grows.</li>
-            <li><strong>Gateway vs service mesh:</strong> Gateway handles north-south (client &rarr; service) traffic. Service mesh (Istio/Linkerd) handles east-west (service &rarr; service) traffic. Do not duplicate both -- use gateway for external, service mesh for internal.</li></ul></div>
+        <div class="content-section__body">
+          <h3>Does it meet requirements?</h3>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Requirement</th><th>How met</th><th>Risk</th></tr></thead>
+              <tbody>
+                <tr><td>1M req/sec</td><td>40 stateless instances behind ALB, each handling 25K req/sec</td><td>Redis bottleneck at high rate limit query volume</td></tr>
+                <tr><td>&lt;5ms overhead</td><td>JWT offline (~0.5ms), Redis rate limit (~1ms), routing (~0.3ms)</td><td>OAuth2 opaque token introspection cache miss blows budget</td></tr>
+                <tr><td>99.999% availability</td><td>Stateless instances, Redis HA, ALB health checks</td><td>Redis cluster failure if not using Redis Sentinel/Cluster properly</td></tr>
+                <tr><td>Rate limiting</td><td>Sliding window in Redis, per-API-key</td><td>Non-atomic read-increment race condition if not using Lua script</td></tr>
+                <tr><td>Circuit breaking</td><td>Per-backend state machine, CLOSED→OPEN→HALF_OPEN</td><td>Each instance has independent state → circuit may not open consistently across fleet</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Single Points of Failure</h3>
+          <ul>
+            <li><strong>Gateway fleet:</strong> solved by horizontal scaling behind ALB. Loss of one instance is handled by ALB health checks within 5 seconds.</li>
+            <li><strong>Redis:</strong> most critical dependency. Failure means rate limiting fails open (configurable: fail open = allow traffic, fail closed = reject traffic). Fail open is correct for availability. Redis Cluster with 3 master + 3 replica nodes provides HA.</li>
+            <li><strong>Control plane:</strong> gateway instances cache route config locally. Control plane failure means no config updates for 30 seconds, but existing routes continue working. This is the correct trade-off: availability &gt; config freshness.</li>
+            <li><strong>Auth service (for OAuth2 introspection):</strong> cache the introspection result in Redis. Auth service failure means cached tokens continue working for up to 60 seconds. New tokens cannot be validated &mdash; return 503 for new opaque tokens, not 401 (fail open vs closed is a security policy decision).</li>
+          </ul>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ DELIVER ═══════════════════════════════ -->
       <section class="content-section" id="deliver" aria-labelledby="del-title">
         <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body"><p>API gateway = chain-of-responsibility middleware pipeline (auth, rate limit, circuit break) + stateless instances + Redis for shared rate limit state. Key insight: JWT validation is offline (no network call), making auth latency negligible.</p></div>
+        <div class="content-section__body">
+          <p><strong>Summary statement for the interview:</strong></p>
+          <p>The API gateway is a stateless plugin chain (Chain of Responsibility pattern) that processes every external request through ordered middleware: auth → rate limit → transform → route → circuit break → backend call → response transform. Stateless design enables horizontal scaling to 1M req/sec. Shared state (rate limit counters, circuit breaker state) lives in Redis Cluster for consistency. JWT offline validation keeps auth latency &lt;1ms with no network call. Circuit breakers prevent cascading failures with the CLOSED→OPEN→HALF_OPEN state machine. Canary routing enables safe incremental rollouts. The gateway owns north-south traffic; the service mesh owns east-west &mdash; they are complementary.</p>
+          <p><strong>Phased delivery:</strong></p>
+          <ul>
+            <li><strong>Phase 1 (MVP):</strong> Auth + Rate Limit + Routing. Single region, in-memory circuit breakers. Covers 80% of the value.</li>
+            <li><strong>Phase 2:</strong> Redis-backed rate limiting, circuit breaker state in Redis, response caching, request/response transformation.</li>
+            <li><strong>Phase 3:</strong> Canary routing, plugin extensibility API, multi-region with latency-based routing, advanced observability.</li>
+          </ul>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ TRADEOFFS ═══════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
         <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
-        <div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Gateway Auth</th><th>Per-Service Auth</th></tr></thead>
-            <tbody>
-              <tr><td>Enforcement</td><td>Single point: simpler, but gateway misconfiguration = security hole</td><td>Defense in depth: each service validates independently</td></tr>
-              <tr><td>Latency</td><td>JWT: offline verify, &lt;1ms. API key: one Redis read.</td><td>Each service makes auth call: 1-5ms per service</td></tr>
-              <tr><td>Rate limiting</td><td>Gateway: aggregated across all services for a client</td><td>Per-service: each service limits independently (no global view)</td></tr>
-            </tbody>
-          </table></div>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Recommended</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Auth token type</strong></td>
+                  <td>JWT (self-contained, offline validation, ~0.5ms)</td>
+                  <td>Opaque token (requires introspection call, 5-20ms unless cached)</td>
+                  <td>JWT for hot path; opaque tokens for admin APIs where immediate revocation is needed</td>
+                </tr>
+                <tr>
+                  <td><strong>Rate limit state location</strong></td>
+                  <td>Local memory (zero latency, incorrect at scale &mdash; each instance allows N requests)</td>
+                  <td>Redis (accurate global count, 1ms round-trip, Redis is a dependency)</td>
+                  <td>Redis with fail-open on Redis failure. Local memory only if approximate limits are acceptable.</td>
+                </tr>
+                <tr>
+                  <td><strong>Circuit breaker state</strong></td>
+                  <td>Per-instance in memory (no latency, inconsistent &mdash; 40 instances have 40 views of backend health)</td>
+                  <td>Redis-backed (consistent view, 1ms read on every request)</td>
+                  <td>Per-instance for most cases (slight inconsistency is acceptable); Redis-backed if you need a global "kill switch" for a backend</td>
+                </tr>
+                <tr>
+                  <td><strong>Gateway vs service mesh</strong></td>
+                  <td>API Gateway only (simpler, one system, but no east-west control)</td>
+                  <td>Both API Gateway + Service Mesh (complete coverage, more operational complexity)</td>
+                  <td>Both: gateway for north-south, mesh for east-west. Don't implement JWT auth in the mesh if the gateway already does it.</td>
+                </tr>
+                <tr>
+                  <td><strong>Plugin execution model</strong></td>
+                  <td>Synchronous chain (simple, debug-friendly, easier to reason about ordering)</td>
+                  <td>Async/parallel plugins (lower latency if plugins are independent, harder to reason about, complex error handling)</td>
+                  <td>Synchronous chain: the clarity trade-off is worth it. Individual plugins (JWT validation, Redis check) are fast enough that parallelism doesn't help much.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ IMPLEMENTATION ═══════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
         <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
-        <div class="content-section__body"><pre><code class="language-java">/**
- * ApiGatewayPipeline -- executes a pluggable middleware chain for each request.
- * Each plugin handles one concern (auth, rate limit, routing, circuit breaking).
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * ApiGatewayPipeline — executes a composable middleware chain for each inbound request.
+ *
+ * Design: Chain of Responsibility. Each GatewayPlugin handles one concern and decides
+ * whether to continue (call next.run()) or short-circuit (set error response, return).
+ * Plugin order is fixed and critical: auth → rate limit → transform → route → circuit break → backend.
  */
 public class ApiGatewayPipeline {
 
@@ -175,113 +564,333 @@ public class ApiGatewayPipeline {
         this.plugins = List.copyOf(plugins);
     }
 
+    /** Entry point: process a single inbound request through the full plugin chain. */
     public GatewayResponse process(GatewayRequest request) {
-        PluginChain chain = new PluginChain(plugins, 0);
         GatewayResponse response = new GatewayResponse();
-        chain.handle(request, response);
+        executeChain(request, response, 0);
         return response;
+    }
+
+    private void executeChain(GatewayRequest request, GatewayResponse response, int index) {
+        if (index &gt;= plugins.size()) return;
+        GatewayPlugin current = plugins.get(index);
+        current.handle(request, response, () -&gt; executeChain(request, response, index + 1));
     }
 
     public interface GatewayPlugin {
         void handle(GatewayRequest request, GatewayResponse response, Runnable next);
     }
+}
 
-    private static class PluginChain {
-        private final List&lt;GatewayPlugin&gt; plugins;
-        private int index;
+// ─────────────────────────────────────────────────────────────────────────────
+// Plugin 1: JWT Authentication
+// Offline validation — no network call. Validates signature, expiry, issuer.
+// ─────────────────────────────────────────────────────────────────────────────
+public class JwtAuthPlugin implements GatewayPlugin {
 
-        PluginChain(List&lt;GatewayPlugin&gt; plugins, int index) { this.plugins = plugins; this.index = index; }
+    private final PublicKey publicKey;     // Loaded from JWKS endpoint at startup, refreshed hourly
+    private final String expectedIssuer;
 
-        void handle(GatewayRequest request, GatewayResponse response) {
-            if (index &gt;= plugins.size()) return;
-            GatewayPlugin current = plugins.get(index++);
-            PluginChain next = new PluginChain(plugins, index);
-            current.handle(request, response, () -&gt; next.handle(request, response));
+    public JwtAuthPlugin(PublicKey publicKey, String expectedIssuer) {
+        this.publicKey = publicKey;
+        this.expectedIssuer = expectedIssuer;
+    }
+
+    @Override
+    public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            sendUnauthorized(response, "Missing or invalid Authorization header");
+            return;  // Short-circuit: do NOT call next
+        }
+
+        String token = authHeader.substring(7);
+        JwtClaims claims = validateJwt(token);
+        if (claims == null) {
+            sendUnauthorized(response, "Invalid or expired JWT");
+            return;
+        }
+
+        // Inject validated identity for downstream plugins and the backend
+        request.setAttribute("authenticatedUserId", claims.getSubject());
+        request.setAttribute("tokenScopes", claims.getScopes());
+        request.setHeader("X-User-Id", claims.getSubject());
+
+        next.run();  // Continue to rate limit plugin
+    }
+
+    private JwtClaims validateJwt(String token) {
+        try {
+            // Split header.payload.signature
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) return null;
+
+            // Verify RSA/ECDSA signature over header + "." + payload
+            Signature sig = Signature.getInstance("SHA256withRSA");
+            sig.initVerify(publicKey);
+            sig.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.UTF_8));
+            byte[] signatureBytes = Base64.getUrlDecoder().decode(parts[2]);
+            if (!sig.verify(signatureBytes)) return null;
+
+            // Decode payload and check standard claims
+            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
+            JwtClaims claims = JwtClaims.parse(payloadJson);
+
+            if (claims.getExpiry() &lt; System.currentTimeMillis() / 1000L) return null;
+            if (!expectedIssuer.equals(claims.getIssuer())) return null;
+
+            return claims;
+        } catch (Exception verificationError) {
+            // Log with context but don't expose internals to client
+            System.err.println("[JwtAuthPlugin.validateJwt] Validation failed: " + verificationError.getMessage());
+            return null;
         }
     }
 
-    // JWT Auth plugin -- validates offline (no network call)
-    public static class JwtAuthPlugin implements GatewayPlugin {
-        private final JwtValidator jwtValidator;
-        public JwtAuthPlugin(JwtValidator jwtValidator) { this.jwtValidator = jwtValidator; }
+    private void sendUnauthorized(GatewayResponse response, String message) {
+        response.setStatus(401);
+        response.setHeader("WWW-Authenticate", "Bearer realm=\"api.example.com\"");
+        response.setBody("{\"error\":\"" + message + "\"}");
+    }
+}
 
-        @Override
-        public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
-            String authHeader = request.getHeader("Authorization");
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                response.setStatus(401);
-                response.setBody("{\"error\":\"Missing or invalid Authorization header\"}");
-                return; // Short-circuit -- do NOT call next
-            }
-            JwtClaims claims = jwtValidator.validate(authHeader.substring(7));
-            if (claims == null) {
-                response.setStatus(401);
-                response.setBody("{\"error\":\"Invalid or expired JWT\"}");
+// ─────────────────────────────────────────────────────────────────────────────
+// Plugin 2: Redis Sliding Window Rate Limiter
+// Two-bucket sliding window: accurate global rate limiting with sub-millisecond overhead.
+// ─────────────────────────────────────────────────────────────────────────────
+public class RateLimitPlugin implements GatewayPlugin {
+
+    private static final long WINDOW_SIZE_MS = 60_000L;
+
+    private final JedisPool jedisPool;
+    private final int requestsPerMinute;
+
+    public RateLimitPlugin(JedisPool jedisPool, int requestsPerMinute) {
+        this.jedisPool = jedisPool;
+        this.requestsPerMinute = requestsPerMinute;
+    }
+
+    @Override
+    public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
+        String identity = extractRateLimitIdentity(request);
+        if (identity == null) {
+            next.run();  // No identity to rate limit on — allow
+            return;
+        }
+
+        long nowMs = System.currentTimeMillis();
+        long currentWindow = nowMs / WINDOW_SIZE_MS;
+        long previousWindow = currentWindow - 1;
+        long elapsedInCurrentWindowMs = nowMs % WINDOW_SIZE_MS;
+        double previousWindowWeight = 1.0 - ((double) elapsedInCurrentWindowMs / WINDOW_SIZE_MS);
+
+        String currentKey = "rl:" + identity + ":" + currentWindow;
+        String previousKey = "rl:" + identity + ":" + previousWindow;
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Lua script ensures atomic check-and-increment
+            String luaScript =
+                "local prev = tonumber(redis.call('GET', KEYS[1]) or '0') " +
+                "local curr = redis.call('INCR', KEYS[2]) " +
+                "redis.call('EXPIRE', KEYS[2], 120) " +
+                "local estimate = prev * tonumber(ARGV[1]) + curr " +
+                "return estimate";
+
+            Object result = jedis.eval(
+                luaScript,
+                Arrays.asList(previousKey, currentKey),
+                Arrays.asList(String.valueOf(previousWindowWeight))
+            );
+
+            double estimatedCount = ((Long) result).doubleValue();
+
+            if (estimatedCount &gt; requestsPerMinute) {
+                long resetEpoch = (currentWindow + 1) * (WINDOW_SIZE_MS / 1000L);
+                response.setStatus(429);
+                response.setHeader("X-RateLimit-Limit", String.valueOf(requestsPerMinute));
+                response.setHeader("X-RateLimit-Remaining", "0");
+                response.setHeader("X-RateLimit-Reset", String.valueOf(resetEpoch));
+                response.setHeader("Retry-After", String.valueOf(resetEpoch - (nowMs / 1000L)));
+                response.setBody("{\"error\":\"Rate limit exceeded\",\"retry_after_seconds\":" +
+                                 (resetEpoch - nowMs / 1000L) + "}");
                 return;
             }
-            request.setAttribute("userId", claims.getSubject());
-            next.run(); // Continue to next plugin
+
+            long remaining = Math.max(0, requestsPerMinute - (long) estimatedCount);
+            response.setHeader("X-RateLimit-Limit", String.valueOf(requestsPerMinute));
+            response.setHeader("X-RateLimit-Remaining", String.valueOf(remaining));
+        } catch (JedisException redisError) {
+            // Fail open: Redis failure should not block all traffic
+            System.err.println("[RateLimitPlugin] Redis error, failing open: " + redisError.getMessage());
         }
+
+        next.run();
     }
 
-    // Rate limit plugin -- Redis sliding window counter
-    public static class RateLimitPlugin implements GatewayPlugin {
-        private final JedisPool jedisPool;
-        private final int requestsPerMinute;
+    private String extractRateLimitIdentity(GatewayRequest request) {
+        // Prefer API key identity; fall back to user ID from JWT; then IP
+        String apiKey = request.getHeader("X-Api-Key");
+        if (apiKey != null) return hmacSha256(apiKey);  // Don't store raw key in Redis
 
-        public RateLimitPlugin(JedisPool jedisPool, int requestsPerMinute) {
-            this.jedisPool = jedisPool;
-            this.requestsPerMinute = requestsPerMinute;
+        String userId = (String) request.getAttribute("authenticatedUserId");
+        if (userId != null) return "user:" + userId;
+
+        return "ip:" + request.getClientIp();
+    }
+
+    private String hmacSha256(String input) {
+        // Implementation omitted for brevity — use javax.crypto.Mac with HMAC-SHA256
+        return "hmac:" + input.hashCode();  // Placeholder
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plugin 3: Circuit Breaker
+// State machine per backend. Prevents cascading failures.
+// ─────────────────────────────────────────────────────────────────────────────
+public class CircuitBreakerPlugin implements GatewayPlugin {
+
+    private static final double FAILURE_THRESHOLD = 0.5;  // 50% failure rate triggers OPEN
+    private static final int MIN_REQUEST_VOLUME = 20;       // Don't open on 1-of-1 failures
+    private static final long OPEN_DURATION_MS = 30_000L;  // 30 seconds in OPEN state
+    private static final long MEASUREMENT_WINDOW_MS = 10_000L;  // 10-second sliding window
+
+    private final Map&lt;String, CircuitState&gt; circuitMap = new ConcurrentHashMap&lt;&gt;();
+
+    @Override
+    public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
+        Route matchedRoute = (Route) request.getAttribute("matchedRoute");
+        if (matchedRoute == null) {
+            next.run();
+            return;
         }
 
-        @Override
-        public void handle(GatewayRequest request, GatewayResponse response, Runnable next) {
-            String apiKey = request.getHeader("X-Api-Key");
-            if (apiKey == null) { next.run(); return; }
-            long currentMinute = System.currentTimeMillis() / 60_000;
-            String rateLimitKey = "rate:" + apiKey + ":" + currentMinute;
-            try (Jedis jedis = jedisPool.getResource()) {
-                long requestCount = jedis.incr(rateLimitKey);
-                jedis.expire(rateLimitKey, 120);
-                if (requestCount &gt; requestsPerMinute) {
-                    response.setStatus(429);
-                    response.setBody("{\"error\":\"Rate limit exceeded\"}");
-                    return;
+        String serviceId = matchedRoute.getServiceId();
+        CircuitState circuit = circuitMap.computeIfAbsent(serviceId, id -&gt; new CircuitState());
+
+        CircuitAction action = circuit.checkAndAct();
+
+        if (action == CircuitAction.REJECT) {
+            response.setStatus(503);
+            response.setHeader("Retry-After", "30");
+            response.setBody("{\"error\":\"Service temporarily unavailable\",\"service\":\"" + serviceId + "\"}");
+            return;
+        }
+
+        // Call upstream and record result
+        next.run();
+
+        boolean isSuccess = response.getStatus() &lt; 500;
+        circuit.recordResult(isSuccess, action == CircuitAction.PROBE);
+    }
+
+    private enum CircuitAction { ALLOW, PROBE, REJECT }
+
+    private static class CircuitState {
+        private enum State { CLOSED, OPEN, HALF_OPEN }
+
+        private volatile State state = State.CLOSED;
+        private final AtomicInteger successCount = new AtomicInteger(0);
+        private final AtomicInteger failureCount = new AtomicInteger(0);
+        private volatile long openedAtMs = 0;
+
+        synchronized CircuitAction checkAndAct() {
+            return switch (state) {
+                case CLOSED -&gt; CircuitAction.ALLOW;
+                case OPEN -&gt; {
+                    if (System.currentTimeMillis() - openedAtMs &gt; OPEN_DURATION_MS) {
+                        state = State.HALF_OPEN;
+                        yield CircuitAction.PROBE;
+                    }
+                    yield CircuitAction.REJECT;
+                }
+                case HALF_OPEN -&gt; CircuitAction.REJECT;  // Only one probe at a time
+            };
+        }
+
+        synchronized void recordResult(boolean success, boolean isProbe) {
+            if (isProbe) {
+                state = success ? State.CLOSED : State.OPEN;
+                if (!success) openedAtMs = System.currentTimeMillis();
+                return;
+            }
+            if (success) successCount.incrementAndGet();
+            else failureCount.incrementAndGet();
+
+            int total = successCount.get() + failureCount.get();
+            if (total &gt;= MIN_REQUEST_VOLUME) {
+                double failureRate = (double) failureCount.get() / total;
+                if (failureRate &gt; FAILURE_THRESHOLD) {
+                    state = State.OPEN;
+                    openedAtMs = System.currentTimeMillis();
+                    successCount.set(0);
+                    failureCount.set(0);
                 }
             }
-            next.run();
         }
     }
-}</code></pre></div>
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wiring: Build the gateway with plugins in correct order
+// ─────────────────────────────────────────────────────────────────────────────
+public class GatewayFactory {
+    public static ApiGatewayPipeline build(JedisPool jedisPool, PublicKey jwtPublicKey) {
+        return new ApiGatewayPipeline(List.of(
+            new RequestIdInjectionPlugin(),              // Plugin 1
+            new JwtAuthPlugin(jwtPublicKey, "https://auth.example.com"),  // Plugin 2
+            new RateLimitPlugin(jedisPool, 1000),        // Plugin 3 (1000 req/min)
+            new RequestTransformPlugin(),                // Plugin 4
+            new RouteLookupPlugin(routeRegistry),        // Plugin 5
+            new CacheCheckPlugin(jedisPool),             // Plugin 6
+            new CircuitBreakerPlugin(),                  // Plugin 7
+            new BackendCallPlugin(httpClient),           // Plugin 8
+            new ResponseTransformPlugin(),               // Plugin 9
+            new CacheStorePlugin(jedisPool),             // Plugin 10
+            new MetricsPlugin(metricsRegistry)           // Plugin 11
+        ));
+    }
+}</code></pre>
+        </div>
       </section>
+
+      <!-- ═══════════════════════════════ QUIZ ═══════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
         <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-api-gateway-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="What is the chain of responsibility pattern in an API gateway, and why is it the right design?" data-options='["Chain of responsibility is a queuing pattern for batching requests to backend services", "Each plugin implements a handler interface with a next callback. Auth plugin validates JWT; if valid, calls next (rate limiter); if invalid, short-circuits with 401. This separates concerns: each plugin handles one thing, plugins are composable, order is configurable, adding a new concern (e.g., tracing) requires only adding a new plugin.", "The pattern ensures each plugin runs in parallel for low latency", "Chain of responsibility is specifically for database connection pool management"]' data-correct="1" data-explanation="The chain of responsibility is the natural pattern for middleware. Each handler decides whether to pass control to the next handler or short-circuit. This enables clean separation of concerns (each plugin is independently testable), flexible configuration (order matters), and zero coupling between plugins." style="display:none"></div>
-          <div data-question="Why is JWT authentication preferred over database-lookup authentication at the API gateway?" data-options='["JWT tokens are more secure than session tokens stored in Redis", "JWT signature validation is offline -- the gateway holds the auth server public key and validates the signature locally without any network call. Database-based session token lookup requires a Redis or DB call per request, adding 1-5ms and creating a hard dependency. At 1M req/sec, that is 1M Redis reads/sec just for auth.", "JWT tokens automatically expire so no cleanup is needed", "Database authentication requires the gateway to store user credentials locally"]' data-correct="1" data-explanation="JWT offline validation is the gateway killer feature. The public key is loaded at startup. Every JWT validation = one RSA/ECDSA signature verify = ~1ms CPU, zero network. The trade-off: JWTs cannot be revoked instantly (short expiry of 15 minutes is standard). For revocation, maintain a small blocked token list checked after JWT validation." style="display:none"></div>
-          <div data-question="When should API composition be done at the gateway vs a dedicated BFF (Backend For Frontend) service?" data-options='["API composition should never happen at the gateway under any circumstances", "Simple aggregations (merge two service responses) with low latency requirements: gateway is appropriate. Complex orchestration with conditional logic, error compensation, or different responses per client type: dedicated BFF service. The gateway should remain generic infrastructure -- avoid encoding business logic in it.", "All API composition must always go through a dedicated BFF service", "API composition should always happen client-side to reduce server load"]' data-correct="1" data-explanation="The gateway is infrastructure -- it should be generic, stateless, and business-logic-free. Putting complex product logic in the gateway makes it fragile and hard to test. A BFF is owned by the frontend team, deployed independently, and aggregates multiple backend calls into mobile-optimized or web-optimized responses." style="display:none"></div>
-          <div data-question="What triggers a circuit breaker to transition from CLOSED to OPEN, and what happens to requests in OPEN state?" data-options='["OPEN state means the circuit is functioning normally and all requests pass through", "When failure rate exceeds a threshold (e.g., 50% of requests to a service fail or timeout over a 10-second window), the circuit transitions to OPEN. All subsequent requests are immediately rejected with 503 (no attempt to call the backend). This prevents cascading failures: a slow service no longer consumes gateway threads waiting for responses.", "OPEN state allows 1% of requests through to continuously test backend recovery", "Circuit breakers only activate for HTTP 500 errors, not for timeout errors"]' data-correct="1" data-explanation="The circuit breaker prevents cascading failures -- one slow service can take down the entire gateway if all threads are waiting for it. OPEN = fast fail: caller gets 503 immediately instead of waiting 30s for a timeout. After a timer (e.g., 30 seconds), transitions to HALF-OPEN: one probe request. Success means CLOSED; failure means back to OPEN." style="display:none"></div>
+
+          <div data-question="Why must the Auth plugin run before the Rate Limit plugin in the gateway pipeline? What breaks if you reverse the order?" data-options='["It does not matter — plugins are stateless and independent so any order works equally well", "Auth must run first because rate limiting is per-identity. Without auth, the gateway can only rate limit by IP address, which is easily bypassed with proxies or NAT. Auth populates the authenticated identity that the rate limit plugin uses as the limiting key. Reversing the order means anonymous requests bypass per-user limits and can only be limited by IP.", "Auth should run last to avoid wasting auth CPU cycles on requests that will be rate limited", "Rate limit runs first to protect the auth service from being overwhelmed by too many requests"]' data-correct="1" data-explanation="Plugin ordering in a gateway is a dependency graph, not an arbitrary sequence. Rate limit depends on auth output (the identity). Request transform depends on route lookup output (which headers to inject). Circuit breaker depends on route lookup (which backend to check). Drawing this dependency graph first, then ordering topologically, is the correct interview approach." style="display:none"></div>
+
+          <div data-question="What is the race condition in a naive rate limiter that does READ-then-INCREMENT, and how does Redis INCR + Lua script fix it?" data-options='["There is no race condition in rate limiting because Redis is single-threaded and handles all operations sequentially", "Two concurrent requests from the same API key both read count=999 (under the 1000 limit), both decide to allow, then both increment. The counter reaches 1001 — limit exceeded by 1. At high concurrency this over-counts can be significant. Redis INCR is atomic (single command = read + increment in one operation). For check-and-increment, a Lua script executes as a single atomic transaction: INCR the key, then check if the new value exceeds the limit.", "The race condition only occurs on distributed systems; a single Redis instance is inherently atomic for all multi-command sequences", "Lua scripts fix the race condition by using pessimistic locking via Redis WATCH/MULTI/EXEC transactions"]' data-correct="1" data-explanation="Redis INCR is a single atomic command. The pattern is: INCR key → get new value N → if N > limit, decrement and reject. Using INCR first and then checking avoids the read-then-write race. A Lua script bundles multiple Redis commands into an atomic unit, enabling patterns like: get previous window count + increment current window + check sliding estimate — all atomic." style="display:none"></div>
+
+          <div data-question="An API gateway and a service mesh (Istio) are both deployed. A developer says 'we're duplicating work — remove JWT validation from the gateway since the mesh handles auth.' What is wrong with this reasoning?" data-options='["The developer is correct — the service mesh handles all auth and the gateway should only route traffic", "The gateway and mesh operate on different traffic. The gateway handles north-south traffic (external clients → services) and validates external client JWTs. The service mesh handles east-west traffic (service → service) using mTLS between service identities, not end-user JWTs. Removing JWT validation from the gateway means external clients would reach internal services without authentication.", "JWT validation should be removed from both since services should validate tokens themselves for defense in depth", "The service mesh cannot handle JWT tokens because it operates at Layer 4 (TCP) not Layer 7 (HTTP)"]' data-correct="1" data-explanation="Gateway = external boundary (north-south). Mesh = internal network (east-west). The gateway authenticates end-user identities (JWT). The mesh authenticates service identities (mTLS with SPIFFE/SVID certificates). These are different trust relationships. The gateway strips or validates the end-user JWT and injects X-User-Id. The mesh ensures services only talk to authorized peer services. Both are needed; they are not redundant." style="display:none"></div>
+
+          <div data-question="How does hash-based canary routing differ from random-based canary routing, and when does the difference matter?" data-options='["Hash-based and random-based routing produce identical user experiences because both route the same percentage to each backend on average", "Hash-based routing computes hash(userId) % 100 to assign users deterministically: the same user always hits the same backend (sticky routing). Random-based routing generates a random number per request: the same user may hit v1 on one request and v2 on the next. This matters for stateful APIs or multi-step flows where inconsistency causes bugs (user creates item on v2, then reads it on v1 which doesn't have the new feature).", "Random routing should always be preferred because it distributes load more evenly than hash-based routing", "Hash-based routing requires storing user-to-backend assignments in a database for correctness"]' data-correct="1" data-explanation="Sticky canary routing (hash-based) ensures a user has a consistent experience throughout their session. This is critical for: multi-step flows (checkout, wizard UIs), A/B tests where you want to measure per-user cohort metrics, and backends with user-specific state. Random routing is fine for stateless read APIs where request-level consistency is irrelevant. Kong and AWS API GW support both via the 'canary' plugin." style="display:none"></div>
+
+          <div data-question="The HALF_OPEN state in the circuit breaker exists for what purpose, and what happens if you skip it and go directly from OPEN to CLOSED after the timer expires?" data-options='["HALF_OPEN is only for monitoring — skipping it does not change circuit breaker behavior for end users", "HALF_OPEN is a safe probe state. The circuit allows exactly one request through to test if the backend has recovered. If you skip HALF_OPEN and go OPEN → CLOSED directly: all gateway instances close simultaneously, flooding the recovering backend with full traffic load. The backend, still fragile from whatever caused the failure, gets overwhelmed again, re-trips to OPEN. This oscillation (OPEN → CLOSED → OPEN) creates thundering herd at the recovery moment.", "HALF_OPEN allows 50% of traffic through as a gradual ramp-up to full traffic", "The HALF_OPEN state is not used in production circuit breaker implementations like Hystrix"]' data-correct="1" data-explanation="HALF_OPEN is the thundering herd prevention mechanism. It gates re-opening behind a single successful probe request, preventing the simultaneous rush of all gateway instances reopening their circuits at the same time. Hystrix, Resilience4j, and most production circuit breaker libraries all implement this three-state machine for this reason. The timer in OPEN state plus the single-probe in HALF_OPEN together form a controlled recovery protocol." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
             <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="feature-flags.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Feature Flags &rarr;</a>
+              <a href="cdn.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: CDN &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
         <a href="distributed-tracing.html" class="btn btn--outline">&larr; Distributed Tracing</a>
-        <a href="feature-flags.html" class="btn btn--primary">Next: Feature Flags &rarr;</a>
+        <a href="cdn.html" class="btn btn--primary">Next: CDN &rarr;</a>
       </div>
     </main>
   </div>

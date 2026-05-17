@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Advanced System Design Concepts for FAANG L6: Bloom Filters, Service Discovery, Idempotency Keys, Microservices, Leader Election, Back-pressure, Connection Pooling.">
+  <title>Advanced System Design Concepts — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/modules/13-advanced-concepts/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../00-framework/index.html" class="site-nav__link">Framework</a></li>
+        <li><a href="../01-fundamentals/index.html" class="site-nav__link site-nav__link--active">Modules</a></li>
+        <li><a href="../../index.html#problems" class="site-nav__link">Problems</a></li>
+        <li><a href="../../mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
+        <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
+        <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
+      </ul>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+    </div>
+  </nav>
+
+  <div class="module-page" id="main">
+    <aside class="module-sidebar">
+      <nav class="module-toc">
+        <div class="module-toc__title">On this page</div>
+        <ul class="module-toc__list" role="list">
+          <li><a href="#bloom-filter" class="module-toc__link">Bloom Filters</a></li>
+          <li><a href="#service-discovery" class="module-toc__link">Service Discovery</a></li>
+          <li><a href="#idempotency" class="module-toc__link">Idempotency Keys</a></li>
+          <li><a href="#microservices" class="module-toc__link">Microservices vs Monolith</a></li>
+          <li><a href="#leader-election" class="module-toc__link">Leader Election</a></li>
+          <li><a href="#backpressure" class="module-toc__link">Back-pressure</a></li>
+          <li><a href="#connection-pooling" class="module-toc__link">Connection Pooling</a></li>
+          <li><a href="#quiz" class="module-toc__link">Quiz</a></li>
+        </ul>
+      </nav>
+      <div style="margin-top:var(--space-4)">
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="module-13" style="width:100%">Mark Complete</button>
+      </div>
+    </aside>
+
+    <main class="module-content">
+      <header class="module-header">
+        <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <span>Module 13</span>
+        </nav>
+        <div class="module-header__number">Module 13</div>
+        <h1 class="module-header__title">Advanced System Design Concepts</h1>
+        <p class="module-header__desc">The topics that separate L5 from L6 in FAANG interviews: Bloom Filters, Service Discovery, Idempotency Keys (including the Stripe TOCTOU race), Microservices trade-offs, Leader Election algorithms, Back-pressure protocols, and Connection Pool sizing. Each section includes a Java implementation and an L6-depth insight.</p>
+        <div class="module-header__meta">
+          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min read</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎯</span> L6 depth</div>
+        </div>
+      </header>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 1. BLOOM FILTERS                                       -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="bloom-filter" class="content-section">
+        <h2>Bloom Filters: Probabilistic Membership Testing</h2>
+        <p>A Bloom filter answers the question "Is this element in the set?" in O(1) time and O(1) space per element — far cheaper than a hash set. The trade-off: it can lie, but only in one direction. It will never say an element is absent when it is present (<strong>no false negatives</strong>), but it may say an element is present when it is not (<strong>false positives are possible</strong>).</p>
+
+        <h3>How it works</h3>
+        <p>A Bloom filter consists of a <strong>bit array of m bits</strong> (initially all 0) and <strong>k independent hash functions</strong>. Each hash function maps an element to one of the m bit positions.</p>
+        <ul>
+          <li><strong>Add(element):</strong> Compute k hash values. Set the k corresponding bits to 1.</li>
+          <li><strong>MightContain(element):</strong> Compute k hash values. If <em>all</em> k bits are 1, the element is <em>probably</em> in the set. If <em>any</em> bit is 0, the element is <em>definitely not</em> in the set.</li>
+        </ul>
+
+        <h3>False positive rate: the math</h3>
+        <p>After inserting <strong>n</strong> elements into a filter with <strong>m</strong> bits and <strong>k</strong> hash functions, the probability that a specific bit remains 0 is:</p>
+        <p style="font-family: var(--font-mono); background: var(--color-bg-elevated); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); margin: var(--space-4) 0; display: block; overflow-x: auto;">
+          P(bit = 0) = (1 − 1/m)<sup>kn</sup> ≈ e<sup>−kn/m</sup>
+        </p>
+        <p>The false positive rate (FPR) is the probability that all k bits for a non-member are 1:</p>
+        <p style="font-family: var(--font-mono); background: var(--color-bg-elevated); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); margin: var(--space-4) 0; display: block; overflow-x: auto;">
+          FPR ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup>
+        </p>
+        <p>The optimal number of hash functions that minimises FPR for a given m/n ratio is:</p>
+        <p style="font-family: var(--font-mono); background: var(--color-bg-elevated); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); margin: var(--space-4) 0; display: block; overflow-x: auto;">
+          k<sub>optimal</sub> = (m/n) × ln(2) ≈ 0.693 × (m/n)
+        </p>
+        <p><strong>Why no false negatives?</strong> An element is added by setting bits to 1. Bits are never flipped back to 0. Therefore, all k bits set when an element was inserted remain 1 forever. A lookup for a present element will always find all k bits set — it is impossible for the filter to report "not present" for something that was added.</p>
+
+        <h3>Space efficiency</h3>
+        <p>For a 1% false positive rate, a Bloom filter requires approximately <strong>10 bits per element</strong>. A Java <code>HashSet&lt;String&gt;</code> entry costs roughly 40–80 bytes (object header + String object + char array). For 100 million URLs: a Bloom filter uses ~120 MB; a HashSet uses ~6–8 GB. The filter is 50–70× more space-efficient.</p>
+
+        <table class="trade-off-table">
+          <caption>Bloom Filter: Real-World Use Cases</caption>
+          <thead><tr><th>System</th><th>What it filters</th><th>Benefit</th></tr></thead>
+          <tbody>
+            <tr><td>Web crawler (Google)</td><td>Seen URLs</td><td>Avoid re-crawling billions of URLs without holding them in memory</td></tr>
+            <tr><td>Redis cache check</td><td>Cacheable keys</td><td>Prevent cache-miss stampede to DB for keys that never existed</td></tr>
+            <tr><td>Cassandra SSTable</td><td>Row keys per SSTable file</td><td>Avoid disk read for keys that aren't in that SSTable — O(N) seeks → O(1)</td></tr>
+            <tr><td>Chrome Safe Browsing</td><td>Malicious URLs</td><td>Client-side filter before server lookup — saves bandwidth</td></tr>
+            <tr><td>HBase / BigTable</td><td>Row existence per region</td><td>Same as Cassandra — skip disk I/O for non-existent rows</td></tr>
+          </tbody>
+        </table>
+
+        <pre><code class="language-java">/**
+ * Bloom filter using k double-hashing-derived hash functions over a BitSet.
+ * Uses MurmurHash3 (via Guava) to generate independent hash positions.
+ * This avoids the correlation of MD5/SHA-1 while being far faster.
+ */
+public class BloomFilter {
+
+    private static final int BITS_PER_ELEMENT_FOR_ONE_PERCENT_FPR = 10;
+
+    private final BitSet bitArray;
+    private final int numberOfBits;
+    private final int numberOfHashFunctions;
+
+    /**
+     * Creates a Bloom filter sized for expectedElements with ~1% FPR.
+     *
+     * @param expectedElements - number of elements to be inserted
+     */
+    public BloomFilter(int expectedElements) {
+        this.numberOfBits = expectedElements * BITS_PER_ELEMENT_FOR_ONE_PERCENT_FPR;
+        // k_optimal = (m/n) * ln(2); for 10 bits/element that is ~7
+        this.numberOfHashFunctions = (int) Math.round(
+            (numberOfBits / (double) expectedElements) * Math.log(2)
+        );
+        this.bitArray = new BitSet(numberOfBits);
+    }
+
+    /**
+     * Adds an element to the filter. Computes k bit positions
+     * via double hashing: position_i = (hash1 + i * hash2) % m
+     *
+     * @param element - the string to add
+     */
+    public void add(String element) {
+        int[] hashPositions = computeHashPositions(element);
+        for (int position : hashPositions) {
+            bitArray.set(position);
+        }
+    }
+
+    /**
+     * Returns false if the element is DEFINITELY not in the set.
+     * Returns true if the element is PROBABLY in the set (may be false positive).
+     *
+     * @param element - the string to test
+     * @returns true if all k bits are set (probable member)
+     */
+    public boolean mightContain(String element) {
+        int[] hashPositions = computeHashPositions(element);
+        for (int position : hashPositions) {
+            if (!bitArray.get(position)) {
+                return false; // Definite non-member
+            }
+        }
+        return true; // Probable member
+    }
+
+    /**
+     * Generates k bit positions using double hashing.
+     * hash1 = MurmurHash3 seed 0; hash2 = MurmurHash3 seed hash1.
+     * Avoids creating k independent hash functions — same quality, less code.
+     */
+    private int[] computeHashPositions(String element) {
+        byte[] bytes = element.getBytes(StandardCharsets.UTF_8);
+        int hash1 = murmurHash3(bytes, 0);
+        int hash2 = murmurHash3(bytes, hash1);
+
+        int[] positions = new int[numberOfHashFunctions];
+        for (int hashIndex = 0; hashIndex &lt; numberOfHashFunctions; hashIndex++) {
+            // Double hashing: avoid modulo bias by taking absolute value
+            positions[hashIndex] = Math.abs((hash1 + hashIndex * hash2) % numberOfBits);
+        }
+        return positions;
+    }
+
+    /**
+     * Simplified MurmurHash3 finalizer for illustration.
+     * Production code should use Guava's Hashing.murmur3_32().
+     */
+    private int murmurHash3(byte[] data, int seed) {
+        int hash = seed;
+        for (byte byteValue : data) {
+            hash ^= byteValue;
+            hash *= 0x5bd1e995;
+            hash ^= hash &gt;&gt;&gt; 15;
+        }
+        return hash;
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">Cassandra maintains a Bloom filter <em>per SSTable file</em> on every node. When a read request arrives, Cassandra must check potentially dozens of SSTables to find the row. Without Bloom filters, each check requires a disk seek into the SSTable index — O(N) seeks for N SSTables. With the Bloom filter: check all N Bloom filters in memory (microseconds), then seek only to the SSTable(s) that probably contain the row. The 1–3% false positive rate means occasional unnecessary disk seeks, but that is far cheaper than always seeking every SSTable. This is why Cassandra read latency stays low even with many SSTables: it turns O(N) disk seeks into O(1) probabilistic in-memory checks.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 2. SERVICE DISCOVERY                                   -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="service-discovery" class="content-section">
+        <h2>Service Discovery: Finding Services at Runtime</h2>
+        <p>In a dynamic microservices environment, service instances start and stop constantly. IP addresses are ephemeral. Service discovery is the mechanism by which a client finds the current network location (IP + port) of the service it wants to call.</p>
+
+        <h3>Client-side discovery (Netflix Eureka)</h3>
+        <p>Each service registers itself with a service registry on startup and sends heartbeats to stay registered. The registry deregisters instances that stop sending heartbeats. Clients query the registry directly and receive a list of healthy instances. The <strong>client itself performs load balancing</strong> — choosing which instance to call (round-robin, least connections, etc.).</p>
+        <ul>
+          <li><strong>Advantage:</strong> Client can make smart routing decisions (prefer local AZ, avoid overloaded instances, implement circuit breaking).</li>
+          <li><strong>Disadvantage:</strong> Discovery logic is baked into every client. Every language/framework needs a registry client library. Netflix Ribbon + Eureka is the canonical example.</li>
+        </ul>
+
+        <h3>Server-side discovery (AWS ALB, Nginx)</h3>
+        <p>The client sends a request to a load balancer. The load balancer queries the service registry and routes the request to a healthy instance. The client knows nothing about registry or instance selection.</p>
+        <ul>
+          <li><strong>Advantage:</strong> Client is simple — it just calls a single stable DNS name. Discovery is centralised and language-agnostic.</li>
+          <li><strong>Disadvantage:</strong> The load balancer is a potential bottleneck and single point of failure (mitigated by redundancy). One extra network hop per request.</li>
+        </ul>
+
+        <h3>DNS-based discovery</h3>
+        <p>Register healthy instance IPs as A/AAAA records for a service DNS name. Clients resolve the DNS name and connect to one of the returned IPs. <strong>Trade-offs:</strong> DNS TTL caching means clients may hold stale records for seconds to minutes after an instance goes down. DNS has no native health-check concept — a returned IP may be dead. DNS round-robin is the only built-in load balancing (no weighted routing, no least-connections). Suitable for low-churn environments; poor fit for rapidly scaling microservices.</p>
+
+        <h3>Consul: the full-featured registry</h3>
+        <p>Consul combines service registration, health checking, KV store, and service mesh capabilities in one system. Services register with health check scripts (HTTP endpoint, TCP check, or script). Consul removes instances that fail their health check from the registry. Features include: multi-datacenter replication, ACL security, DNS interface (so any existing DNS client can query Consul), and Consul Connect for mTLS service mesh.</p>
+
+        <h3>etcd: Raft-based coordination store</h3>
+        <p>etcd is Kubernetes' backing store for all cluster state — every Pod, Service, ConfigMap, and Node record lives in etcd. It is a distributed key-value store built on the <strong>Raft consensus algorithm</strong> (covered in Module 06). For service discovery, services write their registration records as keys with a TTL lease. The registration disappears automatically when the service crashes (lease expires). etcd's strong consistency (linearizable reads) makes it suitable for leader election and distributed locking, not just discovery.</p>
+
+        <figure class="diagram-container" aria-label="Client-side vs server-side service discovery">
+          <svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Service discovery patterns comparison">
+            <title>Client-Side vs Server-Side Service Discovery</title>
+            <!-- Left: Client-side -->
+            <text x="160" y="18" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="Inter,sans-serif" font-weight="600">CLIENT-SIDE (Eureka)</text>
+            <rect x="10" y="30" width="80" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="50" y="54" text-anchor="middle" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif">Client</text>
+            <rect x="120" y="30" width="80" height="40" rx="6" fill="#1f2937" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="160" y="54" text-anchor="middle" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif">Registry</text>
+            <rect x="245" y="30" width="70" height="40" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="280" y="54" text-anchor="middle" fill="#86efac" font-size="10" font-family="Inter,sans-serif">Svc A:8080</text>
+            <!-- arrows client-side -->
+            <line x1="90" y1="45" x2="118" y2="45" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowSD1)"/>
+            <text x="104" y="40" text-anchor="middle" fill="#6366f1" font-size="8" font-family="Inter,sans-serif">1. query</text>
+            <line x1="200" y1="50" x2="243" y2="50" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowSD2)"/>
+            <text x="221" y="44" text-anchor="middle" fill="#22c55e" font-size="8" font-family="Inter,sans-serif">2. instances</text>
+            <line x1="90" y1="60" x2="243" y2="60" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowSD3)"/>
+            <text x="166" y="74" text-anchor="middle" fill="#3b82f6" font-size="8" font-family="Inter,sans-serif">3. direct call (client picks)</text>
+            <!-- Right: Server-side -->
+            <text x="490" y="18" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="Inter,sans-serif" font-weight="600">SERVER-SIDE (ALB)</text>
+            <rect x="335" y="30" width="70" height="40" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="370" y="54" text-anchor="middle" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif">Client</text>
+            <rect x="430" y="30" width="70" height="40" rx="6" fill="#2d2a1e" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="465" y="50" text-anchor="middle" fill="#fcd34d" font-size="10" font-family="Inter,sans-serif">LB / ALB</text>
+            <text x="465" y="63" text-anchor="middle" fill="#64748b" font-size="8" font-family="Inter,sans-serif">queries registry</text>
+            <rect x="530" y="30" width="70" height="40" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="565" y="54" text-anchor="middle" fill="#86efac" font-size="10" font-family="Inter,sans-serif">Svc A:8080</text>
+            <line x1="405" y1="50" x2="428" y2="50" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowSD4)"/>
+            <text x="417" y="44" text-anchor="middle" fill="#f59e0b" font-size="8" font-family="Inter,sans-serif">1. call</text>
+            <line x1="500" y1="50" x2="528" y2="50" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowSD2)"/>
+            <text x="514" y="44" text-anchor="middle" fill="#22c55e" font-size="8" font-family="Inter,sans-serif">2. routes</text>
+            <!-- Horizontal divider -->
+            <line x1="320" y1="20" x2="320" y2="100" stroke="#2e3248" stroke-width="1" stroke-dasharray="4,4"/>
+            <defs>
+              <marker id="arrowSD1" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#6366f1"/></marker>
+              <marker id="arrowSD2" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#22c55e"/></marker>
+              <marker id="arrowSD3" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#3b82f6"/></marker>
+              <marker id="arrowSD4" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#f59e0b"/></marker>
+            </defs>
+          </svg>
+          <figcaption>Client-side: client queries registry and picks instance. Server-side: client calls LB which queries registry and routes.</figcaption>
+        </figure>
+
+        <pre><code class="language-java">/**
+ * Minimal service discovery abstraction: registry + client-side load balancing.
+ * Production implementations would use Consul or etcd; this shows the pattern.
+ */
+public interface ServiceRegistry {
+    void register(String serviceName, String host, int port);
+    void deregister(String serviceName, String host, int port);
+    List&lt;ServiceInstance&gt; getInstances(String serviceName);
+}
+
+public record ServiceInstance(String host, int port) {}
+
+public class SimpleInMemoryRegistry implements ServiceRegistry {
+
+    // serviceName → list of healthy instances
+    private final ConcurrentHashMap&lt;String, CopyOnWriteArrayList&lt;ServiceInstance&gt;&gt; registry
+        = new ConcurrentHashMap&lt;&gt;();
+
+    @Override
+    public void register(String serviceName, String host, int port) {
+        registry.computeIfAbsent(serviceName, ignored -> new CopyOnWriteArrayList&lt;&gt;())
+                .add(new ServiceInstance(host, port));
+    }
+
+    @Override
+    public void deregister(String serviceName, String host, int port) {
+        List&lt;ServiceInstance&gt; instances = registry.get(serviceName);
+        if (instances != null) {
+            instances.remove(new ServiceInstance(host, port));
+        }
+    }
+
+    @Override
+    public List&lt;ServiceInstance&gt; getInstances(String serviceName) {
+        return registry.getOrDefault(serviceName, new CopyOnWriteArrayList&lt;&gt;());
+    }
+}
+
+/**
+ * Round-robin load balancer over a ServiceRegistry.
+ * Uses AtomicInteger for thread-safe index rotation without locking.
+ */
+public class RoundRobinLoadBalancer {
+
+    private final ServiceRegistry registry;
+    private final AtomicInteger callCounter = new AtomicInteger(0);
+
+    public RoundRobinLoadBalancer(ServiceRegistry registry) {
+        this.registry = registry;
+    }
+
+    /**
+     * Returns the next instance in round-robin order.
+     * Returns empty if no instances are registered.
+     *
+     * @param serviceName - the logical service name
+     * @returns the next ServiceInstance to call, or empty
+     */
+    public Optional&lt;ServiceInstance&gt; chooseInstance(String serviceName) {
+        List&lt;ServiceInstance&gt; availableInstances = registry.getInstances(serviceName);
+        if (availableInstances.isEmpty()) {
+            return Optional.empty();
+        }
+        int selectedIndex = callCounter.getAndIncrement() % availableInstances.size();
+        return Optional.of(availableInstances.get(selectedIndex));
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">Kubernetes does not use a registry-query-per-request model for service discovery. Instead, it assigns each Service a stable virtual IP (<code>ClusterIP</code>) and installs <strong>iptables rules</strong> (via kube-proxy) on every node that NAT the ClusterIP to a real Pod IP. The routing decision happens in the Linux kernel — no application-layer registry lookup, no DNS resolution latency per call. This is why Kubernetes service discovery adds near-zero latency overhead: it is literally kernel packet rewriting.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 3. IDEMPOTENCY KEYS                                    -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="idempotency" class="content-section">
+        <h2>Idempotency Keys: Exactly-Once Semantics</h2>
+        <p>An operation is <strong>idempotent</strong> if executing it multiple times produces the same result as executing it once. HTTP GET, PUT, and DELETE are idempotent by definition. HTTP POST is not — posting a payment twice creates two charges.</p>
+
+        <p>Network failures create a "did it succeed?" problem: a client sends a payment request, the server processes it, but the response is lost in transit. The client retries. Without idempotency, the user is charged twice. <strong>Idempotency keys</strong> solve this.</p>
+
+        <h3>The protocol</h3>
+        <ol>
+          <li>The <strong>client generates</strong> a unique <code>idempotency_key</code> (UUID v4) before sending the request. The key represents this specific logical operation, not the HTTP request.</li>
+          <li>The client sends the key in a header: <code>Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000</code></li>
+          <li>The server checks its key store (Redis or DB): <strong>key seen → return cached response immediately</strong>. Key not seen → process the operation, store <code>(key → status + response)</code>, return response.</li>
+          <li>The client retries on network error. The server returns the cached response — same result, no double-charge.</li>
+        </ol>
+
+        <h3>Storage pattern</h3>
+        <p>Keys are stored with a TTL. Stripe uses a <strong>24-hour TTL</strong> — the client has 24 hours to safely retry. After that, the same key will be treated as a new operation. The stored value includes: operation status (pending / completed / failed), the full response body, and a timestamp.</p>
+
+        <h3>The TOCTOU race condition</h3>
+        <p>A subtle race: two parallel requests arrive with the same key simultaneously. Both do a "check if key exists" → both find it absent → both proceed to process the payment. This Time-Of-Check-To-Time-Of-Use (TOCTOU) race requires an atomic check-and-set. In Redis, <code>SET key value NX PX ttl</code> (Set if Not eXists) is atomic — only one of the two concurrent requests can win. The other receives the existing value and returns the cached response.</p>
+
+        <pre><code class="language-java">/**
+ * Idempotency service using Redis SETNX for atomic check-and-set.
+ * Prevents double-processing of operations when clients retry on network errors.
+ *
+ * @requires Redis client (Jedis or Lettuce)
+ */
+public class IdempotencyService {
+
+    private static final String STATUS_PENDING    = "PENDING";
+    private static final String STATUS_COMPLETED  = "COMPLETED";
+    private static final int    TTL_SECONDS       = 86_400; // 24 hours — Stripe standard
+    private static final String KEY_PREFIX        = "idempotency:";
+
+    private final JedisPool redisPool;
+
+    public IdempotencyService(JedisPool redisPool) {
+        this.redisPool = redisPool;
+    }
+
+    /**
+     * Atomically claims the idempotency key.
+     * Returns empty if this is the first time the key is seen (caller should process).
+     * Returns the cached response string if the key was already seen (caller should return it).
+     *
+     * Uses Redis SET NX (not SETNX, which is deprecated) for atomicity.
+     * The tiny window between "key not found" and "processing starts" is closed
+     * by storing PENDING status immediately — the second thread finds PENDING and waits/retries.
+     *
+     * @param idempotencyKey - the client-provided UUID key
+     * @returns empty Optional if processing should proceed; cached response otherwise
+     */
+    public Optional&lt;String&gt; checkAndClaimKey(String idempotencyKey) {
+        String redisKey = KEY_PREFIX + idempotencyKey;
+
+        try (Jedis jedis = redisPool.getResource()) {
+            // SET key PENDING NX EX ttl — atomic: only succeeds if key does not exist
+            String setResult = jedis.set(redisKey, STATUS_PENDING, SetParams.setParams()
+                .nx()
+                .ex(TTL_SECONDS));
+
+            if ("OK".equals(setResult)) {
+                // We won the race — this thread should process the operation
+                return Optional.empty();
+            }
+
+            // Another thread already claimed this key — get its current value
+            String existingValue = jedis.get(redisKey);
+            if (STATUS_PENDING.equals(existingValue)) {
+                // Still processing — client should retry after a short delay
+                // In production: return 202 Accepted with Retry-After header
+                throw new IdempotencyKeyPendingException(
+                    "Operation with key " + idempotencyKey + " is still processing. Retry in 1s.");
+            }
+            // Key exists and has a completed response — return it
+            return Optional.of(existingValue);
+        }
+    }
+
+    /**
+     * Stores the completed response for an idempotency key.
+     * Called after the operation completes successfully or fails permanently.
+     *
+     * @param idempotencyKey - the client-provided UUID key
+     * @param responseJson   - the serialised response to cache
+     */
+    public void storeCompletedResponse(String idempotencyKey, String responseJson) {
+        String redisKey = KEY_PREFIX + idempotencyKey;
+        try (Jedis jedis = redisPool.getResource()) {
+            // SETEX overwrites PENDING with the real response, resets TTL
+            jedis.setex(redisKey, TTL_SECONDS, STATUS_COMPLETED + ":" + responseJson);
+        }
+    }
+
+    public static class IdempotencyKeyPendingException extends RuntimeException {
+        public IdempotencyKeyPendingException(String message) {
+            super(message);
+        }
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">Stripe's actual idempotency key implementation uses <strong>PostgreSQL advisory locks</strong>, not Redis, to handle the TOCTOU race. The reason: Redis SETNX closes the race at the cache layer, but if the server crashes after claiming the key but before storing the response, the key remains as PENDING (or is lost if Redis is also down), and the client can never safely retry. A Postgres advisory lock (<code>pg_try_advisory_lock(key_hash)</code>) serialises concurrent requests for the same key at the database level, where the key record is also stored durably. This ensures that even after a crash, the key record either exists (with the completed response) or doesn't (and the client can safely retry from scratch). The lesson: when atomicity spans network calls, push the coordination to your durable store, not to a cache.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 4. MICROSERVICES VS MONOLITH                           -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="microservices" class="content-section">
+        <h2>Microservices vs Monolith: Making the Right Call</h2>
+        <p>This is not a religious debate — it is an engineering trade-off. The question is not "which is better" but "which is right for this team, this problem, and this point in time."</p>
+
+        <table class="trade-off-table">
+          <caption>Monolith vs Microservices: Trade-offs</caption>
+          <thead><tr><th>Dimension</th><th>Monolith</th><th>Microservices</th></tr></thead>
+          <tbody>
+            <tr><td>Deployment</td><td>Single unit — one build, one deploy</td><td>Independent per service — 50 services = 50 pipelines</td></tr>
+            <tr><td>Network overhead</td><td>In-process function calls — nanoseconds</td><td>Remote calls — milliseconds, plus serialisation</td></tr>
+            <tr><td>Transactions</td><td>ACID transactions across all tables trivially</td><td>Distributed transactions require Saga or 2PC</td></tr>
+            <tr><td>Debugging</td><td>Single stack trace, single log stream</td><td>Requires distributed tracing (Jaeger, Zipkin) to correlate</td></tr>
+            <tr><td>Scaling</td><td>Scale the whole thing — inefficient for uneven load</td><td>Scale only the hot service independently</td></tr>
+            <tr><td>Team autonomy</td><td>Shared codebase — coordination overhead, merge conflicts</td><td>Each team owns their service — independent release cadence</td></tr>
+            <tr><td>Polyglot</td><td>One language/runtime</td><td>Each service can use the best-fit language</td></tr>
+            <tr><td>Operational complexity</td><td>Simple — one thing to monitor</td><td>High — need service mesh, distributed tracing, service discovery</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Conway's Law: split along team boundaries</h3>
+        <p>Conway's Law states: "Organizations that design systems are constrained to produce designs that are copies of the communication structures of those organisations." The implication for microservices: <strong>split services along team ownership boundaries, not technical ones</strong>. A "UserService + AddressService + PreferenceService" split within one team still has all the operational overhead of microservices with none of the team-autonomy benefit. The right split is: one team fully owns one service end-to-end — from database to API.</p>
+
+        <h3>Service mesh: east-west traffic management</h3>
+        <p>An API gateway handles <strong>north-south traffic</strong> — external clients coming into the system. A service mesh handles <strong>east-west traffic</strong> — service-to-service calls inside the cluster. Istio (using Envoy as a sidecar proxy, as covered in the Sidecar pattern in Module 10) provides: mutual TLS between every pair of services automatically, circuit breaking at the sidecar layer, traffic shaping (canary releases between service versions), and distributed tracing injection. No application code changes required — the sidecar intercepts all traffic.</p>
+
+        <h3>Data ownership: the most violated rule</h3>
+        <p>The #1 mistake when building microservices is <strong>sharing a database</strong> between services. If OrderService and InventoryService share a Postgres database, they are not independent — a schema change in one breaks the other, they cannot scale independently, and you lose the ability to choose the right data store per service. The rule: <strong>each microservice owns exactly one database that no other service may directly query</strong>. Cross-service data needs go through the service's API or event stream.</p>
+
+        <p>Distributed transactions across microservice databases require the <strong>Saga pattern</strong> (a chain of local transactions coordinated via events or orchestration) — covered in Module 04. Sagas sacrifice ACID isolation but preserve eventual consistency without distributed locking.</p>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">The real cost of microservices is <strong>operational</strong>, not technical. You need distributed tracing, service discovery, circuit breakers, distributed transactions, multi-service deployments, and per-service monitoring from day one. A 5-person team paying this cost for a system that gets 1,000 RPM is burning engineering time on infrastructure instead of product. The right approach: build a <strong>modular monolith</strong> — well-defined internal module boundaries, no circular dependencies, clean interfaces between modules. When you have a proven split point (a module owned by a different team, with different scaling needs, and different release cadence), extract it as a service at that point. Shopify ran as a Rails monolith to $1B GMV. Amazon was a monolith until 2001. The question is never "monolith vs microservices" — it is "have we earned the right to pay this operational cost?"</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 5. LEADER ELECTION                                     -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="leader-election" class="content-section">
+        <h2>Leader Election: Coordinating a Single Writer</h2>
+        <p>Many distributed systems need exactly one process to act as leader at any time: a primary in a replication setup, a singleton scheduler (avoid running a cron job on every node simultaneously), or the single writer to a partition. Leader election is the protocol that determines who leads and handles failover when the leader crashes.</p>
+
+        <h3>ZooKeeper ephemeral nodes</h3>
+        <p>ZooKeeper provides <strong>ephemeral nodes</strong> — ZooKeeper tree nodes that exist only as long as the creating client's session is alive. The leader election protocol:</p>
+        <ol>
+          <li>All candidates attempt to create the same ephemeral node: <code>/services/myapp/leader</code>.</li>
+          <li>Only one succeeds (ZooKeeper ensures atomicity). That process is the leader.</li>
+          <li>The losers watch the node. When the leader crashes, its ZooKeeper session expires and the ephemeral node is deleted.</li>
+          <li>ZooKeeper notifies all watchers. The losers race to create the node again — one wins.</li>
+        </ol>
+        <p><strong>Session timeout caveat:</strong> Default ZooKeeper session timeout is 30 seconds. If a GC pause causes the leader to miss heartbeats, ZooKeeper considers it dead and deletes the node — even though the leader process is still alive and will resume after GC. You now have <strong>two leaders simultaneously</strong> (the old leader is paused but thinks it's still leader; the new leader just won election). Use <strong>fencing tokens</strong> — a monotonically increasing number granted at election time that the leader must present on every write. The storage layer rejects writes with stale tokens.</p>
+
+        <h3>etcd distributed locking (lease-based)</h3>
+        <p>etcd leases are TTL-based. A leader creates a lease and periodically renews it. If the leader dies, the lease expires and the lock key is deleted. Candidates use <code>PUT /leader</code> with a <code>prevExist=false</code> condition (atomically: only set if key does not exist).</p>
+
+        <h3>Bully algorithm</h3>
+        <p>The simplest leader election algorithm: the node with the <strong>highest ID wins</strong>. When a node detects the leader is gone, it sends an ELECTION message to all nodes with higher IDs. If it gets no response within timeout, it declares itself leader. If a higher-ID node responds, it takes over the election. O(n²) messages in the worst case — not suitable for large clusters, but simple to implement for small deployments.</p>
+
+        <h3>Raft leader election</h3>
+        <p>Covered in depth in Module 06. Key mechanic: randomised election timeouts prevent split votes. Term numbers provide a logical clock — a candidate with a higher term always wins. A leader must win a majority vote and maintain leadership by sending regular heartbeats. No heartbeats within the election timeout = followers start a new election.</p>
+
+        <h3>PostgreSQL advisory locks</h3>
+        <p>For systems that already have a Postgres database, <code>pg_try_advisory_lock(lock_id)</code> provides session-scoped distributed locking without a separate coordination service. The lock is released automatically when the Postgres session ends (connection drops). It is often overlooked because it requires no additional infrastructure — just a query.</p>
+
+        <pre><code class="language-java">/**
+ * Leader election using etcd lease-based locking.
+ * The leader holds a lease it must renew before TTL expires.
+ * On crash or disconnect, the lease expires and another candidate wins.
+ *
+ * @requires etcd Java client (jetcd)
+ */
+public class EtcdLeaderElector {
+
+    private static final String LEADER_KEY          = "/election/leader";
+    private static final long   LEASE_TTL_SECONDS   = 10L;
+    private static final long   RENEWAL_INTERVAL_MS = 3_000L; // renew at 30% of TTL
+
+    private final Client etcdClient;
+    private final String candidateId;
+    private volatile boolean isCurrentLeader = false;
+    private long currentLeaseId = 0L;
+
+    public EtcdLeaderElector(Client etcdClient, String candidateId) {
+        this.etcdClient = etcdClient;
+        this.candidateId = candidateId;
+    }
+
+    /**
+     * Attempts to acquire leadership. Non-blocking — returns immediately.
+     * If this candidate wins, starts a background lease renewal thread.
+     *
+     * @returns true if this candidate is now the leader
+     */
+    public boolean tryAcquireLeadership() throws Exception {
+        LeaseClient leaseClient = etcdClient.getLeaseClient();
+        KV kvClient = etcdClient.getKVClient();
+
+        // Grant a lease with TTL — the key we create will auto-delete when lease expires
+        LeaseGrantResponse leaseGrant = leaseClient.grant(LEASE_TTL_SECONDS).get();
+        long leaseId = leaseGrant.getID();
+
+        ByteSequence leaderKey   = ByteSequence.from(LEADER_KEY, StandardCharsets.UTF_8);
+        ByteSequence candidateValue = ByteSequence.from(candidateId, StandardCharsets.UTF_8);
+
+        // Atomic: PUT the key only if it does not already exist (version == 0)
+        Txn transaction = kvClient.txn();
+        TxnResponse transactionResult = transaction
+            .If(new Cmp(leaderKey, Cmp.Op.EQUAL, CmpTarget.version(0)))
+            .Then(Op.put(leaderKey, candidateValue, PutOption.builder().withLeaseId(leaseId).build()))
+            .commit()
+            .get();
+
+        boolean wonElection = transactionResult.isSucceeded();
+        if (wonElection) {
+            currentLeaseId = leaseId;
+            isCurrentLeader = true;
+            startLeaseRenewalThread(leaseClient, leaseId);
+        } else {
+            // Release the lease we created — we are not the leader
+            leaseClient.revoke(leaseId).get();
+        }
+        return wonElection;
+    }
+
+    /**
+     * Periodically renews the lease to maintain leadership.
+     * If renewal fails (network partition), the lease expires and leadership is lost.
+     */
+    private void startLeaseRenewalThread(LeaseClient leaseClient, long leaseId) {
+        Thread renewalThread = new Thread(() -> {
+            while (isCurrentLeader) {
+                try {
+                    Thread.sleep(RENEWAL_INTERVAL_MS);
+                    leaseClient.keepAliveOnce(leaseId).get();
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception renewalException) {
+                    // Renewal failed — we may have lost leadership
+                    System.err.println("[EtcdLeaderElector] Lease renewal failed: " + renewalException.getMessage());
+                    isCurrentLeader = false;
+                }
+            }
+        }, "etcd-lease-renewal");
+        renewalThread.setDaemon(true);
+        renewalThread.start();
+    }
+
+    public boolean isLeader() {
+        return isCurrentLeader;
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">ZooKeeper's ephemeral node death detection is bounded by the <strong>session timeout</strong> (default 30 seconds). Under a JVM GC pause, the leader's ZooKeeper client stops sending heartbeats. After 30 seconds of silence, ZooKeeper declares the session dead and deletes the ephemeral node — even though the process is alive and will resume after GC. A new leader is elected. When GC completes, the original leader still thinks it's the leader. You have <strong>two leaders simultaneously</strong>. The fix: use a shorter session timeout to detect failures faster — but shorter timeout = more false positives during network hiccups or GC pauses. The real fix is <strong>fencing tokens</strong>: the storage layer rejects any write where the leader's token (epoch number) is less than the highest-seen token. This makes dual-leader scenarios safe regardless of timeout settings.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 6. BACK-PRESSURE AND FLOW CONTROL                     -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="backpressure" class="content-section">
+        <h2>Back-pressure and Flow Control</h2>
+        <p>Back-pressure is the mechanism by which a <strong>consumer signals to its producer to slow down</strong>. Without it: the producer generates data faster than the consumer can process; a queue forms; if the queue is unbounded it grows until the process runs out of memory (OOM); if bounded it starts dropping data or blocking the producer.</p>
+
+        <h3>Reactive Streams: the pull protocol</h3>
+        <p>The Reactive Streams specification (Java 9 <code>java.util.concurrent.Flow</code>, RxJava, Project Reactor) solves back-pressure with a <strong>pull model</strong>. Instead of the producer pushing data at the consumer's maximum possible speed, the consumer requests exactly how many items it can handle with <code>Subscription.request(n)</code>. The producer may not send more than n items until the consumer requests more.</p>
+        <p>This is fundamentally different from a push model: in push, the producer decides when to send; in pull, the consumer decides when to receive. The producer never overwhelms the consumer because the consumer controls the flow.</p>
+
+        <h3>Kafka consumer back-pressure</h3>
+        <p>Kafka's consumer API provides two controls:</p>
+        <ul>
+          <li><code>max.poll.records</code>: limits how many records are returned in a single <code>poll()</code> call. Setting this to a small number (e.g., 50) prevents the consumer from pulling more work than it can process in the poll interval.</li>
+          <li><code>pause(partition)</code> / <code>resume(partition)</code>: when the consumer's processing queue is full, pause polling from specific partitions. Kafka retains the messages. The consumer resumes when it has capacity. This is application-level back-pressure without losing messages.</li>
+        </ul>
+
+        <h3>gRPC flow control</h3>
+        <p>gRPC uses HTTP/2, which has a built-in <strong>window-based flow control</strong> at the transport layer. Each stream and each connection has a receive window (default 65 KB). The sender may not send more data than the window allows. When the receiver consumes data, it sends WINDOW_UPDATE frames to increase the window. gRPC adds an application-level layer on top: the consumer can signal how many messages it is ready to receive, providing back-pressure at the business logic level.</p>
+
+        <h3>Circuit breaker as back-pressure</h3>
+        <p>The circuit breaker (Module 10) is a form of back-pressure: when the downstream service is overwhelmed, the circuit opens and stops sending requests — giving the downstream service time to drain its queue and recover. This is back-pressure applied at the caller level rather than the consumer level.</p>
+
+        <pre><code class="language-java">/**
+ * Bounded processor that implements back-pressure via a Semaphore.
+ * The semaphore's permit count is the maximum concurrent in-flight tasks.
+ * Producers block (or get rejected) when the consumer is at capacity.
+ */
+public class RateLimitedProcessor {
+
+    private static final int MAX_CONCURRENT_TASKS  = 50;
+    private static final long BACKPRESSURE_TIMEOUT_MS = 500L; // max wait for a permit
+
+    // Semaphore as a bounded counter of in-flight processing slots
+    private final Semaphore processingSlots = new Semaphore(MAX_CONCURRENT_TASKS, true);
+    private final ExecutorService workerPool;
+
+    public RateLimitedProcessor(int threadPoolSize) {
+        this.workerPool = Executors.newFixedThreadPool(threadPoolSize);
+    }
+
+    /**
+     * Submits a task for processing. Blocks up to BACKPRESSURE_TIMEOUT_MS
+     * if the processor is at capacity (back-pressure applied to the caller).
+     * Throws BackpressureException if capacity is not available within timeout.
+     *
+     * @param task - the Runnable to process
+     */
+    public void submit(Runnable task) throws InterruptedException {
+        boolean permittedToRun = processingSlots.tryAcquire(
+            BACKPRESSURE_TIMEOUT_MS, TimeUnit.MILLISECONDS
+        );
+        if (!permittedToRun) {
+            // Back-pressure: reject instead of queuing indefinitely
+            throw new BackpressureException(
+                "Processor at capacity (" + MAX_CONCURRENT_TASKS + " concurrent tasks). "
+                + "Apply back-pressure to producer."
+            );
+        }
+
+        workerPool.submit(() -> {
+            try {
+                task.run();
+            } finally {
+                processingSlots.release(); // Always release — even on exception
+            }
+        });
+    }
+
+    public static class BackpressureException extends RuntimeException {
+        public BackpressureException(String message) {
+            super(message);
+        }
+    }
+}
+
+/**
+ * Kafka consumer with manual partition pause/resume for back-pressure.
+ * Pauses partitions when processing queue is full; resumes when capacity returns.
+ */
+public class BackpressureAwareKafkaConsumer {
+
+    private static final int    MAX_QUEUE_SIZE         = 500;
+    private static final int    RESUME_THRESHOLD       = 100;
+    private static final int    MAX_POLL_RECORDS       = 50;
+    private static final long   POLL_TIMEOUT_MS        = 100L;
+
+    private final KafkaConsumer&lt;String, String&gt; kafkaConsumer;
+    private final BlockingQueue&lt;ConsumerRecord&lt;String, String&gt;&gt; processingQueue;
+    private final Set&lt;TopicPartition&gt; pausedPartitions = new HashSet&lt;&gt;();
+
+    public BackpressureAwareKafkaConsumer(Properties consumerProperties, String topic) {
+        consumerProperties.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, MAX_POLL_RECORDS);
+        this.kafkaConsumer = new KafkaConsumer&lt;&gt;(consumerProperties);
+        this.processingQueue = new LinkedBlockingQueue&lt;&gt;(MAX_QUEUE_SIZE);
+        this.kafkaConsumer.subscribe(List.of(topic));
+    }
+
+    /**
+     * Poll loop that applies back-pressure by pausing partitions
+     * when the downstream processing queue is full.
+     */
+    public void pollLoop() {
+        while (!Thread.currentThread().isInterrupted()) {
+            adjustPartitionPauseState();
+            ConsumerRecords&lt;String, String&gt; records =
+                kafkaConsumer.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+
+            for (ConsumerRecord&lt;String, String&gt; record : records) {
+                boolean offered = processingQueue.offer(record);
+                if (!offered) {
+                    // Queue full — this should not happen after pause; log as a warning
+                    System.err.println("[BackpressureConsumer] Queue full, record dropped. "
+                        + "Investigate back-pressure logic.");
+                }
+            }
+        }
+    }
+
+    /**
+     * Pauses partitions when queue is above MAX_QUEUE_SIZE;
+     * resumes them when queue drains below RESUME_THRESHOLD.
+     * Hysteresis prevents rapid pause/resume oscillation.
+     */
+    private void adjustPartitionPauseState() {
+        Set&lt;TopicPartition&gt; assignedPartitions = kafkaConsumer.assignment();
+        int currentQueueSize = processingQueue.size();
+
+        if (currentQueueSize &gt;= MAX_QUEUE_SIZE &amp;&amp; pausedPartitions.isEmpty()) {
+            kafkaConsumer.pause(assignedPartitions);
+            pausedPartitions.addAll(assignedPartitions);
+        } else if (currentQueueSize &lt;= RESUME_THRESHOLD &amp;&amp; !pausedPartitions.isEmpty()) {
+            kafkaConsumer.resume(pausedPartitions);
+            pausedPartitions.clear();
+        }
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);"><strong>Unbounded queues hide back-pressure.</strong> <code>new LinkedList()</code>, <code>new ArrayDeque()</code>, or an <code>ExecutorService</code> with an unbounded work queue all accept items infinitely — the producer never experiences any signal that the consumer is overloaded. The system appears healthy until it OOMs and dies. Always use <code>LinkedBlockingQueue(capacity)</code> or an explicit semaphore as shown above. When the queue is full, you have a choice: <em>block</em> the producer (back-pressure propagation), <em>drop</em> the item (acceptable for metrics but not for payments), or <em>shed load</em> and return a 503. The worst choice is silently queue it in an unbounded structure and pretend everything is fine.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- 7. DATABASE CONNECTION POOLING                         -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="connection-pooling" class="content-section">
+        <h2>Database Connection Pooling</h2>
+        <p>Every database connection is expensive to create. Establishing a TCP connection + TLS handshake + PostgreSQL authentication takes 10–50ms. A web application processing 1,000 RPS cannot afford to create a new connection per request. A connection pool maintains a set of pre-established, reusable connections.</p>
+
+        <h3>Why connections are expensive</h3>
+        <ul>
+          <li><strong>TCP 3-way handshake:</strong> SYN → SYN-ACK → ACK (1 round-trip time)</li>
+          <li><strong>TLS handshake:</strong> certificate exchange, key agreement (1–2 additional RTTs)</li>
+          <li><strong>PostgreSQL authentication:</strong> challenge-response, session setup</li>
+          <li><strong>Total:</strong> 10–50ms per new connection. At 1,000 RPS, creating a new connection per request costs 10–50 seconds per second of work — impossible.</li>
+        </ul>
+
+        <h3>Pool mechanics</h3>
+        <p>A connection pool maintains a set of open connections and lends them to application threads on request:</p>
+        <ul>
+          <li><strong>minimumIdle:</strong> connections kept open even when idle — avoids cold-start latency on traffic spikes</li>
+          <li><strong>maximumPoolSize:</strong> hard cap on open connections — database has a connection limit (Postgres default: 100)</li>
+          <li><strong>connectionTimeout:</strong> how long to wait for a free connection — throw immediately if pool is exhausted</li>
+          <li><strong>keepaliveTime:</strong> idle connection health-check query — prevents firewalls from silently closing idle TCP connections</li>
+          <li><strong>maxLifetime:</strong> maximum connection age — prevents connections from drifting into bad state over time</li>
+        </ul>
+
+        <h3>HikariCP: why it is the fastest</h3>
+        <p>HikariCP is the de-facto standard Java connection pool (default in Spring Boot). It outperforms c3p0 and DBCP2 because: it uses a <strong>lock-free <code>ConcurrentBag</code></strong> data structure that avoids contention on the connection list; it uses <code>FastList</code> instead of <code>ArrayList</code> for statement tracking; and its bytecode is minimal — the pool overhead per borrow/return is measured in hundreds of nanoseconds, not microseconds.</p>
+
+        <h3>Pool sizing: the right formula</h3>
+        <p>A common mistake is setting pool size to <code>cores × 2</code> or a large arbitrary number (100+). The right model from the PostgreSQL JDBC team:</p>
+        <p style="font-family: var(--font-mono); background: var(--color-bg-elevated); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); margin: var(--space-4) 0; display: block;">
+          pool_size = (core_count × 2) + effective_spindle_count
+        </p>
+        <p>For a <strong>network database on SSD</strong> (no spinning disks): <code>pool_size ≈ core_count</code>, because the bottleneck is CPU processing, not I/O wait. For a database with <strong>spinning disks</strong>: add the number of disk spindles, because I/O wait allows threads to be reused productively. A 4-core application server talking to a Postgres instance typically needs <strong>9–10 connections</strong> (4×2+1), not 100. Oversizing the pool hurts: PostgreSQL has high per-connection overhead; too many connections cause memory pressure and context-switching on the DB server.</p>
+
+        <h3>Read replica routing</h3>
+        <p>Maintain two pools: one for the primary (writes + consistent reads) and one for read replicas (eventually consistent reads). Route analytically: any query that can tolerate a replication lag (typically &lt;1s for synchronous replication) goes to the replica pool. This halves the load on the primary and allows read-only horizontal scaling by adding replicas.</p>
+
+        <pre><code class="language-java">/**
+ * HikariCP configuration for a web service talking to PostgreSQL.
+ * Includes leak detection, keepalive, and correct pool sizing.
+ *
+ * @requires HikariCP, PostgreSQL JDBC driver
+ */
+public class DatabaseConnectionPoolConfig {
+
+    private static final int    CORE_COUNT                  = Runtime.getRuntime().availableProcessors();
+    // For network DB on SSD: core_count * 2 + 1 is a good starting point
+    private static final int    PRIMARY_POOL_SIZE           = CORE_COUNT * 2 + 1;
+    private static final int    REPLICA_POOL_SIZE           = CORE_COUNT * 2 + 1;
+    private static final long   CONNECTION_TIMEOUT_MS       = 3_000L;  // throw after 3s wait
+    private static final long   IDLE_TIMEOUT_MS             = 600_000L; // 10 min idle before eviction
+    private static final long   MAX_LIFETIME_MS             = 1_800_000L; // 30 min max connection age
+    private static final long   KEEPALIVE_TIME_MS           = 60_000L;  // send keepalive every 60s
+    private static final long   LEAK_DETECTION_THRESHOLD_MS = 5_000L;   // warn if held &gt; 5s
+
+    /**
+     * Creates the primary connection pool (used for all writes and consistent reads).
+     */
+    public static HikariDataSource buildPrimaryPool(String jdbcUrl, String username, String password) {
+        HikariConfig primaryConfig = new HikariConfig();
+        primaryConfig.setPoolName("primary-pool");
+        primaryConfig.setJdbcUrl(jdbcUrl);
+        primaryConfig.setUsername(username);
+        primaryConfig.setPassword(password);
+        primaryConfig.setDriverClassName("org.postgresql.Driver");
+
+        primaryConfig.setMaximumPoolSize(PRIMARY_POOL_SIZE);
+        primaryConfig.setMinimumIdle(PRIMARY_POOL_SIZE / 2); // keep half warm at all times
+
+        primaryConfig.setConnectionTimeout(CONNECTION_TIMEOUT_MS);
+        primaryConfig.setIdleTimeout(IDLE_TIMEOUT_MS);
+        primaryConfig.setMaxLifetime(MAX_LIFETIME_MS);
+        primaryConfig.setKeepaliveTime(KEEPALIVE_TIME_MS);
+
+        // Warn in logs if a connection is held for more than 5 seconds — likely a leak
+        primaryConfig.setLeakDetectionThreshold(LEAK_DETECTION_THRESHOLD_MS);
+
+        // Validate connection is still alive before lending to application code
+        primaryConfig.setConnectionTestQuery("SELECT 1");
+
+        return new HikariDataSource(primaryConfig);
+    }
+
+    /**
+     * Creates the read-replica pool (used for eventually-consistent reads).
+     * Points to the replica endpoint — reads may lag by &lt;1s under synchronous replication.
+     */
+    public static HikariDataSource buildReplicaPool(String replicaJdbcUrl, String username, String password) {
+        HikariConfig replicaConfig = new HikariConfig();
+        replicaConfig.setPoolName("replica-pool");
+        replicaConfig.setJdbcUrl(replicaJdbcUrl);
+        replicaConfig.setUsername(username);
+        replicaConfig.setPassword(password);
+        replicaConfig.setDriverClassName("org.postgresql.Driver");
+
+        replicaConfig.setMaximumPoolSize(REPLICA_POOL_SIZE);
+        replicaConfig.setMinimumIdle(2); // fewer warm connections — reads can tolerate brief ramp-up
+
+        replicaConfig.setConnectionTimeout(CONNECTION_TIMEOUT_MS);
+        replicaConfig.setIdleTimeout(IDLE_TIMEOUT_MS);
+        replicaConfig.setMaxLifetime(MAX_LIFETIME_MS);
+        replicaConfig.setKeepaliveTime(KEEPALIVE_TIME_MS);
+        replicaConfig.setLeakDetectionThreshold(LEAK_DETECTION_THRESHOLD_MS);
+
+        return new HikariDataSource(replicaConfig);
+    }
+}</code></pre>
+
+        <div style="background: linear-gradient(135deg, #2d1f5e 0%, #1e1a4f 100%); border: 1px solid #6366f1; border-radius: var(--radius-lg); padding: var(--space-5); margin-top: var(--space-6);">
+          <div style="color: #a5b4fc; font-weight: 700; font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--space-3);">⚡ L6 Insight</div>
+          <p style="color: var(--color-text-primary); margin: 0; line-height: var(--leading-relaxed);">The <strong>About Pool Sizing</strong> wiki on the HikariCP GitHub has a remarkable data point: a benchmark running 10,000 concurrent requests against Postgres found that a pool of <em>10 connections</em> significantly outperformed a pool of 50 connections. Counterintuitive, but correct: Postgres allocates ~5–10 MB of RAM per connection for shared buffers, working memory, and lock tables. With 50 connections, the DB server spends more time on context-switching and memory pressure than on query execution. The correct mental model is not "more connections = more throughput" — it is "connections are a scarce resource on the DB side; use as few as the math says you need." Start at <code>core_count × 2 + 1</code> and tune up only if you observe pool exhaustion (borrow timeouts) under production load.</p>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- QUIZ                                                   -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <section id="quiz" class="content-section">
+        <h2>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="module-13-quiz" role="region" aria-label="Module quiz">
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Advanced Concepts Quiz</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
+          <div class="quiz__question">
+            <div class="quiz__question-number">Question 1 of 5</div>
+            <div class="quiz__question-text">A Bloom filter returns true for a lookup. What can you conclude?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options"></div>
+            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+          </div>
+
+          <div data-question="A Bloom filter returns true for a lookup. What can you conclude?" data-options='["The element is definitely in the set","The element is probably in the set — a false positive is possible","The element is definitely not in the set","The bit array is full and needs resizing"]' data-correct="1" data-explanation="A Bloom filter can only definitively say an element is NOT present (if any of the k bits is 0, it was never added). A positive result means all k bits are set — which could be caused by other elements that happen to share those bit positions (a false positive). The false positive rate is (1 − e^{−kn/m})^k." style="display:none"></div>
+
+          <div data-question="In client-side service discovery (e.g., Netflix Eureka), who is responsible for load balancing across service instances?" data-options='["The service registry deduplicates requests and routes them","The client queries the registry and picks the instance itself","The API gateway intercepts all requests and balances them","DNS round-robin handles distribution automatically"]' data-correct="1" data-explanation="In client-side discovery, the client receives a list of healthy instances from the registry and makes the load-balancing decision itself (round-robin, least-connections, prefer-local-AZ, etc.). Netflix Ribbon implements this on top of Eureka. The advantage: the client can make smart routing decisions. The disadvantage: every client needs a registry client library." style="display:none"></div>
+
+          <div data-question="Why does Stripe use PostgreSQL advisory locks for idempotency key enforcement rather than Redis SETNX?" data-options='["Redis is too slow for payment operations","PostgreSQL advisory locks are cheaper to acquire than a Redis network call","If the server crashes after Redis SETNX but before storing the response, the client can never safely retry — the Postgres lock ties atomicity to the durable store","Redis SETNX does not support TTL expiry"]' data-correct="2" data-explanation="Redis SETNX closes the TOCTOU race at the cache layer, but if the server crashes between claiming the key and storing the result, the key is stuck as PENDING in Redis (or lost if Redis restarts). The client cannot retry safely. PostgreSQL advisory locks place the coordination in the same durable store as the idempotency key record — a crash either commits the key record or rolls it back, leaving the client a clean retry path. Atomicity must live in the durable store, not the cache." style="display:none"></div>
+
+          <div data-question="You have 4 CPU cores on your application server and a PostgreSQL database on SSD accessed over the network. What is the recommended starting pool size per the HikariCP formula?" data-options='["4 (core_count)","8 (core_count × 2)","9 (core_count × 2 + 1)","100 (a safe large value)"]' data-correct="2" data-explanation="The formula is pool_size = (core_count × 2) + effective_spindle_count. For a network database on SSD (no spinning disks, spindle_count = 0), the formula gives 4 × 2 + 1 = 9. The +1 is a small buffer for the one extra connection that often helps when a thread is context-switching. Starting at 100 is a common anti-pattern that adds Postgres memory pressure and connection overhead without throughput benefit." style="display:none"></div>
+
+          <div data-question="In a ZooKeeper-based leader election, a JVM GC pause causes the leader process to stop sending heartbeats for 45 seconds (session timeout is 30s). What happens?" data-options='["ZooKeeper waits for the leader to resume — it knows about GC pauses","After 30 seconds, ZooKeeper expires the session and deletes the ephemeral node. A new leader is elected. When GC completes, two leaders briefly think they are the leader simultaneously.","The leader's lease is automatically extended during GC","The other candidates detect the pause and pause themselves to avoid split-brain"]' data-correct="1" data-explanation="ZooKeeper has no concept of GC pauses — it only knows about heartbeats. After 30 seconds without a heartbeat, it expires the session and deletes the ephemeral node. A new leader is elected. When GC finishes, the original leader resumes — still thinking it holds leadership. This is split-brain. The mitigation is fencing tokens: a monotonically increasing epoch number granted at election time that the storage layer uses to reject stale writes." style="display:none"></div>
+
+          <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
+          <div class="quiz__result is-hidden" aria-live="polite">
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
+            <div style="margin-top:var(--space-4)">
+              <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
+              <a href="../../mock-interview/index.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Mock Interview →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="module-nav" aria-label="Module navigation">
+        <a href="../12-realtime/index.html" class="btn btn--outline">← Module 12: Real-time Communication</a>
+        <a href="../../mock-interview/index.html" class="btn btn--primary">Mock Interview →</a>
+      </nav>
+    </main>
+  </div>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="site-footer__inner">
+      <p class="site-footer__copy">MAANG System Design Course — Module 13</p>
+      <nav class="site-footer__links" aria-label="Footer navigation">
+        <a href="../../progress/index.html" class="site-footer__link">My Progress</a>
+        <a href="../../cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
+        <a href="../../mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="../../assets/js/shared.js" type="module"></script>
+</body>
+</html>

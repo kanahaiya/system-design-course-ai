@@ -1,10 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Distributed Database like Google Spanner — RESHADED walkthrough covering Raft consensus, TrueTime API, global ordering, and distributed transactions for MAANG interviews.">
-  <title>Design Distributed Database (Spanner) — MAANG System Design</title>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Design a Distributed Database like Google Spanner or CockroachDB — L6 system design covering MVCC, TrueTime, Raft consensus, 2PC cross-shard transactions, and global data placement.">
+  <title>Design a Distributed Database &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -23,347 +22,1042 @@
         <li><a href="../../cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
         <li><a href="../../progress/index.html" class="site-nav__link">Progress</a></li>
       </ul>
-      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
+      <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview &rarr;</a>
     </div>
   </nav>
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
       <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
-          <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
-          <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
-          <li><a href="#schema" class="module-toc__link">S — Schema</a></li>
-          <li><a href="#hld" class="module-toc__link">H — High-level Design</a></li>
-          <li><a href="#apis" class="module-toc__link">A — APIs</a></li>
-          <li><a href="#deepdive" class="module-toc__link">D — Deep Dive</a></li>
-          <li><a href="#evaluate" class="module-toc__link">E — Evaluate</a></li>
-          <li><a href="#deliver" class="module-toc__link">D — Deliver</a></li>
+          <li><a href="#requirements" class="module-toc__link">R &mdash; Requirements</a></li>
+          <li><a href="#estimation" class="module-toc__link">E &mdash; Estimation</a></li>
+          <li><a href="#schema" class="module-toc__link">S &mdash; Schema</a></li>
+          <li><a href="#hld" class="module-toc__link">H &mdash; High-level Design</a></li>
+          <li><a href="#apis" class="module-toc__link">A &mdash; APIs</a></li>
+          <li><a href="#deepdive" class="module-toc__link">D &mdash; Deep Dive</a></li>
+          <li><a href="#evaluate" class="module-toc__link">E &mdash; Evaluate</a></li>
+          <li><a href="#deliver" class="module-toc__link">D &mdash; Deliver</a></li>
           <li><a href="#tradeoffs" class="module-toc__link">Trade-offs</a></li>
           <li><a href="#implementation" class="module-toc__link">Java Implementation</a></li>
           <li><a href="#quiz" class="module-toc__link">Knowledge Check</a></li>
         </ul>
       </nav>
       <div style="margin-top:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)">
-        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-dist-db" style="width:100%">Mark Complete</button>
-        <a href="../../mock-interview/index.html?problem=dist-db" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
+        <button class="btn btn--primary" id="js-complete-btn" data-lesson-id="p-distributed-db" style="width:100%">Mark Complete</button>
+        <a href="../../mock-interview/index.html?problem=p-distributed-db" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
-          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">&rsaquo;</span>
+          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">&rsaquo;</span>
           <span>Tier 3</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 — Expert</span>
-          <span class="tag">60 min</span><span class="tag">Consensus / Distributed</span>
+          <span class="tag" style="background:var(--color-purple-subtle,#f0e7ff);color:var(--color-purple,#7c3aed)">Tier 3 &mdash; Expert</span>
+          <span class="tag">75 min</span><span class="tag">Databases</span>
         </div>
-        <h1 class="module-header__title">Design a Distributed Database (like Google Spanner)</h1>
-        <p class="module-header__desc">Spanner achieves the seemingly impossible: externally consistent, globally distributed transactions. The secret is TrueTime — GPS + atomic clocks that provide a globally monotonic clock with bounded uncertainty. Combined with Raft consensus, transactions are ordered by real time.</p>
+        <h1 class="module-header__title">Design a Distributed Database (like Google Spanner / CockroachDB)</h1>
+        <p class="module-header__desc">Spanner is perhaps the most technically complex production database ever built. Its key insight: TrueTime (GPS + atomic clock hardware) gives a bounded uncertainty interval for real-world time. Waiting until that uncertainty passes (commit wait) makes external consistency provably correct without a centralized coordinator. Understanding MVCC, Raft vs Paxos, cross-shard 2PC, and the difference between strong and stale reads is what distinguishes L6+ candidates on this topic.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, CockroachDB, YugabyteDB</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 60 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">🌐</span> Global ACID</div>
+          <div class="module-header__meta-item">&#x1F3E2; Google Spanner, CockroachDB, YugabyteDB, TiDB</div>
+          <div class="module-header__meta-item">&#x23F1;&#xFE0F; 75 min interview</div>
+          <div class="module-header__meta-item">&#x1F4CA; Global, petabytes, external consistency, millions QPS</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════ REQUIREMENTS ═══════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Relational data model with SQL query interface</li>
-            <li>ACID transactions across multiple rows, tables, and geographically distributed nodes</li>
-            <li>Strong consistency: reads always see the latest committed data</li>
-            <li>Horizontal partitioning (sharding) with automatic rebalancing</li>
-            <li>Multi-region deployment for low-latency global reads</li>
+            <li><strong>SQL interface:</strong> full SQL (DDL, DML, queries, indexes). Clients use standard SQL drivers (JDBC/ODBC). No learning curve for application developers.</li>
+            <li><strong>ACID transactions:</strong> serializability isolation. Cross-row, cross-table, cross-shard transactions must be atomic. Either all succeed or all are rolled back.</li>
+            <li><strong>Global distribution:</strong> data replicated across multiple geographic regions. Reads can be served from any region. Writes are globally ordered.</li>
+            <li><strong>Horizontal scaling:</strong> add nodes to increase throughput and storage. Data automatically re-sharded (split/merge) as load changes.</li>
+            <li><strong>Schema changes:</strong> online DDL (add/remove columns) without taking the database offline. Spanner does this without locking all rows during migration.</li>
+            <li><strong>Strong reads:</strong> reads that are guaranteed to reflect all committed writes up to the current time. No stale data.</li>
+            <li><strong>Stale reads:</strong> reads at a past timestamp. Served from any replica (no coordination required). Lower latency than strong reads, slightly stale.</li>
+            <li><strong>Snapshot transactions:</strong> read-only transaction at a consistent snapshot across all shards. No locks. Reads are globally consistent.</li>
           </ul>
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> Petabytes of data, millions of QPS globally</li>
-            <li><strong>Consistency:</strong> Linearizable (external consistency) — stronger than serializable</li>
-            <li><strong>Availability:</strong> Survives single datacenter failures</li>
-            <li><strong>Latency:</strong> Single-region reads: &lt;10ms; cross-region: &lt;100ms</li>
+            <li><strong>Consistency:</strong> external consistency (a.k.a. strict serializability) — if transaction T2 starts after T1 commits in real time, T2 must see T1's writes. Stronger than serializability.</li>
+            <li><strong>Availability:</strong> survives single-node failure transparently. Survives single-datacenter failure with degraded write performance. Configurable quorum for read/write.</li>
+            <li><strong>Throughput:</strong> millions of QPS. Google F1 (Google Ads) uses Spanner — billions of ad auction queries per day.</li>
+            <li><strong>Latency:</strong> same-region reads: &lt;1ms. Cross-region strong reads: ~10ms. Cross-region writes: ~100ms (limited by speed of light). Stale reads: &lt;1ms anywhere.</li>
+            <li><strong>Durability:</strong> data replicated to multiple regions. Loss of any single region does not lose data.</li>
+          </ul>
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Query optimizer implementation (complex, separate system)</li>
+            <li>Full SQL parser (use an existing parser library)</li>
+            <li>Storage engine internals (we'll reference RocksDB/Bigtable as given)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ ESTIMATION ═══════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
+          <h3>Scale Numbers</h3>
           <ul>
-            <li>Data sharded into ~64MB "splits" (Spanner's tablets). PB database = 15M tablets.</li>
-            <li>Each tablet replicated to 5 Raft followers across regions (f=2 failure tolerance)</li>
-            <li>Raft commit: 3/5 acknowledgements needed → 1 cross-region round trip (~100ms)</li>
-            <li>TrueTime uncertainty: ~7ms globally → commits must wait this long to ensure ordering</li>
+            <li><strong>Data size:</strong> petabytes. Each row stored as key-value: key = (table_id, row_key, column_id, timestamp), value = bytes. With versioning (MVCC), multiple versions per cell.</li>
+            <li><strong>Shard size:</strong> each Paxos group manages a shard of ~100MB-1GB. At 1PB total data: 1M-10M shards. Each shard has 5 replicas across 5 zones (typical Spanner config).</li>
+            <li><strong>Node count:</strong> Spanner nodes serve ~2000 QPS reads / 1000 QPS writes each. For 10M QPS: ~5000-10000 nodes in a large deployment.</li>
+            <li><strong>Transaction throughput:</strong> single-shard transactions: ~10ms commit. Cross-region 2PC: ~100-500ms. This means high-throughput workloads should minimize cross-shard transactions via data locality (co-locate related rows in the same shard using interleaved tables).</li>
+            <li><strong>Latency of commit wait (TrueTime):</strong> TrueTime uncertainty epsilon is typically 1-7ms. Commit wait adds epsilon to each write commit. In practice: 1-10ms added per transaction. This is the cost of TrueTime-based external consistency.</li>
           </ul>
+          <div class="insight-box" style="background:linear-gradient(135deg,#f0e7ff,#ede9fe);border-left:4px solid #7c3aed;padding:var(--space-4);border-radius:8px;margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Speed of light bottleneck:</strong> Cross-region write latency is fundamentally bounded by the speed of light. US East Coast to Western Europe: ~75ms one-way. For a 2-phase commit requiring 2 round trips: ~300ms. This is not an engineering problem — it is a physics problem. Spanner can reduce coordination overhead (TrueTime eliminates some coordinator round trips), but cannot defeat the speed of light. Application architects must co-locate data and traffic geographically for write-intensive workloads.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ SCHEMA ═══════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Spanner's physical storage: tablets (sorted key ranges)
-// Each tablet is a key range of a table, replicated via Raft
-// Tablets are automatically split when they exceed ~64MB
+          <h3>Internal Key-Value Storage Model</h3>
+          <pre><code class="language-java">// All data stored as sorted key-value pairs in the underlying storage engine (RocksDB/Bigtable).
+// The key encodes: table + row key + column + version timestamp.
+// Multiple MVCC versions exist per key, sorted by timestamp descending.
 
-// Logical schema (SQL DDL)
-CREATE TABLE Accounts (
-    account_id  STRING(36) NOT NULL,
-    owner_id    STRING(36) NOT NULL,
-    balance     INT64,        // stored in cents
-    last_txn_ts TIMESTAMP,
-    PRIMARY KEY (account_id)
-) INTERLEAVE IN PARENT Customers ON DELETE CASCADE;
-// Interleaving: child rows co-located with parent — avoids cross-tablet joins
+// Key encoding (encoded for sorted order):
+// {table_id (8 bytes)} + {row_key (variable)} + {column_family (4 bytes)} +
+//   {column_qualifier (variable)} + {~timestamp (8 bytes, inverted for descending sort)}
+//
+// Example: row "user_123" in table "users", column "name", at timestamp 1720000100
+// Key: 0x00000001 + "user_123" + 0x00000001 + "name" + (~1720000100)
+// Value: "Alice"
+//
+// Another version: same row at timestamp 1720000050
+// Key: 0x00000001 + "user_123" + 0x00000001 + "name" + (~1720000050)
+// Value: "Alicia"
+//
+// Sorted iteration by key gives: user_123.name@100 → user_123.name@50 → user_123.name@20
+// A read at timestamp T returns the first version with timestamp ≤ T.
 
-// Transactions stored with commit timestamp from TrueTime
-CREATE TABLE Transactions (
-    txn_id      STRING(36),
-    account_id  STRING(36),
-    amount      INT64,
-    commit_ts   TIMESTAMP,    // assigned by TrueTime at commit
-    PRIMARY KEY (account_id, commit_ts)
-);</code></pre>
+// Transaction log (Raft/Paxos log entry)
+LogEntry {
+  logIndex:     long          // monotonically increasing, unique per Raft group
+  term:         long          // Raft term (epoch for leader election)
+  timestamp:    long          // TrueTime commit timestamp
+  operations:  List&lt;Operation&gt;  // list of key-value writes in this transaction
+  transactionId: UUID
+}
+
+Operation {
+  type:       enum   // PUT | DELETE
+  key:        byte[]
+  value:      byte[] // null for DELETE
+}
+
+// Shard (a.k.a. tablet in Spanner terminology)
+// A contiguous range of sorted keys
+Shard {
+  shardId:    UUID
+  startKey:   byte[]   // inclusive start of key range
+  endKey:     byte[]   // exclusive end of key range
+  leaderId:   UUID     // which node is the current Raft/Paxos leader
+  replicas:   List&lt;ReplicaLocation&gt;  // where each replica is hosted
+  size:       long     // current data size in bytes; used to trigger split
+}</code></pre>
+
+          <h3>MVCC Version Chain Example</h3>
+          <pre><code class="language-java">// Scenario: bank account balance with three writes at different times
+// Key: "account:alice:balance"
+//
+// Version chain (newest first):
+// Version @T=100: value=500  (latest write — Alice received $200)
+// Version @T=70:  value=300  (previous write — Alice received $100)
+// Version @T=40:  value=200  (original write)
+//
+// Read at T=100: returns 500 (see latest)
+// Read at T=75:  returns 300 (T=100 didn't exist yet from this read's perspective)
+// Read at T=50:  returns 200 (T=70 didn't exist yet)
+// Read at T=30:  returns null (no version existed at T=30)
+//
+// Transaction T1 reads at snapshot T=75 → sees 300
+// Transaction T2 writes at T=100 → creates version @T=100
+// T1 never sees T2's write — it's reading a consistent historical snapshot
+// This is how MVCC achieves snapshot isolation without locking readers</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ HLD ═══════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
+          <h3>Architecture Overview</h3>
+          <pre><code class="language-java">// Spanner architecture layers:
+
+Client (SQL queries via JDBC)
+    │
+    ▼
+Client Library / Driver
+    │ - Route to appropriate zone
+    │ - Session management
+    │ - Retry on transient errors
+    ▼
+Zone (a.k.a. datacenter / availability zone)
+    │
+    ├── Zonemaster (manages span servers in this zone)
+    │
+    └── Spanservers (each manages 100-1000 shards/tablets)
+           │
+           ├── Tablet files (Bigtable-based key-value storage per shard)
+           │
+           ├── Paxos state machine (per shard — one Paxos group per shard)
+           │    Leader elected among replicas of this shard across all zones
+           │    All writes go to leader → replicated to followers via Paxos
+           │
+           ├── Lock table (for 2PL — per-key read/write locks)
+           │    Stores: lock_type, transaction_id, expiry
+           │
+           └── Transaction manager (coordinates 2PC for cross-shard transactions)
+
+Universe Master (single global admin)
+    │ - Zone directory, zone health, global metadata
+    │ - Not in request path
+
+Placement Driver
+    │ - Monitors shard sizes
+    │ - Triggers shard split (when size > threshold)
+    │ - Triggers shard merge (when load drops)
+    │ - Moves shard leadership between zones for latency optimization</code></pre>
+
+          <h3>Paxos vs Raft: What's the Difference?</h3>
+          <p>Both algorithms achieve the same goal: replicated state machine consensus. Given a set of replicas, they agree on a sequence of log entries even in the face of failures (up to (N-1)/2 node failures with N replicas).</p>
           <ul>
-            <li><strong>Zones:</strong> Each datacenter is a zone. Each zone has zone masters (Paxos-elected) and tablet servers.</li>
-            <li><strong>Tablet Servers:</strong> Own a set of tablets. Each tablet is a Raft group with replicas across 3–5 zones.</li>
-            <li><strong>Raft Consensus:</strong> All writes go to the Raft leader for a tablet. Leader replicates to majority of followers. Once majority acks, commit is durable.</li>
-            <li><strong>TrueTime:</strong> Each server has TT.now() → [earliest, latest] bounded interval. Commit timestamp assigned from TrueTime. Server waits until TT.now().earliest > commit_ts before making commit visible (commit-wait).</li>
-            <li><strong>2PC for cross-tablet transactions:</strong> Transaction coordinator (one of the participant leaders) runs 2PC. Prepare → commit with TrueTime timestamp. Abort if any participant fails.</li>
-            <li><strong>Read modes:</strong> Strong reads go to Raft leader. Stale reads (as of timestamp T) can go to any replica with data as of T.</li>
+            <li><strong>Paxos (Spanner):</strong> the original algorithm. More flexible (multi-decree Paxos allows pipelining), more complex to implement correctly. Paxos is technically a family of algorithms; Spanner uses a variant called "Multi-Paxos" with persistent leadership for efficiency.</li>
+            <li><strong>Raft (CockroachDB, etcd, TiKV):</strong> designed to be understandable. Explicit leader election phase, clear log replication protocol, explicit membership change protocol. Simpler to implement correctly. Equivalent guarantees to Paxos but with different performance characteristics in edge cases.</li>
+            <li><strong>Performance parity:</strong> for most workloads, Paxos and Raft have identical throughput and latency. Paxos has a slight edge in specific multi-leader scenarios. For an interview: saying "I'll use Raft because it's simpler to implement correctly" is a perfectly valid L6 answer.</li>
           </ul>
+
+          <h3>Transaction Types</h3>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Type</th><th>Mechanism</th><th>Latency</th><th>Use case</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Read-write transaction (locking)</strong></td><td>2PL + MVCC. Acquire read locks (shared) and write locks (exclusive). Commit: 2PC across shards.</td><td>~10ms same-region, ~100ms+ cross-region</td><td>Writes, CAS (check-and-set), multi-row atomic updates</td></tr>
+                <tr><td><strong>Read-only snapshot transaction</strong></td><td>MVCC. Choose snapshot timestamp, read all data at that timestamp. No locks acquired anywhere.</td><td>~1ms same-region, ~10ms cross-region (strong), &lt;1ms stale</td><td>Reports, analytics, consistent multi-row reads</td></tr>
+                <tr><td><strong>Single-shard read (blind read)</strong></td><td>Read from Paxos leader or any replica (stale). No coordination with other shards.</td><td>&lt;1ms</td><td>Simple lookups, key-value gets</td></tr>
+                <tr><td><strong>Partitioned DML</strong></td><td>Execute DML (UPDATE/DELETE) on each shard independently. Not atomically consistent across shards, but each shard's update is atomic.</td><td>Scales with data size</td><td>Bulk updates, database maintenance, backfills</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ APIS ═══════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Spanner client API (Java)
-DatabaseClient client = spanner.getDatabaseClient(DatabaseId.of("project", "instance", "db"));
+          <pre><code class="language-java">// Spanner client API (simplified — real Spanner uses gRPC)
 
-// Read-write transaction (strong consistency, uses 2PC for cross-tablet)
-client.readWriteTransaction().run(txn -> {
-    Long balance = txn.readRow("Accounts", Key.of(accountId), List.of("balance"))
-                      .getLong("balance");
-    txn.buffer(Mutation.newUpdateBuilder("Accounts")
-                       .set("balance").to(balance - 100)
-                       .set("account_id").to(accountId)
-                       .build());
-    return null;
-});
+// Session management
+CreateSession(database) → Session
+  // A session is a long-lived connection object. All operations within a session
+  // are serialized. Use a session pool for concurrency (like JDBC connection pool).
 
-// Stale read (read as of 15 seconds ago — no leader coordination needed)
-try (ResultSet rs = client.singleUseReadOnlyTransaction(TimestampBound.ofExactStaleness(15, TimeUnit.SECONDS))
-                          .executeQuery(Statement.of("SELECT balance FROM Accounts WHERE account_id=@id"))) {}</code></pre>
+// Read-only (snapshot) transaction
+BeginReadOnlyTransaction(session, timestampBound) → Transaction
+  // timestampBound options:
+  //   StrongRead() — reads as of the current TrueTime. Routed to Paxos leader.
+  //   ExactStaleness(Duration d) — reads as of now - d. Can be served from any replica.
+  //   MaxStaleness(Duration d) — reads at most d stale. Choose closest replica.
+  //   ReadTimestamp(Timestamp t) — reads at specific past timestamp.
+
+// Execute SQL within transaction
+ExecuteQuery(transaction, sql, params) → ResultSet
+  // Example: "SELECT balance FROM accounts WHERE account_id = @id"
+  // @id = "alice"
+
+// Read-write transaction (locking)
+BeginReadWriteTransaction(session) → Transaction
+ExecuteRead(transaction, sql, params) → ResultSet   // acquires shared locks
+ExecuteDml(transaction, sql, params) → rowsAffected  // acquires exclusive locks
+Commit(transaction) → CommitTimestamp                 // 2PC across shards; returns commit timestamp
+Rollback(transaction)                                 // release all locks
+
+// Direct mutations (no explicit transaction; implicit single-row transaction)
+Commit(session, mutations: List&lt;Mutation&gt;) → CommitTimestamp
+// Mutations: Insert, Update, InsertOrUpdate (upsert), Delete
+// Example: Mutation.newInsertBuilder("accounts")
+//            .set("account_id").to("alice")
+//            .set("balance").to(1000L)
+//            .build()
+
+// Admin API
+CreateDatabase(instance, ddl) → Operation          // CREATE TABLE ...
+UpdateDatabaseDdl(database, ddl) → Operation       // ALTER TABLE ... (online DDL)
+  // Online DDL: changes are applied incrementally while database remains online.
+  // Spanner uses a distributed schema version + backfill approach.</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ DEEP DIVE ═══════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Raft Consensus + TrueTime<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Raft consensus:</strong></p>
-          <ol>
-            <li>Leader election: nodes vote for candidate with most up-to-date log. Majority required.</li>
-            <li>Log replication: leader appends entry, sends AppendEntries to followers. Once majority ack, entry is committed.</li>
-            <li>Safety: only nodes with all committed entries can become leader. Ensures no committed entry is lost.</li>
-          </ol>
-          <p><strong>TrueTime for global ordering:</strong></p>
+
+          <h3>MVCC: How Reads Never Block Writers</h3>
+          <p>Multi-Version Concurrency Control (MVCC) is the foundation of Spanner's performance. Without MVCC, every read would need to acquire a shared lock, blocking writers during reads (or vice versa). MVCC eliminates read-write contention entirely by maintaining multiple versions of each row, one per timestamp.</p>
+          <pre><code class="language-java">// MVCC read algorithm:
+// 1. Determine read timestamp T (from transaction's snapshot or TrueTime.now())
+// 2. For each key K we want to read:
+//    a. Iterate the version chain for K in reverse-chronological order
+//    b. Return the first version with timestamp ≤ T
+//    c. If no version exists with timestamp ≤ T: key did not exist at time T → return null
+// 3. No locks acquired. Writer can concurrently write version @T+1 without blocking this read.
+
+// MVCC write algorithm:
+// 1. Generate commit timestamp T (from TrueTime)
+// 2. For each key K being written:
+//    a. Create new version entry: (K, T) → new_value
+//    b. Do NOT modify or delete existing versions
+// 3. Commit: log entry to Paxos, replicate, apply
+// Concurrent readers at timestamps &lt; T see old values; readers at timestamps ≥ T see new values.
+
+// Version garbage collection:
+// Old versions consume storage. Spanner GCs versions older than:
+//   max(transaction_retention_period, oldest_active_read_timestamp)
+// Versions needed by active snapshot reads are preserved.
+// GC runs as background compaction in the storage layer (like RocksDB compaction).</code></pre>
+
+          <h3>TrueTime: The Secret Weapon of Spanner</h3>
+          <p>TrueTime is a hardware-backed API unique to Google's infrastructure. Every Google datacenter has GPS receivers and atomic clocks. The TrueTime API exposes not a single timestamp, but an interval:</p>
+          <pre><code class="language-java">// TrueTime API:
+// TT.now() → TrueTimeInterval { earliest: long, latest: long }
+// TT.before(t) → boolean: is t definitely in the past?
+// TT.after(t) → boolean: is t definitely in the future?
+//
+// The interval [earliest, latest] is a guarantee: the true current time is
+// somewhere within this interval. The uncertainty epsilon = latest - earliest.
+// In production: epsilon is typically 1-7ms.
+//
+// External consistency protocol (commit wait):
+//
+// Step 1: Acquire commit timestamp T
+//   T = TT.now().latest  (take the LATEST bound — pessimistic)
+//
+// Step 2: WAIT until TT.now().earliest > T
+//   This means: wait until we're CERTAIN that T is in the past.
+//   Wait time ≈ epsilon (typically 1-7ms)
+//
+// Step 3: Commit and release locks
+//
+// Why does this achieve external consistency?
+// Any transaction T2 that STARTS after T1 COMMITS in real time will see:
+//   T2.read_timestamp ≥ T2_start_time &gt; T1_commit_time = T1.timestamp
+//   Because we waited until T1.timestamp is definitely in the past before releasing.
+// Therefore: T2 will always read T1's writes. QED.
+//
+// Without TrueTime (using logical clocks):
+// You'd need a centralized timestamp server (Percolator's approach).
+// Every transaction must contact the timestamp server — a bottleneck and single point of failure.
+// TrueTime eliminates the need for a centralized coordinator for timestamp ordering.
+
+// CockroachDB's HLC (Hybrid Logical Clock) alternative:
+// HLC = max(physical_clock_ms * 10^6 + logical_counter)
+// Satisfies: if event A → event B (causally), then HLC(A) &lt; HLC(B)
+// Does NOT satisfy external consistency: if A and B are concurrent with no causal relationship,
+// HLC order may not match real-time order. CockroachDB must use uncertainty retries to handle this.
+// Less precise than TrueTime but works with standard commodity hardware (no GPS required).</code></pre>
+
+          <h3>Cross-Shard Transactions: 2PC with Paxos Groups</h3>
+          <p>A transaction that touches multiple shards (e.g., transfer money between accounts on different shards) requires coordination. Spanner uses two-phase commit (2PC) where each shard's Paxos group is a participant:</p>
+          <pre><code class="language-java">// Cross-shard 2PC protocol:
+//
+// Transaction: transfer $100 from Alice (shard A) to Bob (shard B)
+//
+// Phase 1: Prepare
+//   Transaction coordinator (one of the shards' Paxos leaders, often the largest shard)
+//   sends PREPARE to each participant shard.
+//
+//   Shard A receives PREPARE:
+//     - Acquire write lock on Alice's row
+//     - Verify account has sufficient balance (read under lock)
+//     - Log PREPARED record to Paxos (makes prepare durable even if coordinator fails)
+//     - Reply PREPARED to coordinator with proposed commit timestamp
+//
+//   Shard B receives PREPARE:
+//     - Acquire write lock on Bob's row
+//     - Log PREPARED record to Paxos
+//     - Reply PREPARED to coordinator
+//
+// Phase 2: Commit
+//   Coordinator receives PREPARED from all participants.
+//   Coordinator determines final commit timestamp:
+//     T_commit = max(all proposed timestamps) + commit_wait
+//   Coordinator logs COMMIT record (this is the point of no return).
+//   Sends COMMIT with T_commit to all participants.
+//
+//   Shard A receives COMMIT:
+//     - Apply the write: Alice's balance -= 100, versioned at T_commit
+//     - Release lock on Alice's row
+//
+//   Shard B receives COMMIT:
+//     - Apply the write: Bob's balance += 100, versioned at T_commit
+//     - Release lock on Bob's row
+//
+// If coordinator fails after logging COMMIT:
+//   Participants can read the coordinator's COMMIT log from its Paxos group.
+//   Protocol completes without the original coordinator.
+//
+// If coordinator fails after PREPARE but before COMMIT:
+//   Participants hold locks (blocking). Eventually a new coordinator detects the
+//   timeout and decides to ABORT. All participants release locks and roll back.
+//
+// This is the classic 2PC problem: blocking in the failure window between
+// prepare and commit. Spanner mitigates via Paxos durability of the PREPARE record
+// (a new leader can recover the decision) and short timeout (~10-20s).</code></pre>
+
+          <h3>Strong Reads vs Stale Reads</h3>
+          <p>One of Spanner's most useful features is the ability to explicitly trade freshness for latency:</p>
           <ul>
-            <li>Problem: distributed systems have no global clock. NTP has ±100ms drift.</li>
-            <li>TrueTime uses GPS receivers + atomic clocks in each datacenter. Uncertainty: ε ≈ 7ms typically.</li>
-            <li>TT.now() returns [t-ε, t+ε]. The real time is guaranteed within this interval.</li>
-            <li>Commit protocol: assign commit_ts = TT.now().latest. Then wait until TT.now().earliest > commit_ts (commit-wait, ~14ms). This ensures no future transaction can be assigned a timestamp before commit_ts.</li>
-            <li>Result: transactions are ordered by their commit timestamps, which are guaranteed to reflect real-time ordering. This is external consistency (stronger than serializable).</li>
+            <li><strong>Strong reads (read at TrueTime.now()):</strong> must be served from the Paxos leader of each shard. The leader is guaranteed to have all committed writes. If data is distributed across 3 regions, strong reads must contact the leader in its region (may be a different region than the client). Latency: 1ms local, 10-50ms cross-region.</li>
+            <li><strong>Stale reads (read at T = now - staleness):</strong> can be served from any replica that has applied all writes up to T. Since all replicas apply writes in order (Paxos guarantees this), any replica that is within the staleness window can serve the read. Latency: &lt;1ms (local replica, no coordination). Perfect for read-heavy workloads where 15-second staleness is acceptable (reporting, analytics, caches).</li>
+            <li><strong>Why stale reads are so powerful:</strong> a global Spanner deployment in 5 regions has 5x the read capacity for stale reads vs strong reads. Mobile apps that need consistent data but can tolerate 30-second staleness can route to the nearest region, dramatically reducing latency and cost.</li>
           </ul>
+
+          <h3>Data Placement and GDPR Compliance</h3>
+          <p>Spanner's zone configuration allows fine-grained control of where data is stored:</p>
+          <ul>
+            <li><strong>Default placement:</strong> replicate across 3-5 regions globally for availability and performance.</li>
+            <li><strong>GDPR EU data residency:</strong> configure European user data with zone constraint: all replicas must be in EU regions. Spanner enforces this: the shard for EU user data will only have replicas in Frankfurt, Netherlands, Belgium. No data leaves the EU.</li>
+            <li><strong>Leader pinning:</strong> for write-heavy workloads in a specific region, pin the Paxos leader to that region. All writes go to that region's leader directly. Reduces cross-region write latency.</li>
+            <li><strong>Read-write tradeoff:</strong> concentrating replicas in EU (for GDPR) means non-EU reads must go cross-region to EU. This is the correct trade-off for regulated data.</li>
+          </ul>
+
+          <div class="insight-box" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-left:4px solid #059669;padding:var(--space-4);border-radius:8px;margin:var(--space-4) 0">
+            <strong>&#x1F7E2; The CAP theorem and Spanner:</strong> Spanner chooses CP in CAP terms: under network partition, Spanner becomes unavailable (cannot achieve quorum without contacting a majority of replicas). This is the correct choice for a transactional database — serving stale data during a partition would violate external consistency. However, Spanner's actual availability is extremely high (Google claims 99.999%+ for multi-region) because TrueTime reduces the window during which coordination is needed, and Paxos with 5 replicas can sustain 2-node failures without impacting availability.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EVALUATE ═══════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
         <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Requirement</th><th>How met</th><th>Remaining risk</th></tr></thead>
+              <tbody>
+                <tr><td>External consistency</td><td>TrueTime commit wait: transaction waits until commit timestamp is definitively in the past</td><td>Hardware clock failure (GPS/atomic clock) degrades to longer uncertainty intervals, increasing commit wait latency</td></tr>
+                <tr><td>Cross-shard ACID transactions</td><td>2PL + 2PC where each shard's Paxos group is a 2PC participant. Prepare is Paxos-durable.</td><td>2PC blocking window (prepare without commit) causes lock hold during coordinator failure</td></tr>
+                <tr><td>No read-write contention</td><td>MVCC: readers read historical versions, never block writers</td><td>Version chain growth: GC must keep up; long-running snapshot transactions prevent GC</td></tr>
+                <tr><td>Horizontal scaling</td><td>Automatic shard split/merge based on size and load. Placement driver manages re-balancing.</td><td>Shard splits cause brief latency spikes; hot keys on a single shard limit per-shard throughput</td></tr>
+                <tr><td>GDPR data residency</td><td>Zone configuration enforces replica placement in specified regions</td><td>Leader placement optimization may conflict with data residency constraints</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Hot Key Problem</h3>
+          <p>A single high-traffic key (e.g., a global counter or a viral social media post) creates a hotspot on one shard. That shard's Paxos leader becomes the bottleneck, regardless of how many total nodes exist. Solutions:</p>
           <ul>
-            <li><strong>Latency cost of TrueTime:</strong> Commit-wait adds ~14ms per write. Acceptable for most OLTP. For high-frequency trading: not acceptable — use a single-region DB.</li>
-            <li><strong>Cross-region write latency:</strong> 2PC across regions = 1 round-trip ≈ 100ms. Mitigate with: write to local region leader + async replicate, at the cost of weaker consistency (see CockroachDB's approaches).</li>
+            <li><strong>Key design:</strong> distribute writes by sharding the hot key. A global counter can be 100 partial counters, each on a different shard, summed at read time.</li>
+            <li><strong>Application-level caching:</strong> cache hot read values in Redis in front of Spanner. Reduce reads hitting the hot shard.</li>
+            <li><strong>Batching:</strong> batch multiple increments and write them together, reducing write rate to the hot shard.</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ DELIVER ═══════════════════════════════ -->
       <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
         <div class="content-section__body">
-          <p>We designed a globally distributed database with external consistency. Key components: Raft per tablet for durable replication, TrueTime with GPS/atomic clocks for globally ordered timestamps, commit-wait to guarantee temporal ordering, and 2PC across tablet leaders for distributed transactions.</p>
+          <p><strong>Summary for the interview:</strong></p>
+          <p>Spanner achieves global ACID transactions through three key mechanisms: (1) MVCC — multiple versions per key enable readers to access historical snapshots without locking writers; (2) Paxos/Raft consensus per shard — provides durability and consistent replication across zones; (3) TrueTime — GPS+atomic clock hardware provides a bounded time uncertainty interval. Commit wait (waiting until TT.now().earliest > commit_timestamp) makes external consistency provable: any transaction that starts after T1 commits will have a read timestamp > T1's commit timestamp, guaranteeing it sees T1's writes. Cross-shard transactions use 2PC where each shard's Paxos group is a participant, making 2PC prepare durable and allowing crash recovery without coordinator. Stale reads can serve any replica for &lt;1ms latency at the cost of bounded staleness.</p>
+          <p><strong>Phased delivery:</strong></p>
+          <ul>
+            <li><strong>Phase 1:</strong> Single-region. Raft consensus per shard. MVCC. 2PC for cross-shard. HLC for ordering. (CockroachDB-style)</li>
+            <li><strong>Phase 2:</strong> Multi-region replication. Stale reads on any replica. Leader pinning for read-heavy regions.</li>
+            <li><strong>Phase 3:</strong> TrueTime integration (or HLC with uncertainty retries). Commit wait for external consistency. Zone configuration for GDPR.</li>
+          </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ TRADEOFFS ═══════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
         <div class="content-section__body">
-          <div class="table-wrapper"><table>
-            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
-            <tbody>
-              <tr><td>Consensus algorithm</td><td>Raft</td><td>Paxos</td><td>Raft is equivalent in safety but easier to understand and implement (strong leader, clear log). Paxos has no strong leader concept — harder to build on.</td></tr>
-              <tr><td>Global ordering</td><td>TrueTime (GPS+atomic clock)</td><td>Logical clocks (Lamport)</td><td>Logical clocks prove ordering but don't give real-time semantics. TrueTime enables read-only transactions at a real timestamp without coordination.</td></tr>
-              <tr><td>Distributed transactions</td><td>2PC with Raft leaders</td><td>Saga / compensating transactions</td><td>Spanner targets strict ACID — 2PC provides atomicity across tablets. Saga only provides eventual consistency — not acceptable for financial data.</td></tr>
-            </tbody>
-          </table></div>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Recommended</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Paxos vs Raft</strong></td>
+                  <td>Paxos: more flexible (multi-Paxos, batched proposals), technically more powerful for pipeline optimization, harder to implement correctly</td>
+                  <td>Raft: designed for understandability, well-specified membership change protocol, easier to get right, equivalent guarantees</td>
+                  <td>Raft for new systems. Unless you have deep expertise in Paxos optimization and are running at Google scale, Raft's correctness guarantees with simpler implementation are worth more than Paxos's theoretical flexibility.</td>
+                </tr>
+                <tr>
+                  <td><strong>MVCC vs 2PL</strong></td>
+                  <td>MVCC: readers never block writers (high read throughput), but must GC old versions, long-running reads hold back GC</td>
+                  <td>2PL only: simpler to reason about, no version management, but readers and writers contend — worse throughput under mixed workloads</td>
+                  <td>MVCC for reads + 2PL for write-write conflict detection (Spanner's actual design). Pure 2PL is only appropriate for write-heavy workloads with few concurrent readers.</td>
+                </tr>
+                <tr>
+                  <td><strong>TrueTime vs HLC (Hybrid Logical Clocks)</strong></td>
+                  <td>TrueTime: hardware-backed, external consistency with ~1-7ms commit wait, requires special datacenter hardware (GPS + atomic clocks)</td>
+                  <td>HLC: works on commodity hardware, but external consistency requires uncertainty retries (more complex client logic), slightly higher latency on conflict</td>
+                  <td>HLC for commodity deployments (CockroachDB approach — external consistency via uncertainty windows is achievable). TrueTime for Google-internal deployments where hardware is controlled. HLC is the practical default for most companies building distributed databases.</td>
+                </tr>
+                <tr>
+                  <td><strong>Strong vs stale reads</strong></td>
+                  <td>Strong reads only: simple application logic, always see latest data, but all reads must reach Paxos leader — potentially cross-region latency</td>
+                  <td>Stale reads: &lt;1ms latency from any region, 5x more read throughput, but application must tolerate bounded staleness</td>
+                  <td>Use stale reads wherever application can tolerate staleness (reporting, catalog browsing, caching). Use strong reads only for transactional consistency-critical paths (inventory check before purchase, balance before withdrawal).</td>
+                </tr>
+                <tr>
+                  <td><strong>LSM-tree vs B-tree storage</strong></td>
+                  <td>LSM-tree (RocksDB): excellent write throughput (sequential write to WAL + sorted memtable), MVCC versions naturally ordered, but read amplification during compaction</td>
+                  <td>B-tree: excellent read throughput, in-place updates, but write amplification for versioned data, MVCC requires extra version management</td>
+                  <td>LSM-tree for MVCC databases: sorted key-value iteration (needed for scans), write-optimized (transaction heavy workloads), and columnar MVCC versions naturally fit the LSM structure. CockroachDB and TiKV both use RocksDB.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ IMPLEMENTATION ═══════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
         <div class="content-section__body">
           <pre><code class="language-java">/**
- * RaftNode — simplified Raft consensus participant.
- * Implements RequestVote and AppendEntries RPC stubs for illustrative purposes.
- * A real implementation would include log persistence, snapshotting, and network I/O.
+ * MvccStorage — simplified multi-version key-value store demonstrating MVCC read/write.
+ *
+ * Stores multiple versions of each key, indexed by timestamp.
+ * Reads return the latest version at or before the read timestamp.
+ * Writers create new versions without modifying old ones.
+ * Background GC cleans versions older than the GC horizon.
  */
-public class RaftNode {
-    public enum NodeState { FOLLOWER, CANDIDATE, LEADER }
+public class MvccStorage {
 
-    private NodeState state = NodeState.FOLLOWER;
-    private int currentTerm = 0;
-    private String votedFor = null;
-    private final List&lt;LogEntry&gt; log = new ArrayList&lt;&gt;();
-    private int commitIndex = 0;
-    private final String nodeId;
-    private final List&lt;String&gt; peerNodeIds;
+    // version_map: key → TreeMap&lt;timestamp, value&gt; (sorted ascending by timestamp)
+    private final ConcurrentHashMap&lt;String, TreeMap&lt;Long, byte[]&gt;&gt; versionMap
+        = new ConcurrentHashMap&lt;&gt;();
 
-    public RaftNode(String nodeId, List&lt;String&gt; peerNodeIds) {
-        this.nodeId = nodeId;
-        this.peerNodeIds = peerNodeIds;
+    private final ReadWriteLock gcLock = new ReentrantReadWriteLock();
+
+    /**
+     * Reads the value of a key as it existed at the given timestamp.
+     * Returns the latest version with timestamp ≤ readTimestamp.
+     * Returns null if the key did not exist at readTimestamp.
+     *
+     * No locks acquired — MVCC readers never block writers.
+     *
+     * @param key           the key to read
+     * @param readTimestamp the snapshot timestamp for this read
+     * @return the byte[] value at readTimestamp, or null
+     */
+    public byte[] read(String key, long readTimestamp) {
+        gcLock.readLock().lock();  // only blocks during GC (rare)
+        try {
+            TreeMap&lt;Long, byte[]&gt; versions = versionMap.get(key);
+            if (versions == null) return null;
+
+            // floorKey returns the greatest timestamp ≤ readTimestamp
+            synchronized (versions) {
+                Map.Entry&lt;Long, byte[]&gt; matchingVersion = versions.floorEntry(readTimestamp);
+                if (matchingVersion == null) return null;
+
+                byte[] value = matchingVersion.getValue();
+                return value == TOMBSTONE_MARKER ? null : value;  // Handle deletes
+            }
+        } finally {
+            gcLock.readLock().unlock();
+        }
     }
 
     /**
-     * RequestVote RPC — called by candidates during election.
-     * Grants vote if: (a) candidate's term >= our term, AND
-     *                 (b) we haven't voted yet (or voted for this candidate), AND
-     *                 (c) candidate's log is at least as up-to-date as ours.
+     * Writes a new version of a key at the given commit timestamp.
+     * Does not modify existing versions — creates a new version entry.
+     *
+     * @param key             the key to write
+     * @param value           the new value (null to create a delete tombstone)
+     * @param commitTimestamp the commit timestamp (from TrueTime or HLC)
      */
-    public RequestVoteResponse handleRequestVote(RequestVoteRequest request) {
-        if (request.getTerm() &lt; currentTerm) {
-            return new RequestVoteResponse(currentTerm, false);
+    public void write(String key, byte[] value, long commitTimestamp) {
+        gcLock.readLock().lock();
+        try {
+            TreeMap&lt;Long, byte[]&gt; versions = versionMap.computeIfAbsent(
+                key, k -&gt; new TreeMap&lt;&gt;()
+            );
+            synchronized (versions) {
+                versions.put(commitTimestamp, value != null ? value : TOMBSTONE_MARKER);
+            }
+        } finally {
+            gcLock.readLock().unlock();
         }
-        if (request.getTerm() &gt; currentTerm) {
-            currentTerm = request.getTerm();
-            state = NodeState.FOLLOWER;
-            votedFor = null;
-        }
-        boolean logIsUpToDate = isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm());
-        boolean canVote = (votedFor == null || votedFor.equals(request.getCandidateId())) && logIsUpToDate;
-        if (canVote) {
-            votedFor = request.getCandidateId();
-        }
-        return new RequestVoteResponse(currentTerm, canVote);
     }
+
+    private static final byte[] TOMBSTONE_MARKER = new byte[0];  // Sentinel for deletes
 
     /**
-     * AppendEntries RPC — called by leader to replicate log entries.
-     * Also serves as heartbeat (empty entries) to prevent election timeouts.
+     * Garbage collects versions older than gcHorizon.
+     * Safe to call when all active transactions have readTimestamp &gt; gcHorizon.
+     *
+     * @param gcHorizon all versions with timestamp &lt; gcHorizon can be removed
      */
-    public AppendEntriesResponse handleAppendEntries(AppendEntriesRequest request) {
-        if (request.getTerm() &lt; currentTerm) {
-            return new AppendEntriesResponse(currentTerm, false);
-        }
-        // Valid leader — reset election timeout (not shown: cancel timer)
-        currentTerm = request.getTerm();
-        state = NodeState.FOLLOWER;
+    public void garbageCollect(long gcHorizon) {
+        gcLock.writeLock().lock();  // Exclusive lock: blocks reads during GC (brief)
+        try {
+            for (TreeMap&lt;Long, byte[]&gt; versions : versionMap.values()) {
+                synchronized (versions) {
+                    // Keep the latest version at or before gcHorizon (for reads at gcHorizon)
+                    Long latestVersionBeforeHorizon = versions.floorKey(gcHorizon - 1);
 
-        // Verify log consistency at prevLogIndex
-        if (!logConsistencyCheck(request.getPrevLogIndex(), request.getPrevLogTerm())) {
-            return new AppendEntriesResponse(currentTerm, false);
-        }
-
-        // Append new entries (removing conflicting entries first)
-        appendNewEntries(request.getEntries(), request.getPrevLogIndex());
-
-        // Update commit index
-        if (request.getLeaderCommit() &gt; commitIndex) {
-            commitIndex = Math.min(request.getLeaderCommit(), log.size() - 1);
-        }
-        return new AppendEntriesResponse(currentTerm, true);
-    }
-
-    private boolean isLogUpToDate(int candidateLastIndex, int candidateLastTerm) {
-        if (log.isEmpty()) return true;
-        LogEntry lastEntry = log.get(log.size() - 1);
-        if (candidateLastTerm != lastEntry.getTerm()) {
-            return candidateLastTerm &gt; lastEntry.getTerm();
-        }
-        return candidateLastIndex &gt;= log.size() - 1;
-    }
-
-    private boolean logConsistencyCheck(int prevLogIndex, int prevLogTerm) {
-        if (prevLogIndex &lt; 0) return true;
-        if (prevLogIndex &gt;= log.size()) return false;
-        return log.get(prevLogIndex).getTerm() == prevLogTerm;
-    }
-
-    private void appendNewEntries(List&lt;LogEntry&gt; newEntries, int prevLogIndex) {
-        int insertIndex = prevLogIndex + 1;
-        for (LogEntry entry : newEntries) {
-            if (insertIndex &lt; log.size()) {
-                if (log.get(insertIndex).getTerm() != entry.getTerm()) {
-                    log.subList(insertIndex, log.size()).clear();
+                    // Remove all versions strictly older than latestVersionBeforeHorizon
+                    if (latestVersionBeforeHorizon != null) {
+                        versions.headMap(latestVersionBeforeHorizon, false).clear();
+                    }
                 }
             }
-            if (insertIndex &gt;= log.size()) {
-                log.add(entry);
-            }
-            insertIndex++;
+        } finally {
+            gcLock.writeLock().unlock();
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RaftLog — simplified Raft log implementation demonstrating append + commit.
+// In production (etcd, CockroachDB): each log entry is replicated to majority before commit.
+// ─────────────────────────────────────────────────────────────────────────────
+public class RaftLog {
+
+    private final List&lt;LogEntry&gt; entries = new ArrayList&lt;&gt;();
+    private volatile long commitIndex = -1;  // highest index known to be committed
+    private volatile long applyIndex = -1;   // highest index applied to state machine
+
+    private final MvccStorage stateMachine;  // the state machine to apply entries to
+    private final Lock appendLock = new ReentrantLock();
+
+    public RaftLog(MvccStorage stateMachine) {
+        this.stateMachine = stateMachine;
+    }
+
+    /**
+     * Appends a log entry (called on leader for each client write).
+     * In a real Raft implementation: entry is replicated to followers before committing.
+     * Here we simulate the leader-only path.
+     *
+     * @return the log index of the appended entry
+     */
+    public long appendEntry(List&lt;Operation&gt; operations, long commitTimestamp) {
+        appendLock.lock();
+        try {
+            long logIndex = entries.size();
+            LogEntry entry = new LogEntry(logIndex, commitTimestamp, List.copyOf(operations));
+            entries.add(entry);
+            return logIndex;
+        } finally {
+            appendLock.unlock();
         }
     }
 
-    // Supporting record types (abbreviated)
-    record LogEntry(int term, String command) { public int getTerm() { return term; } }
-    record RequestVoteRequest(int getTerm, String getCandidateId, int getLastLogIndex, int getLastLogTerm) {}
-    record RequestVoteResponse(int getTerm, boolean isVoteGranted) {}
-    record AppendEntriesRequest(int getTerm, int getPrevLogIndex, int getPrevLogTerm,
-                                List&lt;LogEntry&gt; getEntries, int getLeaderCommit) {}
-    record AppendEntriesResponse(int getTerm, boolean isSuccess) {}
+    /**
+     * Commits entries up to and including commitUpTo.
+     * Called once leader has received acknowledgment from a quorum of replicas.
+     * In a 5-replica group: need 3 acks (majority) before committing.
+     *
+     * @param commitUpTo the log index to commit up to (inclusive)
+     */
+    public synchronized void commitEntries(long commitUpTo) {
+        if (commitUpTo &lt;= commitIndex) return;  // Already committed
+        commitIndex = commitUpTo;
+        applyCommittedEntries();
+    }
+
+    /**
+     * Applies committed but not-yet-applied entries to the state machine.
+     * This is the point where writes become visible to readers.
+     */
+    private void applyCommittedEntries() {
+        while (applyIndex &lt; commitIndex) {
+            applyIndex++;
+            LogEntry entryToApply = entries.get((int) applyIndex);
+            applyToStateMachine(entryToApply);
+        }
+    }
+
+    private void applyToStateMachine(LogEntry entry) {
+        for (Operation operation : entry.operations()) {
+            if (operation.type() == Operation.Type.PUT) {
+                stateMachine.write(operation.key(), operation.value(), entry.commitTimestamp());
+            } else if (operation.type() == Operation.Type.DELETE) {
+                stateMachine.write(operation.key(), null, entry.commitTimestamp());
+            }
+        }
+    }
+
+    public long commitIndex() { return commitIndex; }
+    public long applyIndex() { return applyIndex; }
+    public int logSize() { return entries.size(); }
+
+    public record LogEntry(long logIndex, long commitTimestamp, List&lt;Operation&gt; operations) {}
+    public record Operation(Type type, String key, byte[] value) {
+        public enum Type { PUT, DELETE }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TwoPhaseCommit — coordinator implementing 2PC for cross-shard transactions.
+// Participants: each shard's Paxos leader acts as a participant.
+// ─────────────────────────────────────────────────────────────────────────────
+public class TwoPhaseCommit {
+
+    private final TrueTimeClock trueTimeClock;
+
+    public TwoPhaseCommit(TrueTimeClock trueTimeClock) {
+        this.trueTimeClock = trueTimeClock;
+    }
+
+    /**
+     * Executes a distributed transaction across multiple shards.
+     *
+     * @param participants  list of shard participants in the transaction
+     * @param operationsPerShard  map of shard ID → list of operations for that shard
+     * @return CommitResult with the commit timestamp, or a failed result
+     */
+    public CommitResult execute(List&lt;TransactionParticipant&gt; participants,
+                                 Map&lt;String, List&lt;RaftLog.Operation&gt;&gt; operationsPerShard) {
+        String transactionId = UUID.randomUUID().toString();
+
+        // ── Phase 1: Prepare ──
+        List&lt;PrepareResult&gt; prepareResults = new ArrayList&lt;&gt;();
+        for (TransactionParticipant participant : participants) {
+            List&lt;RaftLog.Operation&gt; participantOperations =
+                operationsPerShard.getOrDefault(participant.shardId(), List.of());
+
+            PrepareResult result = participant.prepare(transactionId, participantOperations);
+            if (!result.success()) {
+                // Any failure → abort all participants
+                abortAll(participants, transactionId);
+                return CommitResult.failure("Prepare failed on shard: " + participant.shardId());
+            }
+            prepareResults.add(result);
+        }
+
+        // ── Determine commit timestamp ──
+        // Must be > all proposed timestamps from participants
+        long maxProposedTimestamp = prepareResults.stream()
+            .mapToLong(PrepareResult::proposedTimestamp)
+            .max()
+            .orElse(0L);
+
+        // TrueTime commit: take latest bound and apply commit wait
+        long trueTimeLatest = trueTimeClock.now().latest();
+        long commitTimestamp = Math.max(maxProposedTimestamp + 1, trueTimeLatest);
+
+        // Commit wait: block until TrueTime.now().earliest > commitTimestamp
+        // This ensures external consistency: any future transaction starts after this time
+        waitForCommitTimestampToPassInRealTime(commitTimestamp);
+
+        // ── Phase 2: Commit ──
+        for (TransactionParticipant participant : participants) {
+            participant.commit(transactionId, commitTimestamp);
+        }
+
+        return CommitResult.success(commitTimestamp);
+    }
+
+    private void waitForCommitTimestampToPassInRealTime(long commitTimestamp) {
+        // Block until TrueTime earliest bound exceeds commitTimestamp
+        // Typically ~1-7ms delay (TrueTime epsilon)
+        while (trueTimeClock.now().earliest() &lt;= commitTimestamp) {
+            try {
+                Thread.sleep(1);  // 1ms spin — in production use a more efficient wait
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private void abortAll(List&lt;TransactionParticipant&gt; participants, String transactionId) {
+        for (TransactionParticipant participant : participants) {
+            try {
+                participant.abort(transactionId);
+            } catch (Exception abortError) {
+                System.err.println("[TwoPhaseCommit] Failed to abort on shard " +
+                    participant.shardId() + ": " + abortError.getMessage());
+                // Best-effort abort; participant will self-abort after lock timeout
+            }
+        }
+    }
+
+    // Interface for shard participants in 2PC
+    public interface TransactionParticipant {
+        String shardId();
+        PrepareResult prepare(String transactionId, List&lt;RaftLog.Operation&gt; operations);
+        void commit(String transactionId, long commitTimestamp);
+        void abort(String transactionId);
+    }
+
+    public record PrepareResult(boolean success, long proposedTimestamp, String errorReason) {
+        public static PrepareResult ok(long proposedTimestamp) {
+            return new PrepareResult(true, proposedTimestamp, null);
+        }
+        public static PrepareResult failure(String reason) {
+            return new PrepareResult(false, 0, reason);
+        }
+    }
+
+    public record CommitResult(boolean success, long commitTimestamp, String errorReason) {
+        public static CommitResult success(long commitTimestamp) {
+            return new CommitResult(true, commitTimestamp, null);
+        }
+        public static CommitResult failure(String reason) {
+            return new CommitResult(false, 0, reason);
+        }
+    }
+
+    // TrueTime clock abstraction
+    public interface TrueTimeClock {
+        TrueTimeInterval now();
+        record TrueTimeInterval(long earliest, long latest) {}
+    }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════ EXTENDED IMPLEMENTATION ═══════════════════════════════ -->
+      <section class="content-section" id="extended-impl-db" aria-labelledby="ext-impl-db-title">
+        <h2 class="content-section__title" id="ext-impl-db-title"><span class="content-section__title-icon">&#x2615;</span>Extended Java: Snapshot Transaction &amp; Lock Manager</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * SnapshotTransaction — implements a read-only snapshot transaction using MVCC.
+ * No locks acquired. All reads reflect a consistent view at snapshotTimestamp.
+ * Can be served from any replica (does not need Paxos leader).
+ */
+public class SnapshotTransaction {
+
+    private final long snapshotTimestamp;  // All reads use this timestamp
+    private final MvccStorage storage;
+    private final List&lt;String&gt; keysRead = new ArrayList&lt;&gt;();
+    private volatile boolean closed = false;
+
+    public SnapshotTransaction(long snapshotTimestamp, MvccStorage storage) {
+        this.snapshotTimestamp = snapshotTimestamp;
+        this.storage = storage;
+    }
+
+    /**
+     * Reads a key at the snapshot timestamp.
+     * Consistent: every read in this transaction sees the same versions.
+     * No locks required — MVCC ensures this read is non-blocking.
+     *
+     * @param key the key to read
+     * @return value as it existed at snapshotTimestamp, or null if absent
+     */
+    public byte[] read(String key) {
+        ensureOpen();
+        keysRead.add(key);
+        return storage.read(key, snapshotTimestamp);
+    }
+
+    /**
+     * Reads a range of keys at the snapshot timestamp.
+     * Equivalent to a table scan between startKey and endKey.
+     * Returns a consistent snapshot of the range — no locks.
+     */
+    public Map&lt;String, byte[]&gt; readRange(String startKey, String endKey) {
+        ensureOpen();
+        Map&lt;String, byte[]&gt; results = new TreeMap&lt;&gt;();
+        // In production: use storage.scan(startKey, endKey, snapshotTimestamp)
+        // For simplicity: single key lookup (real implementation iterates storage)
+        byte[] value = storage.read(startKey, snapshotTimestamp);
+        if (value != null) results.put(startKey, value);
+        return results;
+    }
+
+    public long snapshotTimestamp() { return snapshotTimestamp; }
+
+    public void close() { closed = true; }
+
+    private void ensureOpen() {
+        if (closed) throw new IllegalStateException("Transaction has been closed");
+    }
+}
+
+/**
+ * LockManager — manages row-level read/write locks for read-write transactions.
+ * Implements strict 2PL: all locks acquired before any are released.
+ * Lock release happens only at commit or rollback.
+ */
+public class LockManager {
+
+    private enum LockMode { SHARED, EXCLUSIVE }
+
+    private static class RowLock {
+        LockMode mode;
+        UUID holdingTransactionId;
+        Instant acquiredAt;
+
+        RowLock(LockMode mode, UUID transactionId) {
+            this.mode = mode;
+            this.holdingTransactionId = transactionId;
+            this.acquiredAt = Instant.now();
+        }
+    }
+
+    // Per-key lock table
+    private final ConcurrentHashMap&lt;String, RowLock&gt; lockTable = new ConcurrentHashMap&lt;&gt;();
+    // Per-transaction lock tracking (for release-all-at-commit)
+    private final ConcurrentHashMap&lt;UUID, Set&lt;String&gt;&gt; transactionLocks = new ConcurrentHashMap&lt;&gt;();
+
+    private static final long LOCK_WAIT_TIMEOUT_MS = 5_000;  // 5 seconds
+    private static final long LOCK_EXPIRY_MS = 30_000;       // 30 seconds (for deadlock/crash recovery)
+
+    /**
+     * Acquires a shared (read) lock on a key for a transaction.
+     * Multiple transactions can hold shared locks simultaneously.
+     * Fails if another transaction holds an exclusive (write) lock.
+     *
+     * @param key           the key to lock
+     * @param transactionId the requesting transaction
+     * @throws LockTimeoutException if lock not acquired within timeout
+     */
+    public void acquireSharedLock(String key, UUID transactionId) throws LockTimeoutException {
+        long deadline = System.currentTimeMillis() + LOCK_WAIT_TIMEOUT_MS;
+
+        while (System.currentTimeMillis() &lt; deadline) {
+            RowLock existingLock = lockTable.get(key);
+
+            if (existingLock == null || existingLock.mode == LockMode.SHARED
+                    || existingLock.holdingTransactionId.equals(transactionId)) {
+                // No lock or compatible shared lock: acquire
+                RowLock newLock = new RowLock(LockMode.SHARED, transactionId);
+                if (lockTable.putIfAbsent(key, newLock) == null || lockTable.get(key).mode == LockMode.SHARED) {
+                    trackLock(transactionId, key);
+                    return;
+                }
+            }
+
+            // Lock conflict: wait and retry
+            try {
+                Thread.sleep(10);  // 10ms retry interval
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new LockTimeoutException("Interrupted while waiting for lock on: " + key);
+            }
+        }
+        throw new LockTimeoutException("Timed out acquiring shared lock on: " + key);
+    }
+
+    /**
+     * Acquires an exclusive (write) lock on a key.
+     * Only one transaction can hold an exclusive lock.
+     * Fails if any other transaction holds any lock (shared or exclusive).
+     */
+    public void acquireExclusiveLock(String key, UUID transactionId) throws LockTimeoutException {
+        long deadline = System.currentTimeMillis() + LOCK_WAIT_TIMEOUT_MS;
+
+        while (System.currentTimeMillis() &lt; deadline) {
+            RowLock existingLock = lockTable.get(key);
+
+            if (existingLock == null || existingLock.holdingTransactionId.equals(transactionId)) {
+                RowLock exclusiveLock = new RowLock(LockMode.EXCLUSIVE, transactionId);
+                if (lockTable.replace(key, existingLock, exclusiveLock)
+                        || (existingLock == null &amp;&amp; lockTable.putIfAbsent(key, exclusiveLock) == null)) {
+                    trackLock(transactionId, key);
+                    return;
+                }
+            }
+
+            try { Thread.sleep(10); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new LockTimeoutException("Interrupted while waiting for exclusive lock on: " + key);
+            }
+        }
+        throw new LockTimeoutException("Timed out acquiring exclusive lock on: " + key);
+    }
+
+    /**
+     * Releases all locks held by a transaction.
+     * Called on commit or rollback. Strict 2PL: locks held until transaction ends.
+     *
+     * @param transactionId the committing/aborting transaction
+     */
+    public void releaseAllLocks(UUID transactionId) {
+        Set&lt;String&gt; heldKeys = transactionLocks.remove(transactionId);
+        if (heldKeys == null) return;
+
+        for (String key : heldKeys) {
+            lockTable.remove(key, new RowLock(LockMode.EXCLUSIVE, transactionId));
+            lockTable.remove(key, new RowLock(LockMode.SHARED, transactionId));
+            // In production: use compare-and-remove to handle concurrent lock release
+        }
+    }
+
+    /** Periodically called to evict locks held by crashed transactions. */
+    public void evictExpiredLocks() {
+        Instant expiryThreshold = Instant.now().minusMillis(LOCK_EXPIRY_MS);
+        lockTable.entrySet().removeIf(entry -&gt;
+            entry.getValue().acquiredAt.isBefore(expiryThreshold)
+        );
+    }
+
+    private void trackLock(UUID transactionId, String key) {
+        transactionLocks.computeIfAbsent(transactionId, id -&gt; ConcurrentHashMap.newKeySet())
+                        .add(key);
+    }
+
+    public static class LockTimeoutException extends Exception {
+        public LockTimeoutException(String message) { super(message); }
+    }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ QUIZ ═══════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
-        <div class="quiz" data-quiz-id="p-dist-db-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+        <div class="quiz" data-quiz-id="p-distributed-db-quiz" role="region" aria-label="Problem quiz">
+          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="A Raft cluster has 5 nodes. How many nodes can fail before the cluster stops accepting writes?" data-options='["1 node","2 nodes — Raft requires majority (3/5) to commit. With 2 failures, 3 nodes remain and can form a quorum.","3 nodes","4 nodes"]' data-correct="1" data-explanation="Raft requires a majority quorum of (N/2 + 1) nodes. For N=5: majority = 3. With 2 failures: 3 nodes remain, quorum is achievable, cluster continues. With 3 failures: only 2 remain, quorum (3) is unreachable, cluster stops. Formula: tolerate f failures with N = 2f+1 nodes. For f=2: N=5." style="display:none"></div>
-          <div data-question="What problem does Spanner's TrueTime solve that standard NTP clocks cannot?" data-options='["NTP is too slow for database operations","NTP has ±100ms uncertainty — two transactions could have timestamps that don't reflect their real-time ordering. TrueTime provides a bounded interval (±7ms) using GPS + atomic clocks, allowing transactions to wait out uncertainty and be assigned timestamps that are guaranteed to reflect real-time order.","NTP doesn't work across timezones","TrueTime provides higher-precision timestamps measured in nanoseconds"]' data-correct="1" data-explanation="External consistency requires: if transaction T1 commits before T2 starts in real time, then T1's timestamp < T2's timestamp. NTP drift can violate this. TrueTime's commit-wait (wait until TT.now().earliest > commit_ts) ensures no future transaction can receive a timestamp earlier than the committing transaction's timestamp." style="display:none"></div>
-          <div data-question="Why does Spanner use 2PC (Two-Phase Commit) for cross-tablet transactions?" data-options='["2PC is required by the SQL standard","A transaction that modifies data in two different tablets (on different Raft groups) needs atomic commitment — either both tablets commit or neither. 2PC achieves this: prepare phase locks both tablets, commit phase applies with TrueTime timestamp. Without 2PC, one tablet could commit while the other fails, leaving inconsistent state.","2PC provides lower latency than single-phase commit","2PC is only used for multi-region transactions"]' data-correct="1" data-explanation="Raft consensus handles single-tablet durability. But a transfer from Account A (tablet 1) to Account B (tablet 2) spans two Raft groups. 2PC coordinates: both prepare (lock and pre-commit), then both commit atomically. If either prepare fails, both abort. The coordinator is one of the participant Raft leaders." style="display:none"></div>
-          <div data-question="What is the advantage of Spanner's stale reads compared to strong reads?" data-options='["Stale reads never return incorrect data","Stale reads (as of timestamp T in the past) can be served by any replica that has data as of T — no coordination with the Raft leader required. This enables global read scalability: any follower in any region can serve reads, reducing cross-region latency dramatically.","Stale reads are faster because they skip encryption","Stale reads bypass the 2PC protocol"]' data-correct="1" data-explanation="Strong reads require going to the Raft leader (ensuring the latest committed data). Stale reads as of 15 seconds ago can be served by any follower that is at least 15 seconds behind the leader (which is typical replication lag). This allows users to read from a nearby region's replica — much lower latency than reaching the leader." style="display:none"></div>
+
+          <div data-question="How does MVCC (Multi-Version Concurrency Control) allow readers to never block writers, and what is the garbage collection challenge this creates?" data-options='["MVCC achieves non-blocking reads by using optimistic locking: readers assume no conflict and validate at commit time", "MVCC stores multiple timestamped versions of each key. Readers read at a snapshot timestamp T and return the latest version with timestamp ≤ T — this is a pure read-only lookup of existing data, requiring no locks and not affecting any concurrent write. Writers create a new version at their commit timestamp without modifying old versions. The GC challenge: old versions accumulate indefinitely. Long-running read transactions prevent GC of versions they might read. GC horizon = min(oldest active read timestamp, configurable retention period). Without GC, storage grows without bound.", "MVCC uses copy-on-write: each read gets a private copy of the data, so writers can freely modify the original", "MVCC requires readers to acquire shared locks but these locks are lightweight and non-blocking in practice"]' data-correct="1" data-explanation="MVCC is the foundational insight for high-throughput databases: read-write contention is eliminated entirely because readers and writers operate on different versions. The GC trade-off is: long-running transactions (analytics queries, data export jobs) keep old versions alive, consuming storage. Spanner implements GC as part of its Bigtable compaction process. CockroachDB has explicit GC runs per time range. Applications should set short max_staleness on transactions and close long-running read transactions quickly." style="display:none"></div>
+
+          <div data-question="Explain TrueTime's commit wait protocol and why it achieves external consistency. What is the property that makes it stronger than regular serializability?" data-options='["TrueTime commit wait just adds a fixed 7ms delay to every transaction to allow replicas to catch up", "TrueTime exposes a bounded uncertainty interval [earliest, latest] for the current time. When a transaction T1 commits: (1) assign commit timestamp = TT.now().latest (the worst-case latest current time), (2) wait until TT.now().earliest > commit_timestamp (now we are certain this timestamp is in the past). External consistency is the property: if T2 starts after T1 commits in real time, then T2's read timestamp must be > T1's commit timestamp, so T2 sees T1's writes. Regular serializability only requires a serial ordering — two serializable transactions could be ordered T1→T2 in the database but T2 actually executed first in real time. External consistency (strict serializability) requires the ordering to match real time.", "External consistency means transactions are serialized by insertion order in the Raft log", "Commit wait means the transaction cannot release its locks until all replicas have applied the transaction"]' data-correct="1" data-explanation="External consistency (Spanner's guarantee) is strictly stronger than serializability. It's equivalent to 'linearizability for multi-operation transactions.' The practical implication: if you commit a payment at 10:00:00 AM, any query that starts after 10:00:00 AM will see the payment — even if it runs on the other side of the world on a different replica. Without TrueTime, you'd need a centralized timestamp authority (like Google Chubby/Percolator) which is a bottleneck. TrueTime distributes this globally using hardware clocks." style="display:none"></div>
+
+          <div data-question="In a cross-shard 2PC transaction (transfer between accounts on different shards), what happens if the coordinator crashes between Phase 1 (prepare) and Phase 2 (commit)? How does Spanner handle this?" data-options='["The transaction is automatically aborted because the coordinator is unavailable, and all participants roll back immediately", "This is the classic 2PC blocking problem. Participants hold their locks, waiting for a commit or abort from the coordinator. In vanilla 2PC, participants cannot unilaterally decide without knowing what the coordinator decided. Spanner's solution: the PREPARE decision is written to the coordinator shard's Paxos log before being acknowledged. A new Paxos leader (elected automatically) can read this durable PREPARE record and complete the protocol — either committing or aborting. The participants' locks eventually time out (e.g., 10-20 seconds) and they can query the coordinator's Paxos log for the final decision.", "Spanner uses optimistic concurrency instead of 2PC, so coordinator failure has no impact on participants", "Participants can unilaterally commit after a timeout if they know all other participants were prepared"]' data-correct="1" data-explanation="2PC's blocking problem is fundamental: between prepare and commit, participants are in an uncertain state. Vanilla 2PC blocks until coordinator recovers. Spanner's improvement: making the PREPARE record Paxos-durable means a new coordinator can take over immediately after election without waiting for the original coordinator to recover. The participant timeout (10-20s) is the maximum blocking window. This is why Spanner participants release locks after timeout — they then query the coordinator's Paxos group for the final decision." style="display:none"></div>
+
+          <div data-question="What is the difference between a Spanner strong read and a stale read, and when would you choose each in application design?" data-options='["Strong reads and stale reads return identical data; the difference is only in the request routing mechanism", "Strong reads are served by the Paxos leader for each shard, guaranteeing the response includes all committed writes up to the current moment. Stale reads are served by any replica that has applied all writes up to a past timestamp (e.g., now - 15s). Strong reads: use for transactional consistency (check inventory before purchase, read account balance before withdrawal). Stale reads: use where bounded staleness is acceptable (product catalog browsing, reporting dashboards, analytics queries, data for caching). Stale reads are &lt;1ms from any region vs 10-50ms cross-region for strong reads, and provide 5x more read throughput by distributing across all replicas.", "Stale reads should never be used in production because returning stale data is always incorrect behavior", "Strong reads require two-phase locking while stale reads use optimistic locking"]' data-correct="1" data-explanation="The stale read optimization is one of Spanner's most important practical features. A typical application has 80%+ of operations as reads, and many of those can tolerate 15-second staleness. Routing those reads to local replicas dramatically reduces cross-region traffic, latency, and cost. The application design rule: default to stale reads, explicitly use strong reads only where freshness is critical for correctness. Netflix, for example, uses stale reads for catalog browsing (15s staleness is invisible to users) and strong reads for billing and account state." style="display:none"></div>
+
+          <div data-question="CockroachDB uses Hybrid Logical Clocks (HLC) instead of TrueTime. What problem does HLC solve vs physical clocks alone, and how does it achieve external consistency without GPS hardware?" data-options='["HLC is identical to TrueTime — both use GPS hardware, just from different manufacturers", "Physical clocks on commodity servers can drift by up to 500ms and have no uncertainty bounds. Two machines with different physical clocks could assign the same timestamp to causally unrelated events or violate causal ordering. HLC = max(physical_clock, max_seen_HLC) + logical_counter. This gives: (1) close to physical time (within NTP drift), (2) causal monotonicity (if A → B causally, HLC(A) &lt; HLC(B)). For external consistency without GPS: CockroachDB uses 'uncertainty windows' — if a transaction reads a value with timestamp T where T is within the uncertainty window of the reader's clock (T ∈ [now - max_drift, now]), it retries with a later read timestamp. This correctly handles the case where a concurrent write's timestamp may be slightly in the future due to clock skew.", "HLC replaces physical clocks entirely with purely logical counters, sacrificing time-based ordering", "CockroachDB does not achieve external consistency — it only provides serializable isolation, which is weaker"]' data-correct="1" data-explanation="HLC is the practical alternative to TrueTime for teams that don't have GPS+atomic clock infrastructure. The key difference: TrueTime has bounded uncertainty (1-7ms epsilon, proven by hardware), so commit wait is precise. HLC assumes a maximum clock drift (typically 250-500ms), so the uncertainty window is larger. CockroachDB's uncertainty retry: if a read timestamp is within 250ms of the transaction start time and a conflicting write exists in that window, retry with a higher read timestamp. This is rarer than it sounds in practice (most transactions don't have conflicting writes in the uncertainty window)." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
             <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="content-moderation.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Content Moderation →</a>
+              <a href="../../index.html#problems" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Back to Problems &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="../tier2/leaderboard.html" class="btn btn--outline">← Leaderboard</a>
-        <a href="content-moderation.html" class="btn btn--primary">Next: Content Moderation →</a>
+        <a href="content-moderation.html" class="btn btn--outline">&larr; Content Moderation</a>
+        <a href="../../index.html#problems" class="btn btn--primary">Back to Problems &rarr;</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course &mdash; Built for engineers who want to pass the loop.</p></div></footer>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>

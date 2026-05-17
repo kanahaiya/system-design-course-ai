@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design a Feature Flag System &mdash; MAANG System Design RESHADED walkthrough.">
+  <meta name="description" content="Design a Feature Flag System like LaunchDarkly — MAANG System Design RESHADED walkthrough covering flag types, targeting rules, consistent hashing rollout, SDK architecture, SSE config updates, and experimentation at scale.">
   <title>Design a Feature Flag System &mdash; MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -59,192 +59,614 @@
           <span class="tag">60 min</span><span class="tag">Platform Engineering</span>
         </div>
         <h1 class="module-header__title">Design a Feature Flag System</h1>
-        <p class="module-header__desc">Feature flags decouple deploy from release. The hard parts: evaluating flags in under 1ms per request, consistent rollout (same user always gets same experience), and kill switches that work globally in 30 seconds. The evaluation algorithm uses hashing for deterministic gradual rollout.</p>
+        <p class="module-header__desc">A feature flag system is deceptively simple to describe but hard to get right at scale. The critical constraint is that flag evaluation must never add latency to critical paths — 100K evaluations/second must happen entirely in-memory with no network calls. The challenge is how to keep that in-memory cache consistent across thousands of SDK instances while propagating changes in seconds.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item">&#x1F3E2; LaunchDarkly, Split.io, Statsig</div>
+          <div class="module-header__meta-item">&#x1F3E2; LaunchDarkly, Unleash, Optimizely, Split.io</div>
           <div class="module-header__meta-item">&#x23F1;&#xFE0F; 60 min interview</div>
         </div>
       </header>
-      <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><h3>Functional Requirements</h3><ul>
-            <li>Create feature flags with targeting rules (% rollout, user segment, A/B test)</li>
-            <li>Evaluate flags for a given user in &lt;1ms</li>
-            <li>Kill switch: disable flag globally in &lt;30 seconds</li>
-            <li>Audit log: who changed what flag when</li>
-            <li>Gradual rollout: 1% &rarr; 10% &rarr; 50% &rarr; 100% over time</li></ul><h3>Non-Functional Requirements</h3><ul>
-            <li><strong>Scale:</strong> 10M flag evaluations/sec (every request evaluates 10&ndash;50 flags)</li>
-            <li><strong>Latency:</strong> &lt;1ms per evaluation (must not add noticeable latency)</li>
-            <li><strong>Propagation:</strong> Flag changes reach all servers in &lt;30 seconds</li></ul></div>
-      </section>
-      <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li>10M evaluations/sec &times; 1000 flags &rarr; must be in-memory, never hit network per evaluation</li>
-            <li>Flag config: 1000 flags &times; 1KB config = 1MB &rarr; trivially cached locally in each service</li>
-            <li>Change events: &lt;100 flag changes/day &rarr; very low write volume</li></ul></div>
-      </section>
-      <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Flag definitions (PostgreSQL -- source of truth)
-feature_flags:
-    flag_id         UUID PRIMARY KEY,
-    flag_key        VARCHAR(100) UNIQUE,  -- "checkout-v2-enabled"
-    enabled         BOOLEAN,
-    rollout_pct     INT,           -- 0-100 (what % of users get this)
-    targeting_rules JSONB,         -- [{ attribute: "plan", op: "eq", value: "premium" }]
-    description     VARCHAR(500),
-    updated_at      TIMESTAMP,
-    updated_by      VARCHAR(100)
 
-// Flag evaluation cache (Redis -- synced from DB, TTL-based invalidation)
-// Key: flags:{environment}  Value: serialized JSON of all flag configs
-// Updated on every flag change via Kafka event</code></pre></div>
-      </section>
-      <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>SDK (client-side):</strong> Loads all flag configs from Redis on startup. Caches locally with 30s TTL. Evaluates entirely in-memory &mdash; no network call per evaluation.</li>
-            <li><strong>Consistent rollout:</strong> hash(userId + flagKey) % 100. If result &lt; rollout_pct: enabled. Same user always gets same result for the same rollout percentage.</li>
-            <li><strong>Targeting rules:</strong> Before rollout hash, check targeting rules: premium users get flag regardless of rollout %. Segment targeting applies first.</li>
-            <li><strong>Change propagation:</strong> Flag change &rarr; write to DB &rarr; publish to Kafka &rarr; all servers receive event &rarr; reload flag config from Redis.</li>
-            <li><strong>Kill switch:</strong> Set enabled=false &rarr; Kafka event propagates to all SDKs &rarr; re-evaluation returns false. 30s for full propagation.</li></ul></div>
-      </section>
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body"><pre><code class="language-java">// Flag Management API
-POST /api/v1/flags
-Body: { key: "checkout-v2", enabled: true, rollout_pct: 10, targeting_rules: [...] }
-
-PUT /api/v1/flags/{flagKey}
-Body: { rollout_pct: 50 }  -- gradual rollout increase
-
-DELETE /api/v1/flags/{flagKey}/enable   -- kill switch: immediately disable
-
-// SDK Evaluation (in-process -- no API call at evaluation time)
-// SDK loads all flags from Redis at startup, polls every 30s for updates
-// Evaluation: FeatureFlagEvaluator.isEnabled("checkout-v2", userId, userAttrs)</code></pre></div>
-      </section>
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+      <!-- REQUIREMENTS -->
+      <section class="content-section" id="requirements">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2753;</span>R &mdash; Requirements<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
         <div class="content-section__body">
-          <p><strong>Consistent hash rollout algorithm:</strong></p>
-          <pre><code>// Deterministic: same user always gets same result
-long hashValue = Math.abs(MurmurHash3.hash(userId + ':' + flagKey));
-int bucketNumber = (int) (hashValue % 100); // 0-99
-boolean flagEnabled = bucketNumber &lt; rolloutPercent;</code></pre>
-          <p><strong>Why hash(userId + flagKey) not just hash(userId)?</strong> Without the flagKey, all flags would have correlated rollout -- if you are in the 1% for flag A, you would also be in the 1% for flag B. This creates experimental contamination. Including flagKey decorrelates rollout groups.</p>
-          <p><strong>Sticky bucketing:</strong> Once a user is assigned to a variant, they stay in that variant even as rollout % changes. Hash-based assignment achieves this automatically: rolling from 10% to 20% adds new users (buckets 10-19) but does not remove existing users (buckets 0-9).</p>
-          <p><strong>Feature flag vs A/B test:</strong> Feature flag: is this feature on/off for this user? A/B test: what variant does this user see, and what are the metric outcomes? Feature flags can implement A/B tests (multiple variants) but a pure feature flag system does not need experiment analysis infrastructure.</p></div>
+          <h3>Functional Requirements</h3>
+          <ul>
+            <li>Create and manage feature flags: boolean, multivariate (A/B/C/D), percentage rollout, user segment targeting</li>
+            <li>Targeting rules: evaluate flags based on user attributes (ID, email, country, plan, custom attributes)</li>
+            <li>Gradual rollout: expose a feature to X% of users; increase over time without code changes</li>
+            <li>Kill switch: instantly disable a feature across all users in seconds (production incident response)</li>
+            <li>Experimentation: A/B tests with statistical significance tracking</li>
+            <li>Audit log: record every flag change with who changed it, what changed, and when</li>
+            <li>SDK: server-side and client-side SDKs for multiple languages (Java, JS, Python, Go)</li>
+          </ul>
+          <h3>Non-Functional Requirements</h3>
+          <ul>
+            <li><strong>Evaluation latency:</strong> &lt;1 ms per flag evaluation (must be in-memory, no network call)</li>
+            <li><strong>Throughput:</strong> 100K flag evaluations/second per SDK instance</li>
+            <li><strong>Propagation time:</strong> flag changes reach all SDK instances within 30 seconds</li>
+            <li><strong>Availability:</strong> SDK must evaluate flags even when the flag service is unreachable (use cached config)</li>
+            <li><strong>Consistency:</strong> once a user is assigned a variant, they stay in that variant (sticky sessions)</li>
+            <li><strong>Scale:</strong> 10K flags, 1B user evaluations/day, 100K SDK instances worldwide</li>
+          </ul>
+          <h3>Clarifying Questions</h3>
+          <ul>
+            <li>Is this a multi-tenant system (each customer manages their own flags) or internal only?</li>
+            <li>What is the acceptable flag propagation latency for kill-switch scenarios?</li>
+            <li>Do we need real-time experimentation analytics, or is batch analysis (hourly) acceptable?</li>
+          </ul>
+        </div>
       </section>
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body"><ul>
-            <li><strong>Flag explosion:</strong> Too many flags slow down code and create tech debt. Flags should have a TTL (clean up after rollout completes). Stale flags in code = maintenance burden and evaluation overhead.</li>
-            <li><strong>Override rules:</strong> Enable flag for specific users (QA team, beta testers) by user ID override list. This overrides rollout percentage. Must be fast to evaluate: store as Set of userIds in memory.</li></ul></div>
+
+      <!-- ESTIMATION -->
+      <section class="content-section" id="estimation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F522;</span>E &mdash; Estimation<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <h3>Flag Configuration Size</h3>
+          <ul>
+            <li>10,000 flags × 5 KB average config (targeting rules, variants, percentages) = 50 MB total config</li>
+            <li>50 MB fits entirely in RAM on a single Redis node with room for indexes (Redis uses ~10× raw data for overhead at this size)</li>
+            <li>Each SDK instance caches the full config locally: 50 MB heap is trivial for a JVM service</li>
+          </ul>
+          <h3>Evaluation Throughput</h3>
+          <ul>
+            <li>100K flag evaluations/second per SDK instance, all in-memory: trivial for modern JVM (can do 10M+/sec in-memory)</li>
+            <li>1B evaluations/day total system-wide = ~11,600/sec average, ~100K/sec peak</li>
+            <li>Evaluation events (for experimentation analytics): 1B events/day → write to Kafka for async processing</li>
+          </ul>
+          <h3>Flag Service Load</h3>
+          <ul>
+            <li>100K SDK instances × 1 SSE connection each = 100K persistent connections to the flag service</li>
+            <li>SSE is HTTP/2 multiplexed; one server can handle ~10K concurrent SSE connections</li>
+            <li>10 flag service instances needed to handle 100K SDK connections</li>
+            <li>Flag updates are rare (maybe 100 changes/day), so SSE traffic is sparse — mostly idle keep-alives</li>
+          </ul>
+          <div style="background:linear-gradient(135deg,#f0e7ff,#e0d4ff);border-radius:12px;padding:var(--space-4);margin-top:var(--space-4)">
+            <strong>&#x1F4A1; Senior Signal:</strong> The flag service is not on the critical path of serving user requests. The SDK is. State this clearly: the SDK evaluates flags entirely locally. The flag service only pushes config updates. A flag service outage degrades propagation of new flag changes — it does NOT degrade the application's ability to evaluate existing flags.
+          </div>
+        </div>
       </section>
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body"><p>Feature flags = in-memory SDK evaluation (no network per call) + hash(userId+flagKey) % 100 for consistent rollout + Kafka event propagation for kill switch in 30s. Key insight: including flagKey in hash prevents experimental contamination across A/B tests.</p></div>
+
+      <!-- SCHEMA -->
+      <section class="content-section" id="schema">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F5C4;&#xFE0F;</span>S &mdash; Schema<span class="reshaded-step__letter">3&ndash;5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── PostgreSQL: Flag Config Storage ────────────────────────────────────────
+CREATE TABLE feature_flags (
+    flag_key        VARCHAR(128) PRIMARY KEY,    -- 'new-checkout-flow', 'dark-mode'
+    flag_type       VARCHAR(20)  NOT NULL,        -- 'boolean' | 'multivariate' | 'percentage'
+    status          VARCHAR(20)  NOT NULL,        -- 'draft' | 'active' | 'deprecated' | 'archived'
+    default_variant VARCHAR(64)  NOT NULL,        -- variant returned if no rule matches
+    variants        JSONB        NOT NULL,        -- { "control": {}, "treatment": { "color": "blue" } }
+    rules           JSONB        NOT NULL,        -- ordered array of targeting rules
+    rollout_percent INTEGER,                      -- 0-100 for percentage rollout
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    version         BIGINT       NOT NULL DEFAULT 1  -- optimistic locking for concurrent edits
+);
+
+-- Rules are stored as ordered JSON:
+-- [
+--   { "id": "rule-1", "conditions": [{"attribute": "plan", "operator": "eq", "value": "enterprise"}], "variant": "treatment", "priority": 1 },
+--   { "id": "rule-2", "conditions": [{"attribute": "country", "operator": "in", "value": ["US","CA"]}], "variant": "control", "priority": 2 },
+--   { "id": "rule-3", "conditions": [], "rollout": {"treatment": 20, "control": 80}, "priority": 3 }
+-- ]
+
+CREATE TABLE flag_audit_log (
+    log_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    flag_key        VARCHAR(128) NOT NULL,
+    changed_by      VARCHAR(255) NOT NULL,
+    change_type     VARCHAR(50)  NOT NULL,        -- 'created' | 'updated' | 'archived'
+    old_config      JSONB,
+    new_config      JSONB        NOT NULL,
+    changed_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE experiments (
+    experiment_id   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    flag_key        VARCHAR(128) NOT NULL REFERENCES feature_flags(flag_key),
+    hypothesis      TEXT         NOT NULL,
+    primary_metric  VARCHAR(128) NOT NULL,        -- 'conversion_rate', 'revenue_per_user'
+    start_date      TIMESTAMPTZ  NOT NULL,
+    end_date        TIMESTAMPTZ,
+    status          VARCHAR(20)  NOT NULL,        -- 'running' | 'completed' | 'stopped'
+    results         JSONB                         -- computed by analytics pipeline
+);</code></pre>
+
+          <h3>SDK's In-Memory Config Representation</h3>
+          <pre><code class="language-java">// The SDK receives a snapshot of all flag configs and stores them in a ConcurrentHashMap.
+// This is the object the evaluator works with — no DB, no Redis, no network.
+
+public record FlagConfig(
+    String flagKey,
+    FlagType flagType,
+    FlagStatus status,
+    String defaultVariant,
+    Map&lt;String, VariantConfig&gt; variants,
+    List&lt;TargetingRule&gt; rules,     // ordered by priority, first-match wins
+    int rolloutPercent,
+    long version
+) {}
+
+public record TargetingRule(
+    String ruleId,
+    List&lt;RuleCondition&gt; conditions,    // AND logic: all conditions must match
+    String variant,                     // return this variant if conditions match (for direct rules)
+    Map&lt;String, Integer&gt; rollout,       // variant → percentage (for rollout rules)
+    int priority                        // lower number = evaluated first
+) {}</code></pre>
+        </div>
       </section>
-      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
-        <div class="content-section__body"><table class="tradeoff-table">
-            <thead><tr><th>Decision</th><th>Option A</th><th>Option B</th></tr></thead>
-            <tbody>
-              <tr><td>SDK polling</td><td>Poll Redis every 30s: simple, 30s max staleness</td><td>Push via Kafka/WebSocket: instant propagation, more infrastructure</td></tr>
-              <tr><td>Rollout algorithm</td><td>Hash-based: deterministic, sticky, no stored state</td><td>Random per evaluation: not sticky, user experience changes on each request</td></tr>
-              <tr><td>Isolation model</td><td>Shared flag service: simpler ops, all teams share one service</td><td>Per-team flag service: stronger isolation, more overhead</td></tr>
-            </tbody>
-          </table></div>
+
+      <!-- HLD -->
+      <section class="content-section" id="hld">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F3D7;&#xFE0F;</span>H &mdash; High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+          <h3>System Components</h3>
+          <pre><code class="language-java">// ─── Component Diagram ──────────────────────────────────────────────────────
+//
+// [Dashboard UI] ──→ [Flag Management API] ──→ [PostgreSQL]
+//                         │                         │
+//                         ↓                         ↓
+//                    [Redis Pub/Sub]            [Audit Log]
+//                         │
+//                    [Flag Streaming Service] ←── SSE connections from all SDKs
+//                         │
+//                    (broadcasts config changes to all connected SDK instances)
+//
+// [Application Service]
+//   └─→ [Server-side SDK] (in-process, ~50 MB cached config)
+//         ├─→ [FlagConfigCache] (ConcurrentHashMap, updated via SSE)
+//         ├─→ [FeatureFlagEvaluator] (pure in-memory rule evaluation, &lt;1ms)
+//         └─→ [EvaluationEventQueue] (async, batched, → Kafka for analytics)</code></pre>
+
+          <h3>Flag Types in Detail</h3>
+          <ul>
+            <li><strong>Boolean:</strong> true/false. The simplest. Used for kill switches and simple feature gates. <code>isEnabled("new-checkout")</code>.</li>
+            <li><strong>Multivariate (A/B/C/D):</strong> Returns one of N string variants. Used for testing different UI components, algorithm variants, or pricing options. <code>getVariant("checkout-button-color")</code> → <code>"blue"</code>, <code>"green"</code>, or <code>"red"</code>.</li>
+            <li><strong>Percentage rollout:</strong> A multivariate flag where the assignment is determined by hashing the user ID. 20% → "treatment", 80% → "control". The hash is deterministic: same user always gets same variant.</li>
+            <li><strong>User segment targeting:</strong> Evaluate targeting rules first (e.g., "all enterprise users get treatment"). Users not matching any rule fall through to the percentage rollout. This is the composition that powers sophisticated experiments.</li>
+          </ul>
+
+          <h3>Targeting Rule Evaluation (First-match Priority)</h3>
+          <pre><code class="language-java">// Rule evaluation pipeline for a given user context:
+// UserContext { userId: "u123", email: "alice@acme.com", plan: "enterprise", country: "US" }
+
+// Flag: "new-pricing-page" with these rules (in priority order):
+// Rule 1: plan == "enterprise"         → variant: "control"    (enterprise excluded from test)
+// Rule 2: country in ["US", "CA"]      → rollout: {treatment: 50, control: 50}
+// Rule 3: no conditions (catch-all)    → rollout: {treatment: 10, control: 90}
+
+// Evaluation:
+// 1. Check Rule 1: plan == "enterprise" → alice.plan == "enterprise" → MATCH → return "control"
+// 2. (Rules 2 and 3 are never evaluated — first match wins)
+
+// If alice.plan == "pro" (not enterprise):
+// 1. Check Rule 1: MISS (plan != enterprise)
+// 2. Check Rule 2: country in ["US","CA"] → alice.country == "US" → MATCH
+//    → Rollout rule: hash(userId + flagKey) % 100 = 37 → falls in treatment bucket (0-49) → "treatment"</code></pre>
+
+          <h3>Consistent Hashing for Percentage Rollout</h3>
+          <p>The key property of percentage rollout is stickiness: a user assigned "treatment" today must remain in "treatment" tomorrow, even if the flag percentage changes (from 20% to 30% — only new users should be added). This requires deterministic assignment, not random:</p>
+          <pre><code class="language-java">// Bucket assignment: 0-99
+// hash(userId + flagKey) % 100 = bucketNumber
+// If bucketNumber < rolloutPercent → treatment; else → control
+
+// Example: userId = "user-123", flagKey = "new-checkout"
+// MurmurHash3("user-123:new-checkout") = 3829473847
+// 3829473847 % 100 = 47
+// rolloutPercent = 20 → bucket 47 >= 20 → control
+// rolloutPercent increased to 50 → bucket 47 < 50 → treatment (now included!)
+
+// The flagKey is included in the hash input so the same user gets independent
+// assignments across different flags (not always in treatment or always in control).</code></pre>
+
+          <h3>SDK Config Propagation via SSE</h3>
+          <p>Server-Sent Events (SSE) is the right transport for flag config updates:</p>
+          <ul>
+            <li><strong>Why SSE over WebSocket:</strong> Flag updates are server-to-client only. SSE is unidirectional HTTP, simpler to implement, proxy-friendly, and auto-reconnects. WebSocket is bidirectional — unnecessary overhead for push-only config updates.</li>
+            <li><strong>Why SSE over polling:</strong> Polling at 1-second intervals from 100K SDK instances = 100K requests/second to the flag service for what is usually empty responses. SSE maintains one persistent connection per SDK instance and only pushes when something changes.</li>
+            <li><strong>Startup:</strong> SDK connects to the SSE stream and immediately receives a "snapshot" event containing all flag configs. Subsequent events contain only the changed flag's config (delta update).</li>
+            <li><strong>Reconnection:</strong> If the SSE connection drops, the SDK continues evaluating with its last known config (stale but safe). On reconnect, it receives a fresh snapshot to resync.</li>
+          </ul>
+        </div>
       </section>
-      <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
-        <div class="content-section__body"><pre><code class="language-java">/**
- * FeatureFlagEvaluator -- evaluates feature flags for a user in O(1) time.
- * All flag configs loaded in-memory; no network call per evaluation.
+
+      <!-- APIS -->
+      <section class="content-section" id="apis">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F50C;</span>A &mdash; APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">// ─── Flag Management API (Dashboard → Backend) ───────────────────────────────
+POST /api/v1/flags
+Request:  { flag_key: "new-checkout", type: "boolean", default_variant: "false" }
+Response: { flag_key, status: "draft", version: 1 }
+
+PUT /api/v1/flags/{flag_key}/rules
+Request:  { rules: [...], rollout_percent: 20, version: 1 }
+// Optimistic concurrency: request must include current version number.
+// 409 Conflict if version mismatch (another admin saved concurrently).
+
+PUT /api/v1/flags/{flag_key}/status
+Request:  { status: "active" }   // draft → active → deprecated → archived
+// Transitioning to 'archived' removes the flag from all SDK caches.
+
+// ─── Flag Streaming API (SDK → Server) ───────────────────────────────────────
+GET /sdk/v1/flags/stream
+Headers: Authorization: Bearer <sdk-key>, Accept: text/event-stream
+// Establishes SSE connection. Server sends:
+// event: snapshot   → data: { flags: { "new-checkout": {...}, "dark-mode": {...}, ... } }
+// event: flag-update → data: { flag_key: "dark-mode", config: {...}, version: 12 }
+// event: flag-delete → data: { flag_key: "old-feature" }
+// event: heartbeat   → data: {}   (every 30 sec to keep connection alive through proxies)
+
+// ─── SDK Evaluation API (local, no network) ──────────────────────────────────
+// NOT an HTTP endpoint. This is the in-process SDK API called by application code.
+
+// Server-side SDK (Java):
+FeatureFlagClient client = FeatureFlagClient.getInstance();
+UserContext user = UserContext.builder()
+    .userId("user-123")
+    .attribute("plan", "enterprise")
+    .attribute("country", "US")
+    .build();
+
+boolean isNewCheckout = client.booleanVariation("new-checkout", user, false); // false = default
+String buttonColor    = client.stringVariation("checkout-button-color", user, "blue");
+
+// ─── Evaluation Events API (SDK → Analytics) ─────────────────────────────────
+// SDK batches evaluation events and POSTs every 30 seconds (or when batch is full)
+POST /sdk/v1/events/batch
+Request: {
+  events: [
+    { flag_key: "new-checkout", user_id: "u123", variant: "treatment", timestamp: "..." },
+    ...   // up to 500 events per batch
+  ]
+}
+// Server writes to Kafka → consumed by analytics pipeline for experiment metrics</code></pre>
+        </div>
+      </section>
+
+      <!-- DEEP DIVE -->
+      <section class="content-section" id="deepdive">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F52C;</span>D &mdash; Deep Dive<span class="reshaded-step__letter">10 min</span></h2>
+        <div class="content-section__body">
+
+          <h3>1. Client-side vs Server-side SDK: Why They Differ</h3>
+          <p>This is one of the most important architectural distinctions in feature flag systems:</p>
+          <ul>
+            <li><strong>Server-side SDK:</strong> Runs in your application server (JVM, Python process). Has access to all flag configs for all users. Evaluates flags locally using the full config. <em>Safe</em> to do this because the flag config is internal infrastructure — it never leaves your server.</li>
+            <li><strong>Client-side SDK:</strong> Runs in the user's browser or mobile app. <em>Cannot</em> download the full flag config — it contains your business rules (e.g., "enterprise users always get feature X") which would reveal competitive information. Also: 50 MB config download per browser pageload is unacceptable.</li>
+            <li><strong>Client-side evaluation model:</strong> The browser SDK sends the user's context (ID, attributes) to the flag service <em>server</em>. The server evaluates all flags for that user and returns only the assignment results: <code>{ "new-checkout": true, "dark-mode": false }</code>. The evaluation logic never runs client-side.</li>
+            <li><strong>Implication:</strong> Client-side evaluation requires a network call per session (or per user context change). It cannot be truly zero-latency. The tradeoff is security over performance.</li>
+          </ul>
+
+          <h3>2. Flag Lifecycle Management</h3>
+          <p>Technical debt in feature flag systems is real and dangerous. Flags never cleaned up become permanent code paths that confuse developers. The lifecycle state machine:</p>
+          <ul>
+            <li><strong>Draft:</strong> Created but not enabled. Exists in config but SDK returns default variant for all users. Safe for development and testing.</li>
+            <li><strong>Active:</strong> Fully evaluating rules. Production traffic is being split. This is the normal operational state.</li>
+            <li><strong>Deprecated:</strong> The winning variant has been chosen. The flag is being removed from code. SDK still evaluates it (in case some code paths haven't been cleaned up yet). Dashboard shows a warning: "remove from code before archiving."</li>
+            <li><strong>Archived:</strong> Removed from SDK cache. Any code still calling <code>client.booleanVariation("archived-flag", ...)</code> receives the hardcoded default — it will never be "true". Acts as a safety net for code that missed the cleanup.</li>
+            <li><strong>Kill switch:</strong> A boolean flag with no targeting rules and 100% rollout, used purely for emergency disable. Best practice: every major feature has a corresponding kill switch flag. When a production incident hits, flip the kill switch in the dashboard — within 30 seconds all SDK instances receive the update and the feature is off without a deployment.</li>
+          </ul>
+
+          <h3>3. Experimentation and Statistical Significance</h3>
+          <p>A feature flag percentage rollout becomes an A/B experiment when you attach a metric to it:</p>
+          <ul>
+            <li><strong>Randomization unit:</strong> Always randomize by user_id, not session. Same user must always see same variant for valid statistical inference. (Two sessions by the same user seeing different variants pollutes both variant's metrics.)</li>
+            <li><strong>Metric collection:</strong> Every flag evaluation event includes variant assignment. The analytics pipeline joins evaluations with conversion events: "user u123 saw variant 'treatment' at 10:00, then converted at 10:45." This join happens in a Flink or Spark job.</li>
+            <li><strong>Statistical significance:</strong> Two-proportion z-test for conversion rates. Requires minimum sample size before results are valid (calculated by power analysis). LaunchDarkly's approach: show "results not yet significant" until p-value &lt; 0.05 AND minimum sample size reached. Prevents peeking problem (stopping test early when random variation looks like a winner).</li>
+            <li><strong>Multi-armed bandit:</strong> Alternative to fixed A/B split. Automatically increases traffic to the winning variant as evidence accumulates. Reduces regret (lost conversions from showing users the inferior variant). Implementation: Thompson sampling updates variant probabilities using a Beta distribution over conversion observations.</li>
+          </ul>
+
+          <h3>4. Audit Log and Rollback</h3>
+          <p>Every flag change must be auditable and reversible. Flag changes can cause production incidents (enabling a half-built feature for enterprise users by mistake):</p>
+          <ul>
+            <li>The audit log stores <code>old_config</code> and <code>new_config</code> as JSONB snapshots. Rollback = <code>PUT /api/v1/flags/{key}/rules</code> with the previous config from the audit log.</li>
+            <li>The dashboard shows a diff view of what changed (e.g., "rollout_percent changed from 10 to 50"). This is computed at display time from the old/new JSONB blobs.</li>
+            <li>Optimistic concurrency control prevents concurrent edits from silently overwriting each other. The version field acts as a optimistic lock: if two engineers edit the same flag simultaneously, the second save returns 409 Conflict with "flag was modified by another user."</li>
+          </ul>
+
+          <h3>5. SDK Resilience and Offline Mode</h3>
+          <p>The SDK's most important feature is that it works when the flag service is down:</p>
+          <ul>
+            <li><strong>Bootstrap cache:</strong> On first startup, the SDK fetches a full config snapshot and writes it to a local file (or Redis cache for stateless services). On subsequent startups, the SDK loads from this bootstrap cache immediately (sub-millisecond) and connects to the SSE stream in the background. No blocking startup waiting for the flag service.</li>
+            <li><strong>Stale config operation:</strong> If the SSE connection drops and cannot reconnect, the SDK continues using its last known config indefinitely. This is the correct behavior: the system degrades to the last known good state rather than failing closed (returning defaults for everything) or failing open (treating all flags as enabled).</li>
+            <li><strong>Default values:</strong> Every flag evaluation call requires a default value parameter: <code>client.booleanVariation("flag", user, false)</code>. This default is only used if the flag key is not found in the config (e.g., flag was archived). It provides a safe fallback defined by the calling code, not the SDK.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- EVALUATE -->
+      <section class="content-section" id="evaluate">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2705;</span>E &mdash; Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <div class="content-section__body">
+          <h3>Edge Cases in Flag Evaluation</h3>
+          <p>The rule evaluation engine has several non-obvious edge cases that must be explicitly handled:</p>
+          <ul>
+            <li><strong>Missing attribute:</strong> A rule checks <code>plan == "enterprise"</code> but the user context does not include <code>plan</code>. Decision: treat as non-match (rule does not apply). Never throw an exception — flag evaluation must be infallible.</li>
+            <li><strong>Archived flag accessed:</strong> Application code calls <code>client.booleanVariation("archived-flag", user, false)</code>. The flag is not in the cache. Return the provided default (<code>false</code>). Emit a "flag not found" metric so developers are alerted that code references a removed flag.</li>
+            <li><strong>Rules not summing to 100%:</strong> A rollout rule has <code>{ "treatment": 20, "control": 75 }</code> (sums to 95%). Bucket 96 falls outside all ranges. Decision: return the flag's <code>defaultVariant</code>. The dashboard should validate that all rollout percentages sum to exactly 100% before allowing a flag to go active.</li>
+            <li><strong>Concurrent flag update during evaluation:</strong> A ConcurrentHashMap update (SSE delta) replaces the FlagConfig object while another thread is mid-evaluation. Java's ConcurrentHashMap guarantees atomic put — the evaluator sees either the old or new complete FlagConfig, never a partial state. Records (immutable) ensure the config object itself cannot be partially modified.</li>
+          </ul>
+          <h3>Failure Modes</h3>
+          <ul>
+            <li><strong>SSE connection drops silently:</strong> Load balancer with a 60-second idle timeout kills the SSE connection. SDK does not know. It continues with stale config. Mitigation: server sends heartbeat events every 30 seconds. SDK reconnects on missed heartbeat. Standard SSE client libraries handle this automatically.</li>
+            <li><strong>Flag config inconsistency during SSE reconnect:</strong> Between disconnect and reconnect, 3 flag changes happened. The SDK receives a snapshot on reconnect and sees all 3 changes atomically. No partial state.</li>
+            <li><strong>Hash collision giving wrong percentage assignment:</strong> MurmurHash3 collisions are extremely rare (128-bit output). But the key mistake is using a non-deterministic hash (e.g., Java's default Object.hashCode() which differs across JVM restarts). Always use a stable, specification-defined hash function (MurmurHash3 or FNV1a).</li>
+            <li><strong>Flag key typo:</strong> <code>client.booleanVariation("new-chekout", user, false)</code> (typo). The key is not in the cache. SDK returns the default value (false) and emits a "flag not found" warning metric. This is a silent failure — the feature appears to be disabled rather than throwing an error. Best practice: define flag keys as constants, not raw strings.</li>
+          </ul>
+          <h3>Scaling the Flag Streaming Service</h3>
+          <ul>
+            <li>100K concurrent SSE connections require 10 flag service instances (10K connections each). Each service subscribes to Redis Pub/Sub for flag change events. When a flag changes: flag management API writes to PostgreSQL → publishes to Redis channel → all 10 flag service instances receive the event → each sends SSE event to its 10K connected SDKs. Propagation to all 100K SDKs happens within seconds.</li>
+            <li>Redis Pub/Sub is not persistent — if a flag service instance is down when a change is published, it misses it. On reconnect, it fetches the full config from PostgreSQL and does a full resync push to all its clients.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- DELIVER -->
+      <section class="content-section" id="deliver">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F680;</span>D &mdash; Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <div class="content-section__body">
+          <ul>
+            <li><strong>Evaluation:</strong> 100% in-memory, sub-millisecond. Server-side SDK caches full config (50 MB). Flag evaluation never touches the network.</li>
+            <li><strong>Config propagation:</strong> Flag service → Redis Pub/Sub → 10 SSE servers → 100K SDK instances. Kill switch propagation: &lt;30 seconds.</li>
+            <li><strong>Consistency:</strong> MurmurHash3(userId + flagKey) % 100 for deterministic, sticky variant assignment.</li>
+            <li><strong>Experimentation:</strong> Evaluation events batched to Kafka → analytics pipeline computes significance.</li>
+            <li><strong>Resilience:</strong> SDK operates on stale config if flag service is unreachable. Bootstrap file enables cold starts without blocking on the flag service.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- TRADE-OFFS -->
+      <section class="content-section" id="tradeoffs">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2696;&#xFE0F;</span>Trade-offs</h2>
+        <div class="content-section__body">
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>Server-side SDK (Recommended)</th><th>Client-side SDK</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Evaluation latency</strong></td><td>&lt;1 ms — in-memory, no network</td><td>50–200 ms — network round trip to flag service</td></tr>
+                <tr><td><strong>Business rule security</strong></td><td>Rules stay on server — not exposed to users</td><td>Rules evaluated server-side before returning results — safe</td></tr>
+                <tr><td><strong>Config size limit</strong></td><td>No practical limit (50 MB in JVM heap is nothing)</td><td>Must be minimal — only user's evaluated results, not full config</td></tr>
+                <tr><td><strong>Offline capability</strong></td><td>Yes — uses last cached config</td><td>Limited — can't evaluate new users without network</td></tr>
+                <tr><td><strong>Use case</strong></td><td>Backend services, APIs, server-side rendering</td><td>Single-page apps, mobile apps, browser JS</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrapper" style="margin-top:var(--space-6)">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Dimension</th><th>SSE Push (Recommended)</th><th>Polling</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Propagation latency</strong></td><td>Seconds (event pushed immediately)</td><td>Depends on poll interval (1–60 seconds)</td></tr>
+                <tr><td><strong>Server load</strong></td><td>Low — idle SSE connections use minimal CPU; pushes only on change</td><td>High — 100K SDKs × 1/sec = 100K req/sec even when nothing changed</td></tr>
+                <tr><td><strong>Implementation complexity</strong></td><td>Medium — need persistent connection management, heartbeats</td><td>Low — simple HTTP GET on a timer</td></tr>
+                <tr><td><strong>Proxy/firewall compatibility</strong></td><td>Good with HTTP/2; some enterprise proxies buffer SSE (use heartbeats)</td><td>Excellent — standard HTTP works everywhere</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- IMPLEMENTATION -->
+      <section class="content-section" id="implementation">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x2615;</span>Java Implementation</h2>
+        <div class="content-section__body">
+          <pre><code class="language-java">/**
+ * FeatureFlagEvaluator — core rule engine. Pure logic, no I/O.
+ * Evaluates targeting rules in priority order, returns the first matching variant.
+ * Falls back to rollout percentage if no explicit rule matches.
  */
 public class FeatureFlagEvaluator {
 
-    private volatile Map&lt;String, FlagConfig&gt; flagConfigs = new HashMap&lt;&gt;();
-
     /**
-     * Evaluates whether a flag is enabled for a specific user.
-     * Order: overrides &gt; targeting rules &gt; rollout hash.
+     * Evaluates a flag for the given user context.
+     * Returns the variant name, or the flag's defaultVariant if no rule matches.
+     * Never throws — returns defaultVariant on any evaluation error.
      */
-    public boolean isEnabled(String flagKey, String userId, Map&lt;String, String&gt; userAttrs) {
-        FlagConfig config = flagConfigs.get(flagKey);
-        if (config == null || !config.isEnabled()) {
-            return false; // Flag missing or globally disabled (kill switch)
+    public String evaluate(FlagConfig flag, UserContext user) {
+        if (flag.status() != FlagStatus.ACTIVE) {
+            return flag.defaultVariant(); // archived/deprecated flags always return default
         }
-
-        // User-specific overrides (QA, beta testers)
-        if (config.getUserOverrides().contains(userId)) {
-            return true;
-        }
-
-        // Targeting rules (plan=premium -&gt; always on)
-        for (TargetingRule rule : config.getTargetingRules()) {
-            if (rule.matches(userAttrs.get(rule.getAttribute()))) {
-                return true;
+        for (TargetingRule rule : flag.rules()) { // rules are already sorted by priority
+            if (ruleMatches(rule, user)) {
+                return resolveVariantFromRule(rule, user, flag.flagKey());
             }
         }
+        return flag.defaultVariant(); // no rule matched
+    }
 
-        // Consistent hash-based percentage rollout
-        return isInRolloutBucket(flagKey, userId, config.getRolloutPercent());
+    private boolean ruleMatches(TargetingRule rule, UserContext user) {
+        if (rule.conditions().isEmpty()) {
+            return true; // catch-all rule (no conditions = always matches)
+        }
+        // AND logic: all conditions must match
+        return rule.conditions().stream().allMatch(condition -> evaluateCondition(condition, user));
+    }
+
+    private boolean evaluateCondition(RuleCondition condition, UserContext user) {
+        String attributeValue = user.getAttribute(condition.attribute());
+        if (attributeValue == null) {
+            return false; // missing attribute never matches
+        }
+        return switch (condition.operator()) {
+            case "eq"         -> attributeValue.equals(condition.value());
+            case "neq"        -> !attributeValue.equals(condition.value());
+            case "in"         -> condition.valueList().contains(attributeValue);
+            case "not_in"     -> !condition.valueList().contains(attributeValue);
+            case "starts_with"-> attributeValue.startsWith(condition.value());
+            case "contains"   -> attributeValue.contains(condition.value());
+            default           -> false;
+        };
+    }
+
+    private String resolveVariantFromRule(TargetingRule rule, UserContext user, String flagKey) {
+        if (rule.variant() != null) {
+            return rule.variant(); // explicit variant assignment for this rule
+        }
+        // Rollout rule: assign by hash
+        return assignByHash(user.getUserId(), flagKey, rule.rollout());
     }
 
     /**
-     * Deterministic bucket assignment.
-     * hash(userId:flagKey) % 100 ensures:
-     * - Same user always gets same bucket (sticky)
-     * - Different flags have uncorrelated rollout groups (no contamination)
+     * Assigns a variant based on a deterministic hash of userId + flagKey.
+     * Same user always gets the same variant for a given flag.
+     * Uses MurmurHash3 for uniform distribution with no seed-dependency issues.
      */
-    private boolean isInRolloutBucket(String flagKey, String userId, int rolloutPercent) {
-        if (rolloutPercent &lt;= 0) return false;
-        if (rolloutPercent &gt;= 100) return true;
-        String hashInput = userId + ":" + flagKey;
-        int hashValue = Math.abs(hashInput.hashCode()); // Production: MurmurHash3
-        return (hashValue % 100) &lt; rolloutPercent;
+    private String assignByHash(String userId, String flagKey, Map&lt;String, Integer&gt; rollout) {
+        int bucket = ConsistentHashRollout.getBucket(userId, flagKey);
+        int cumulativePercent = 0;
+        for (Map.Entry&lt;String, Integer&gt; entry : rollout.entrySet()) {
+            cumulativePercent += entry.getValue();
+            if (bucket &lt; cumulativePercent) {
+                return entry.getKey(); // variant name
+            }
+        }
+        return rollout.keySet().iterator().next(); // fallback — shouldn't happen if percentages sum to 100
+    }
+}
+
+/**
+ * ConsistentHashRollout — deterministic bucket assignment for percentage rollouts.
+ * Critical property: given the same userId and flagKey, always returns the same bucket (0-99).
+ * Using different flagKey salt ensures users are independently randomized across flags.
+ */
+public final class ConsistentHashRollout {
+
+    private ConsistentHashRollout() {}
+
+    public static int getBucket(String userId, String flagKey) {
+        // Concatenate with a separator to prevent prefix collision
+        // "user:123" + "flag:abc" is different from "user:12" + "3flag:abc"
+        String hashInput = userId + "::" + flagKey;
+        int hashValue = murmurHash3(hashInput.getBytes(StandardCharsets.UTF_8));
+        // Math.abs handles Integer.MIN_VALUE edge case: use bitwise AND with max int
+        return (hashValue &amp; Integer.MAX_VALUE) % 100;
+    }
+
+    private static int murmurHash3(byte[] data) {
+        // MurmurHash3 x86 32-bit — optimized for speed, excellent distribution
+        int seed = 0;
+        int h = seed ^ data.length;
+        int i = 0;
+        while (i + 4 &lt;= data.length) {
+            int k = (data[i] &amp; 0xFF)
+                  | ((data[i + 1] &amp; 0xFF) &lt;&lt; 8)
+                  | ((data[i + 2] &amp; 0xFF) &lt;&lt; 16)
+                  | ((data[i + 3] &amp; 0xFF) &lt;&lt; 24);
+            k *= 0xcc9e2d51;
+            k = (k &lt;&lt; 15) | (k &gt;&gt;&gt; 17);
+            k *= 0x1b873593;
+            h ^= k;
+            h = (h &lt;&lt; 13) | (h &gt;&gt;&gt; 19);
+            h = h * 5 + 0xe6546b64;
+            i += 4;
+        }
+        // Handle remaining bytes (tail)
+        int remaining = data.length - i;
+        if (remaining &gt; 0) {
+            int tail = 0;
+            for (int j = remaining - 1; j &gt;= 0; j--) {
+                tail = (tail &lt;&lt; 8) | (data[i + j] &amp; 0xFF);
+            }
+            tail *= 0xcc9e2d51;
+            tail = (tail &lt;&lt; 15) | (tail &gt;&gt;&gt; 17);
+            tail *= 0x1b873593;
+            h ^= tail;
+        }
+        // Finalization mix
+        h ^= data.length;
+        h ^= (h &gt;&gt;&gt; 16);
+        h *= 0x85ebca6b;
+        h ^= (h &gt;&gt;&gt; 13);
+        h *= 0xc2b2ae35;
+        h ^= (h &gt;&gt;&gt; 16);
+        return h;
+    }
+}
+
+/**
+ * FlagConfigCache — maintains the in-memory copy of all flag configs.
+ * Updated via SSE events from the flag streaming service.
+ * Thread-safe: ConcurrentHashMap for reads; synchronized update block for writes.
+ */
+@Component
+public class FlagConfigCache {
+
+    private final ConcurrentHashMap&lt;String, FlagConfig&gt; flagConfigs = new ConcurrentHashMap&lt;&gt;();
+    private volatile long lastUpdatedEpochMs = 0;
+
+    public Optional&lt;FlagConfig&gt; getFlag(String flagKey) {
+        return Optional.ofNullable(flagConfigs.get(flagKey));
     }
 
     /**
-     * Called when Kafka delivers a flag config update.
-     * Atomically replaces the entire config map (copy-on-write).
+     * Replaces the entire config with a fresh snapshot from the streaming service.
+     * Called on SSE connect/reconnect.
      */
-    public void updateFlagConfigs(Map&lt;String, FlagConfig&gt; newConfigs) {
-        this.flagConfigs = Map.copyOf(newConfigs); // volatile write -- safe for readers
+    public void loadSnapshot(Map&lt;String, FlagConfig&gt; snapshot) {
+        flagConfigs.clear();
+        flagConfigs.putAll(snapshot);
+        lastUpdatedEpochMs = System.currentTimeMillis();
     }
-}</code></pre></div>
+
+    /**
+     * Applies a delta update for a single flag. Called on each SSE flag-update event.
+     * Atomic: the map entry is replaced atomically, so concurrent reads see either old or new, never partial.
+     */
+    public void updateFlag(FlagConfig updatedFlag) {
+        flagConfigs.put(updatedFlag.flagKey(), updatedFlag);
+        lastUpdatedEpochMs = System.currentTimeMillis();
+    }
+
+    public void removeFlag(String flagKey) {
+        flagConfigs.remove(flagKey);
+    }
+
+    public long getLastUpdatedEpochMs() {
+        return lastUpdatedEpochMs;
+    }
+}</code></pre>
+        </div>
       </section>
-      <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
+
+      <!-- QUIZ -->
+      <section class="content-section" id="quiz">
+        <h2 class="content-section__title"><span class="content-section__title-icon">&#x1F9E0;</span>Knowledge Check</h2>
         <div class="quiz" data-quiz-id="p-flags-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">&#x1F9E0;</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
-          <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
-            <div class="quiz__question-text"></div>
-            <div class="quiz__options" role="group" aria-label="Answer options"></div>
-            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
-          </div>
-          <div data-question="Why does the rollout algorithm use hash(userId + flagKey) instead of hash(userId) alone?" data-options='["Using only userId would be faster to compute since it is a shorter string", "Using only userId would correlate all flags -- if userId hashes to bucket 5, it would be in the 6% rollout for every flag. This contaminates A/B tests: a user testing the new checkout is also testing the new search, making it impossible to isolate either effect. Including flagKey decorrelates the rollout groups.", "hash(userId + flagKey) provides stronger cryptographic security guarantees", "The flagKey is included to prevent hash collisions in the bucket assignment"]' data-correct="1" data-explanation="Experiment contamination is a serious problem in A/B testing. If a user is simultaneously in 5 experimental variants all using hash(userId) for bucketing, you cannot tell which variant caused which metric change. Including flagKey in the hash ensures each experiment has an independent random assignment." style="display:none"></div>
-          <div data-question="A flag at 10% rollout is increased to 20%. Which users are added to the enabled group, and do existing users remain enabled?" data-options='["All users are re-bucketed randomly when the rollout percentage changes", "Users with buckets 10-19 are added (newly enabled). Users with buckets 0-9 remain enabled. Hash-based bucketing is sticky: hash(userId:flagKey) % 100 does not change, so a user bucket is permanent. Increasing rollout % simply expands the threshold.", "50% of existing users are randomly removed when rollout changes to prevent bias", "All users are fully re-evaluated from scratch each time rollout percentage changes"]' data-correct="1" data-explanation="This is the elegance of hash-based rollout. The bucket assignment is stateless and deterministic -- you do not need to store which users are in the experiment. The rollout_pct is the only stored state. To add users: increase the threshold. Users in buckets below the threshold are always in." style="display:none"></div>
-          <div data-question="How does a kill switch work, and what is the typical propagation time from dashboard change to all services disabling the flag?" data-options='["Kill switches require redeployment of all services to take effect", "Setting enabled=false in the DB publishes a Kafka event. All service SDK instances receive the event (Kafka delivery 1-5s), clear their local cache, and reload from Redis (where the flag is now false). With event-driven updates: 5-10s total propagation globally.", "Kill switches are instantaneous because they use a global distributed lock", "Kill switches only work if you restart all service instances"]' data-correct="1" data-explanation="The propagation chain: DB write to Kafka event to SDK receives event to local cache cleared to flag reloads from Redis as false. The bottleneck is typically the SDK polling interval if not using push-based invalidation. Event-driven SDKs subscribing to Kafka events can achieve sub-10s propagation globally." style="display:none"></div>
-          <div data-question="What is the difference between a feature flag and an A/B test, and why might you use the same infrastructure for both?" data-options='["Feature flags and A/B tests are identical concepts with different names", "A feature flag controls whether a feature is on or off for a user. An A/B test assigns users to variants and tracks metric outcomes (click rate, conversion). A feature flag with two variants plus metric tracking equals an A/B test. The same bucketing infrastructure powers both; A/B tests add the experiment analysis layer on top.", "A/B tests require completely separate infrastructure than feature flags", "Feature flags can only have two states; A/B tests can have unlimited variants"]' data-correct="1" data-explanation="Most feature flag platforms (LaunchDarkly, Statsig) evolved into experimentation platforms precisely because the bucketing mechanism is the same. Feature flags care about did the feature reach users; A/B tests care about did variant B cause higher conversion rate. The evaluation SDK is identical; experiment analysis is a separate concern." style="display:none"></div>
+          <div class="quiz__question"><div class="quiz__question-number">Question 1 of 5</div><div class="quiz__question-text"></div><div class="quiz__options" role="group" aria-label="Answer options"></div><div class="quiz__explanation" role="alert" aria-live="polite"></div></div>
+
+          <div data-question="Why must percentage rollout use hash(userId + flagKey) % 100 rather than hash(userId) % 100?" data-options='["Using just userId causes hash collisions when two users have similar ID values","If only userId is hashed, users who happen to be in the top 20% bucket are ALWAYS in treatment for EVERY flag at 20% rollout. The same 20% of users would consistently be in every experiment, biasing all results. Including flagKey ensures each flag independently randomizes users — a user in treatment for checkout may be in control for dark-mode.","The flagKey is needed to make the hash function faster for string inputs","Using just userId makes the hash non-deterministic across JVM restarts"]' data-correct="1" data-explanation="This is called 'exposure bias' or 'assignment correlation.' If hash(userId) determines bucket assignment and that bucket is always used, your experiments are not independent — the same users see every treatment. Adding flagKey as a salt (combined input) ensures uncorrelated randomization across flags, which is a prerequisite for valid A/B test statistics." style="display:none"></div>
+
+          <div data-question="Why does the client-side (browser) SDK evaluate flags server-side rather than downloading the full flag config?" data-options='["Browser SDKs are slower, so server-side evaluation is necessary for performance","The full flag config contains business rules that reveal targeting logic to end users (e.g., enterprise plan users always get feature X). Shipping this to every browser exposes competitive and business logic. Instead, the browser sends the user context to the flag service, the service evaluates all rules, and returns only the assignment results — the rules themselves never leave the server.","Browser memory limits prevent downloading a 50 MB flag config","Client-side evaluation would cause CORS issues with modern browsers"]' data-correct="1" data-explanation="Security is the primary reason, not performance. The flag config is internal business logic: which plans get which features, which beta programs exist, what the rollout percentages are. Shipping this to the browser would expose your product roadmap and pricing strategy. Server-side evaluation keeps the rules opaque while still allowing the client to make flag-controlled decisions." style="display:none"></div>
+
+          <div data-question="An SDK instance loses its SSE connection to the flag service for 2 hours due to a network partition. What should it do?" data-options='["Immediately return the default value for all flag evaluations until reconnected","Continue evaluating flags using the last known cached config. The cached state, while 2 hours stale, is better than returning defaults for everything (which would effectively disable all features). When the connection resumes, fetch a fresh snapshot and update. The system degrades gracefully to the last known good state rather than failing closed.","Return an error to callers indicating the flag service is unavailable","Queue all flag evaluation requests and replay them once the connection resumes"]' data-correct="1" data-explanation="Graceful degradation to the last known state is the correct failure mode for feature flag SDKs. The alternative — returning defaults — effectively disables all features during an infrastructure outage, which is worse than serving slightly stale flag assignments. The stale config risk is low: flag configs rarely change (maybe 100 times/day across 10K flags) and the cached version is likely still accurate." style="display:none"></div>
+
+          <div data-question="How does the targeting rule system prevent 'peeking' in A/B experiments, and why does peeking lead to invalid results?" data-options='["Peeking is prevented by rate limiting the number of times results can be viewed","Peeking means stopping an A/B test early because results look promising — but early results have high variance. A coin flip might show 7 heads in first 10 flips, but converges to 50% over 1000. Statistical significance (p < 0.05) must be reached AND minimum sample size (set by power analysis) must be achieved. The flag system should show 'results not yet significant' and disable the stop-test button until both conditions are met.","Peeking is prevented by encrypting the variant assignment so engineers cannot see preliminary results","Peeking only affects experiments with more than 3 variants"]' data-correct="1" data-explanation="Peeking (early stopping) inflates the false positive rate far above the nominal alpha. If you allow stopping whenever p < 0.05, the actual false positive rate is ~25% for sequential peeks every day over 20 days. The solution is to pre-commit to a minimum sample size using power analysis (based on expected effect size and desired power), and enforce that minimum before showing any significance results." style="display:none"></div>
+
+          <div data-question="Why should feature flag keys be defined as constants rather than inline string literals?" data-options='["String constants are faster at runtime due to JVM string interning optimization","A typo in a string literal (new-chekout vs new-checkout) compiles and deploys silently. The SDK finds no flag with that key and returns the default value — the feature appears disabled with no error. Defining flag keys as constants catches typos at compile time. Bonus: IDEs can find all usages of a flag constant, making it easy to remove all references when archiving a flag.","Constants prevent concurrent modification of flag keys during runtime","Java's garbage collector treats string constants differently from literals"]' data-correct="1" data-explanation="This is a practical engineering concern with real production impact. Flag key typos are silent failures — the system does not throw, it just returns the default. In a feature gate, the default is typically 'disabled' — so a typo disables a feature that was meant to be enabled. Constants are caught at compile time or at least at startup, and enable search-based flag cleanup during the deprecation phase of the flag lifecycle." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next &rarr;</button></div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
-              <a href="multi-tenant-saas.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Multi-Tenant SaaS &rarr;</a>
+              <a href="distributed-tracing.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed Tracing &rarr;</a>
             </div>
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
-        <a href="api-gateway.html" class="btn btn--outline">&larr; API Gateway</a>
-        <a href="multi-tenant-saas.html" class="btn btn--primary">Next: Multi-Tenant SaaS &rarr;</a>
+        <a href="log-aggregation.html" class="btn btn--outline">&larr; Log Aggregation</a>
+        <a href="distributed-tracing.html" class="btn btn--primary">Next: Distributed Tracing &rarr;</a>
       </div>
     </main>
   </div>
