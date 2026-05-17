@@ -718,6 +718,22 @@ function initInterviewModeBlocks() {
 
 function getInterviewSignals(lessonId, titleText) {
   const lessonSignals = {
+    'module-00': ['Can you drive the interview with a clear structure?', 'Can you time-box each section under pressure?', 'Can you summarize decisions crisply at the end?'],
+    'module-00b': ['Can you explain packet-to-product flow clearly?', 'Can you choose the right protocol for the workload?', 'Can you map networking limits to architecture choices?'],
+    'module-01': ['Can you apply CAP/consistency based on requirements?', 'Can you estimate scale quickly with sane assumptions?', 'Can you connect fundamentals to design trade-offs?'],
+    'module-02': ['Can you choose storage model by access pattern?', 'Can you justify sharding and replication strategy?', 'Can you reason about index/storage amplification costs?'],
+    'module-03': ['Can you select cache strategy per read/write behavior?', 'Can you handle invalidation and stampede scenarios?', 'Can you quantify hit-rate impact on latency/cost?'],
+    'module-04': ['Can you choose queue/pub-sub based on guarantees?', 'Can you reason about ordering/partitioning semantics?', 'Can you design back-pressure and dead-letter behavior?'],
+    'module-05': ['Can you design APIs for correctness under retries?', 'Can you justify rate-limit algorithm choice?', 'Can you communicate versioning and compatibility plans?'],
+    'module-06': ['Can you explain consensus and leader election plainly?', 'Can you reason about distributed transaction failure modes?', 'Can you choose CP/AP behavior intentionally?'],
+    'module-07': ['Can you articulate scaling bottlenecks with numbers?', 'Can you choose fanout strategy by workload shape?', 'Can you handle hot partitions and rebalance risk?'],
+    'module-08': ['Can you define useful SLIs/SLOs for this system?', 'Can you trace a failure across service boundaries?', 'Can you distinguish symptom alerts from noise?'],
+    'module-09': ['Can you design authn/authz boundaries correctly?', 'Can you prevent secret/token leakage in design paths?', 'Can you map threats to concrete mitigations?'],
+    'module-10': ['Can you pick patterns for specific failure risks?', 'Can you explain circuit-breaker/bulkhead interaction?', 'Can you avoid pattern overuse and keep simplicity?'],
+    'module-11': ['Can you model entities and responsibilities cleanly?', 'Can you enforce invariants in object interactions?', 'Can you separate extensibility from overengineering?'],
+    'module-12': ['Can you choose transport by latency/fanout needs?', 'Can you manage connection state at high concurrency?', 'Can you degrade gracefully under partial real-time failure?'],
+    'module-13': ['Can you use advanced primitives only where needed?', 'Can you explain idempotency/discovery/leader-election trade-offs?', 'Can you keep operations complexity in the design conversation?'],
+
     'p-url-shortener': ['ID generation without collisions at scale', 'Read-path latency via cache hierarchy', 'Redirect semantics and analytics correctness'],
     'p-twitter-feed': ['Fanout strategy selection under celebrity skew', 'Feed freshness vs write amplification', 'Timeline merge correctness under failures'],
     'p-youtube': ['Upload pipeline durability and retry safety', 'Transcoding fanout and storage lifecycle control', 'Playback latency and CDN strategy by region'],

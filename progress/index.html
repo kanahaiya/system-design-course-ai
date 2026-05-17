@@ -52,21 +52,21 @@
         </div>
         <div class="progress-stat">
           <span class="progress-stat__value" id="js-modules-completed">0</span>
-          <div class="progress-stat__label">Modules Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 11</span></div>
+          <div class="progress-stat__label">Modules Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)" id="js-modules-total-label">/ 0</span></div>
           <div class="progress-bar">
             <div class="progress-bar__fill" id="js-modules-bar" style="width:0%"></div>
           </div>
         </div>
         <div class="progress-stat">
           <span class="progress-stat__value" id="js-tier1-completed">0</span>
-          <div class="progress-stat__label">Tier 1 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 15</span></div>
+          <div class="progress-stat__label">Tier 1 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)" id="js-tier1-total-label">/ 0</span></div>
           <div class="progress-bar">
             <div class="progress-bar__fill" id="js-tier1-bar" style="width:0%;background:linear-gradient(90deg,var(--color-tier1),#16a34a)"></div>
           </div>
         </div>
         <div class="progress-stat">
           <span class="progress-stat__value" id="js-tier2-completed">0</span>
-          <div class="progress-stat__label">Tier 2 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)">/ 15</span></div>
+          <div class="progress-stat__label">Tier 2 Done <span style="font-size:var(--text-xs);color:var(--color-text-muted)" id="js-tier2-total-label">/ 0</span></div>
           <div class="progress-bar">
             <div class="progress-bar__fill" id="js-tier2-bar" style="width:0%;background:linear-gradient(90deg,var(--color-tier2),#ca8a04)"></div>
           </div>
@@ -89,6 +89,26 @@
           <div style="font-size:var(--text-xs);color:var(--color-text-muted)">Interview Ready</div>
         </div>
       </div>
+
+      <!-- Export Rubric -->
+      <section style="margin-bottom:var(--space-10)" aria-labelledby="rubric-export-title">
+        <h2 style="font-size:var(--text-xl);font-weight:var(--font-bold);margin-bottom:var(--space-4)" id="rubric-export-title">
+          Mock Answer Rubric Export
+        </h2>
+        <div style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-xl);padding:var(--space-5)">
+          <p style="color:var(--color-text-secondary);font-size:var(--text-sm);margin-bottom:var(--space-4)">
+            Generate a compact interview readiness report from your current local progress, quiz performance, and interview-checklist completion.
+          </p>
+          <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-4)">
+            <button id="js-rubric-generate-btn" class="btn btn--primary btn--sm" type="button">Generate Report</button>
+            <button id="js-rubric-copy-btn" class="btn btn--outline btn--sm" type="button" disabled>Copy</button>
+            <button id="js-rubric-download-btn" class="btn btn--outline btn--sm" type="button" disabled>Download .md</button>
+          </div>
+          <p id="js-rubric-status" style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-3)">No report generated yet.</p>
+          <textarea id="js-rubric-output" readonly aria-label="Generated rubric report"
+                    style="width:100%;min-height:220px;background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3);color:var(--color-text-primary);font-family:var(--font-mono);font-size:var(--text-xs);line-height:1.5;resize:vertical"></textarea>
+        </div>
+      </section>
 
       <!-- Modules Progress -->
       <section style="margin-bottom:var(--space-10)" aria-labelledby="modules-progress-title">
@@ -174,6 +194,10 @@
       { id: 'module-08', title: 'Observability', url: '../modules/08-observability/index.html' },
       { id: 'module-09', title: 'Security', url: '../modules/09-security/index.html' },
       { id: 'module-10', title: 'Design Patterns (CQRS, Circuit Breaker)', url: '../modules/10-patterns/index.html' },
+      { id: 'module-11', title: 'Object-Oriented Design', url: '../modules/11-ood/index.html' },
+      { id: 'module-12', title: 'Real-time Communication', url: '../modules/12-realtime/index.html' },
+      { id: 'module-13', title: 'Advanced Concepts', url: '../modules/13-advanced-concepts/index.html' },
+      { id: 'module-00b', title: 'Networking Fundamentals', url: '../modules/00b-networking/index.html' },
     ];
 
     const TIER1_PROBLEMS = [
@@ -192,6 +216,8 @@
       { id: 'p-message-queue', title: 'Distributed Message Queue', url: '../problems/tier1/message-queue.html' },
       { id: 'p-news-feed',     title: 'Social News Feed', url: '../problems/tier1/news-feed.html' },
       { id: 'p-dropbox',       title: 'Dropbox / File Storage', url: '../problems/tier1/dropbox.html' },
+      { id: 'p-lru-cache',     title: 'LRU Cache', url: '../problems/tier1/lru-cache.html' },
+      { id: 'p-yelp',          title: 'Yelp / Proximity Service', url: '../problems/tier1/yelp.html' },
     ];
 
     const TIER2_PROBLEMS = [
@@ -210,6 +236,14 @@
       { id: 'p-google-docs',  title: 'Google Docs (Collaborative)',    url: '../problems/tier2/google-docs.html' },
       { id: 'p-metrics',      title: 'Metrics Dashboard',              url: '../problems/tier2/metrics-dashboard.html' },
       { id: 'p-leaderboard',  title: 'Gaming Leaderboard',             url: '../problems/tier2/leaderboard.html' },
+      { id: 'p-live-comments',title: 'Live Comments System',           url: '../problems/tier2/live-comments.html' },
+      { id: 'p-ecommerce-cart',title: 'E-commerce Cart & Checkout',    url: '../problems/tier2/ecommerce-cart.html' },
+      { id: 'p-search-engine',title: 'Search Engine',                  url: '../problems/tier2/search-engine.html' },
+      { id: 'p-spotify',      title: 'Spotify / Music Streaming',      url: '../problems/tier2/spotify.html' },
+      { id: 'p-ticket-booking',title: 'Ticket Booking System',         url: '../problems/tier2/ticket-booking.html' },
+      { id: 'p-zoom',         title: 'Zoom / Video Conferencing',      url: '../problems/tier2/zoom.html' },
+      { id: 'p-trending-topics',title: 'Trending Topics / Top-K',      url: '../problems/tier2/trending-topics.html' },
+      { id: 'p-fb-messenger', title: 'Facebook Messenger',             url: '../problems/tier2/facebook-messenger.html' },
     ];
 
     const TIER3_PROBLEMS = [
@@ -242,6 +276,24 @@
         return raw !== null ? JSON.parse(raw) : [];
       } catch {
         return [];
+      }
+    }
+
+    function loadQuizScores() {
+      try {
+        const raw = localStorage.getItem('sdcourse_quiz_v1');
+        return raw !== null ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function loadInterviewChecklist() {
+      try {
+        const raw = localStorage.getItem('sdcourse_interview_mode_v1');
+        return raw !== null ? JSON.parse(raw) : {};
+      } catch {
+        return {};
       }
     }
 
@@ -315,6 +367,9 @@
       document.getElementById('js-tier1-completed').textContent = tier1Completed;
       document.getElementById('js-tier2-completed').textContent = tier2Completed;
       document.getElementById('js-mock-count').textContent = mockHistory.length;
+      document.getElementById('js-modules-total-label').textContent = `/ ${MODULES.length}`;
+      document.getElementById('js-tier1-total-label').textContent = `/ ${TIER1_PROBLEMS.length}`;
+      document.getElementById('js-tier2-total-label').textContent = `/ ${TIER2_PROBLEMS.length}`;
 
       const overallPct = Math.round((totalCompleted / TOTAL_ITEMS) * 100);
       document.getElementById('js-overall-bar').style.width = `${overallPct}%`;
@@ -356,6 +411,88 @@
       }
     }
 
+    function generateRubricReport() {
+      const progressState = loadProgress();
+      const quizScores = loadQuizScores();
+      const interviewChecklist = loadInterviewChecklist();
+      const mockHistory = loadMockHistory();
+
+      const moduleDone = MODULES.filter(moduleItem => moduleItem.id in progressState).length;
+      const tier1Done = TIER1_PROBLEMS.filter(problemItem => problemItem.id in progressState).length;
+      const tier2Done = TIER2_PROBLEMS.filter(problemItem => problemItem.id in progressState).length;
+      const tier3Done = TIER3_PROBLEMS.filter(problemItem => problemItem.id in progressState).length;
+      const completedTotal = moduleDone + tier1Done + tier2Done + tier3Done;
+      const completionPct = Math.round((completedTotal / TOTAL_ITEMS) * 100);
+
+      const quizValues = Object.values(quizScores).map(item => item.score).filter(score => typeof score === 'number');
+      const avgQuiz = quizValues.length > 0 ? Math.round(quizValues.reduce((sum, score) => sum + score, 0) / quizValues.length) : 0;
+      const tier1Threshold = 70;
+      const tier2Threshold = 75;
+      const tier3Threshold = 80;
+
+      const checklistItems = Object.values(interviewChecklist);
+      let checklistChecked = 0;
+      let checklistTotal = 0;
+      checklistItems.forEach(item => {
+        Object.values(item).forEach(value => {
+          checklistTotal++;
+          if (value === true) checklistChecked++;
+        });
+      });
+      const checklistPct = checklistTotal > 0 ? Math.round((checklistChecked / checklistTotal) * 100) : 0;
+
+      const readiness = Math.round(
+        (moduleDone / MODULES.length) * 25 +
+        (tier1Done / TIER1_PROBLEMS.length) * 30 +
+        (tier2Done / TIER2_PROBLEMS.length) * 20 +
+        (tier3Done / TIER3_PROBLEMS.length) * 15 +
+        Math.min(mockHistory.length, 10) / 10 * 10
+      );
+
+      const now = new Date();
+      const dateStamp = now.toISOString().slice(0, 10);
+      const report = `# System Design Interview Rubric Report\n\nGenerated: ${dateStamp}\n\n## 1) Coverage\n- Modules: ${moduleDone}/${MODULES.length}\n- Tier 1 problems: ${tier1Done}/${TIER1_PROBLEMS.length}\n- Tier 2 problems: ${tier2Done}/${TIER2_PROBLEMS.length}\n- Tier 3 problems: ${tier3Done}/${TIER3_PROBLEMS.length}\n- Overall completion: ${completedTotal}/${TOTAL_ITEMS} (${completionPct}%)\n\n## 2) Quiz Performance\n- Quizzes attempted: ${quizValues.length}\n- Average quiz score: ${avgQuiz}%\n- Targets: Tier1 ${tier1Threshold}% • Tier2 ${tier2Threshold}% • Tier3 ${tier3Threshold}%\n\n## 3) Interview Execution\n- Mock interviews completed: ${mockHistory.length}\n- Interview checklist completion: ${checklistChecked}/${checklistTotal || 0} (${checklistPct}%)\n\n## 4) Readiness Score\n- Composite readiness: ${readiness}%\n\n## 5) Next Actions\n- If Tier 1 < 80%: prioritize fundamentals and core bottleneck patterns.\n- If Tier 2 < 60%: focus on reliability, consistency, and scaling trade-offs.\n- If Tier 3 < 40%: run 3 staff-level mocks and rehearse deep-dive defense lines.\n- Keep checklist at 80%+ before scheduling target interviews.\n`;
+      return report;
+    }
+
+    function handleGenerateRubricClick() {
+      const outputElement = document.getElementById('js-rubric-output');
+      const statusElement = document.getElementById('js-rubric-status');
+      const copyButton = document.getElementById('js-rubric-copy-btn');
+      const downloadButton = document.getElementById('js-rubric-download-btn');
+      const report = generateRubricReport();
+      outputElement.value = report;
+      copyButton.disabled = false;
+      downloadButton.disabled = false;
+      statusElement.textContent = 'Rubric generated. Copy or download as markdown.';
+    }
+
+    async function handleCopyRubricClick() {
+      const outputElement = document.getElementById('js-rubric-output');
+      const statusElement = document.getElementById('js-rubric-status');
+      try {
+        await navigator.clipboard.writeText(outputElement.value);
+        statusElement.textContent = 'Copied to clipboard.';
+      } catch {
+        statusElement.textContent = 'Could not copy. Select and copy manually.';
+      }
+    }
+
+    function handleDownloadRubricClick() {
+      const outputElement = document.getElementById('js-rubric-output');
+      const statusElement = document.getElementById('js-rubric-status');
+      const blob = new Blob([outputElement.value], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchorElement = document.createElement('a');
+      anchorElement.href = url;
+      anchorElement.download = 'system-design-rubric-report.md';
+      document.body.appendChild(anchorElement);
+      anchorElement.click();
+      anchorElement.remove();
+      URL.revokeObjectURL(url);
+      statusElement.textContent = 'Downloaded rubric report.';
+    }
+
     function getReadinessData(score, modulesCompleted, tier1Completed, mockCount) {
       if (score < 10) return { emoji: '🌱', title: 'Getting Started', desc: 'Complete Module 00 (RESHADED Framework) first — it\'s the foundation everything else builds on.' };
       if (score < 30) return { emoji: '📚', title: 'Building Foundation', desc: 'Good start! Complete all 11 modules before tackling problems to build the right mental models.' };
@@ -379,6 +516,9 @@
     }
 
     document.getElementById('js-reset-btn').addEventListener('click', handleResetClick);
+    document.getElementById('js-rubric-generate-btn').addEventListener('click', handleGenerateRubricClick);
+    document.getElementById('js-rubric-copy-btn').addEventListener('click', handleCopyRubricClick);
+    document.getElementById('js-rubric-download-btn').addEventListener('click', handleDownloadRubricClick);
     renderProgress();
   </script>
 
