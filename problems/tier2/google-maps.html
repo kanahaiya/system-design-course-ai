@@ -3,12 +3,53 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Google Maps — RESHADED walkthrough covering map tile storage, routing algorithms, real-time traffic, ETA calculation, and geocoding for MAANG interviews.">
+  <meta name="description" content="Design Google Maps — L6 system design walkthrough covering map tile storage, Contraction Hierarchies routing, real-time traffic, S2 geometry, and geocoding for MAANG interviews.">
   <title>Design Google Maps — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  <style>
+    /* ── Tile pyramid diagram ─────────────────────────────── */
+    .tile-pyramid { display:flex; flex-direction:column; align-items:center; gap:var(--space-2,8px); margin:var(--space-6,24px) 0; }
+    .tile-row { display:flex; gap:4px; align-items:center; }
+    .tile-cell { border:1.5px solid var(--color-primary,#3b82f6); border-radius:3px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; color:var(--color-primary,#3b82f6); transition:background 0.35s, color 0.35s; cursor:default; }
+    .tile-cell.is-active { background:var(--color-primary,#3b82f6); color:#fff; }
+    .tile-row-label { font-size:11px; color:var(--color-text-muted,#888); width:80px; text-align:right; padding-right:8px; flex-shrink:0; }
+    .tile-row-count { font-size:11px; color:var(--color-text-muted,#888); width:80px; text-align:left; padding-left:8px; flex-shrink:0; }
+
+    /* ── L6 insight callout ───────────────────────────────── */
+    .callout--l6 { background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(59,130,246,.06)); border-left:4px solid #7c3aed; border-radius:0 8px 8px 0; padding:var(--space-4,16px); margin:var(--space-4,16px) 0; }
+    .callout--l6 strong { color:#7c3aed; }
+
+    /* ── estimation grid (reuse uber style) ──────────────── */
+    .estimation-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:var(--space-3,12px); margin:var(--space-4,16px) 0; }
+    .estimation-card { background:var(--color-surface,#f9fafb); border:1px solid var(--color-border,#e5e7eb); border-radius:8px; padding:var(--space-3,12px) var(--space-4,16px); }
+    .estimation-card__label { font-size:12px; color:var(--color-text-muted,#888); margin-bottom:4px; }
+    .estimation-card__value { font-size:22px; font-weight:700; color:var(--color-primary,#3b82f6); }
+    .estimation-card__note { font-size:11px; color:var(--color-text-muted,#888); margin-top:4px; }
+
+    /* ── HLD diagram ────────────────────────────────────────  */
+    .hld-diagram { background:var(--color-surface,#f9fafb); border:1px solid var(--color-border,#e5e7eb); border-radius:10px; padding:var(--space-5,20px); margin:var(--space-4,16px) 0; overflow-x:auto; }
+    .hld-flow { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2,8px); margin-bottom:var(--space-3,12px); }
+    .hld-box { background:#fff; border:2px solid var(--color-border,#e5e7eb); border-radius:6px; padding:6px 14px; font-size:13px; font-weight:600; white-space:nowrap; }
+    .hld-box--client { border-color:var(--color-primary,#3b82f6); color:var(--color-primary,#3b82f6); }
+    .hld-box--storage { border-color:#10b981; color:#10b981; }
+    .hld-box--queue { border-color:#f59e0b; color:#f59e0b; }
+    .hld-arrow { font-size:12px; color:var(--color-text-muted,#888); padding:0 4px; }
+
+    /* ── CH algorithm steps ──────────────────────────────── */
+    .algorithm-steps { counter-reset:alg-step; list-style:none; padding:0; margin:var(--space-3,12px) 0; }
+    .algorithm-steps li { counter-increment:alg-step; display:flex; gap:var(--space-3,12px); margin-bottom:var(--space-3,12px); align-items:flex-start; }
+    .algorithm-steps li::before { content:counter(alg-step); background:var(--color-primary,#3b82f6); color:#fff; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; margin-top:1px; }
+
+    /* ── tradeoff table ─────────────────────────────────── */
+    .tradeoff-table { width:100%; border-collapse:collapse; font-size:14px; }
+    .tradeoff-table th { background:var(--color-surface,#f9fafb); padding:10px 14px; text-align:left; font-weight:600; border-bottom:2px solid var(--color-border,#e5e7eb); }
+    .tradeoff-table td { padding:10px 14px; border-bottom:1px solid var(--color-border,#e5e7eb); vertical-align:top; }
+    .tradeoff-table tr:last-child td { border-bottom:none; }
+    .tag--chosen { background:#d1fae5; color:#065f46; border-radius:4px; padding:2px 8px; font-size:11px; font-weight:600; white-space:nowrap; }
+  </style>
 </head>
 <body>
   <a href="#main" class="skip-link">Skip to main content</a>
@@ -66,223 +107,1314 @@
           <span class="tag">Geo/Algorithms</span>
         </div>
         <h1 class="module-header__title">Design Google Maps</h1>
-        <p class="module-header__desc">Google Maps involves three distinct hard problems: storing a tile-based map efficiently, running shortest-path routing on a graph with billions of nodes, and incorporating real-time traffic without recomputing the whole graph.</p>
+        <p class="module-header__desc">Google Maps combines three fundamentally hard problems: storing a planet-scale hierarchical tile system, computing shortest paths on a billion-node road graph in milliseconds, and continuously incorporating real-time traffic without recomputing the entire graph. The L6 signal is understanding <em>why</em> Contraction Hierarchies beats A*, how S2 geometry enables O(1) geospatial indexing, and how 5B daily route requests stay under 200ms P99.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Uber, Lyft</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Uber, Lyft, Apple Maps, Waze</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">🗺️</span> 1B+ users</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🗺️</span> 1B+ users, 5B routes/day</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           R — REQUIREMENTS
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon">❓</span>R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Display map tiles at any zoom level worldwide</li>
-            <li>Turn-by-turn routing between two points (driving, walking, transit)</li>
-            <li>Real-time traffic overlays and ETA recalculation</li>
-            <li>Search for places by name or address (geocoding)</li>
-            <li>Reverse geocoding: coordinates → human-readable address</li>
+            <li><strong>Map rendering:</strong> Display interactive map tiles at any zoom level worldwide (zoom 0–22)</li>
+            <li><strong>Routing:</strong> Turn-by-turn directions between two points — driving, walking, cycling, transit</li>
+            <li><strong>Real-time traffic:</strong> Display current congestion overlay; incorporate into ETA during active navigation</li>
+            <li><strong>ETA calculation:</strong> Accurate arrival time estimate using historical patterns + live speed data</li>
+            <li><strong>Forward geocoding:</strong> Address string → (lat, lng) coordinates</li>
+            <li><strong>Reverse geocoding:</strong> (lat, lng) → human-readable address</li>
+            <li><strong>Place search (POI):</strong> "coffee near me", "Eiffel Tower" → ranked list of places with distance</li>
+            <li><strong>Live navigation:</strong> GPS-track user, recalculate route if they deviate, update ETA every 30s</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 1B users, 10M route calculations/day, 1B tile requests/day</li>
-            <li><strong>Latency:</strong> Route calculation &lt;2s; tile load &lt;100ms from CDN</li>
-            <li><strong>Map data:</strong> ~100TB total across all zoom levels</li>
+            <li><strong>Scale:</strong> 1B+ users; 5B route requests/day; 25B tile requests/day at peak</li>
+            <li><strong>Routing latency:</strong> P99 &lt; 200ms for long-haul routes (cross-country); P50 &lt; 50ms</li>
+            <li><strong>Tile latency:</strong> &lt; 20ms from CDN edge; &lt; 100ms from origin on cache miss</li>
+            <li><strong>Traffic freshness:</strong> Road speeds updated within 60s of real-world change</li>
+            <li><strong>Map storage:</strong> ~100PB globally across all zoom levels (including satellite imagery)</li>
+            <li><strong>Availability:</strong> 99.99% — navigation failure during a drive is a safety incident</li>
+            <li><strong>Map data pipeline:</strong> Ingest OSM changesets + proprietary data, re-render tiles within 1 hour</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Scope decision for 45 min:</strong> Focus on (1) tile system, (2) routing with Contraction Hierarchies, and (3) traffic ingestion pipeline. Mention geocoding and POI search as "same Elasticsearch pattern as Yelp" and move on — spending 10 minutes on geocoding is a trap.
+          </div>
+
+          <h3>What's Out of Scope</h3>
+          <ul>
+            <li>Street View imagery pipeline and rendering</li>
+            <li>Indoor maps and venue routing</li>
+            <li>Transit schedule integration (GTFS feeds) — mention it exists, don't design it</li>
+            <li>Map data collection (Street View cars, satellites) — out of scope</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           E — ESTIMATION
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon">🔢</span>E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <div class="estimation-grid">
+            <div class="estimation-card">
+              <div class="estimation-card__label">Route requests/day</div>
+              <div class="estimation-card__value">5B</div>
+              <div class="estimation-card__note">~58K QPS avg; peaks 200K QPS</div>
+            </div>
+            <div class="estimation-card">
+              <div class="estimation-card__label">Tile requests/day</div>
+              <div class="estimation-card__value">25B</div>
+              <div class="estimation-card__note">~290K QPS; CDN absorbs 99.9%</div>
+            </div>
+            <div class="estimation-card">
+              <div class="estimation-card__label">GPS pings/sec (traffic)</div>
+              <div class="estimation-card__value">~500K</div>
+              <div class="estimation-card__note">100M navigating users ÷ avg 200s</div>
+            </div>
+            <div class="estimation-card">
+              <div class="estimation-card__label">Road graph (world)</div>
+              <div class="estimation-card__value">~50GB</div>
+              <div class="estimation-card__note">50M nodes × 120M edges compressed</div>
+            </div>
+            <div class="estimation-card">
+              <div class="estimation-card__label">Total tile storage</div>
+              <div class="estimation-card__value">~100PB</div>
+              <div class="estimation-card__note">Vector + raster + satellite</div>
+            </div>
+            <div class="estimation-card">
+              <div class="estimation-card__label">Traffic segments</div>
+              <div class="estimation-card__value">~50M</div>
+              <div class="estimation-card__note">120M edges grouped into ~50M segments</div>
+            </div>
+          </div>
+
+          <h3>Tile Storage Math</h3>
+          <p>The tile pyramid follows 4<sup>z</sup> tiles at zoom level <em>z</em>. Each tile is 512×512 pixels (vector tiles are much smaller — typically 5–20 KB compressed):</p>
           <ul>
-            <li>Zoom levels 0–22: total tiles = sum(4^z) for z=0..22 ≈ 22TB of tile data</li>
-            <li>With satellite imagery at max zoom: ~100TB total map storage</li>
-            <li>10M routes/day = ~115 QPS for routing; peaks around commute hours → 500 QPS</li>
-            <li>1B tile requests/day = ~11,600 tile QPS; CDN handles 99% → origin sees ~120 QPS</li>
-            <li>Road graph: 50M nodes, 120M edges for the entire world (compressed: ~100GB in memory)</li>
+            <li>Zoom 0–14 (overview → city block): ≈ 357M tiles × ~50 KB avg = ~18 TB (raster)</li>
+            <li>Zoom 15–20 (street → building): ≈ 68B tiles, but only ~10% are land = ~340 TB raster</li>
+            <li>Zoom 21–22 (indoor detail): sparse, only major metros — negligible</li>
+            <li>Vector tiles (MapLibre GL-compatible, PBF format): ~10× smaller → ~35 TB for zoom 0–20</li>
+            <li>Satellite imagery at max zoom: adds ~90PB (raw imagery before compression)</li>
           </ul>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight:</strong> The naive calculation (sum of 4<sup>z</sup> for z=0..22 × tile size) gives ~22TB for raster tiles, but this assumes the entire globe is land. In practice, ~70% of Earth is ocean — those tiles are never pre-rendered or are trivially small. Real storage for road-level raster tiles is closer to 5TB per zoom "stripe." The 100PB figure comes primarily from satellite imagery, not road tiles.
+          </div>
+
+          <h3>Routing Server Sizing</h3>
+          <p>A Contraction Hierarchies (CH) query on the world road graph takes ~0.5ms on a modern CPU core. At 200K QPS peak, we need 200,000 × 0.5ms = 100 CPU-cores dedicated to routing. With 64-core servers, that's ~2 servers — surprisingly small. The bottleneck is loading the 50GB graph into RAM per server. With geographic sharding (each server holds one continent), each shard is ~5–10GB and fits comfortably in memory.</p>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           S — SCHEMA
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon">🗄️</span>S — Schema
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Map tiles (object storage — S3/GCS)
-// Key format: tiles/{zoom}/{x}/{y}.png  (slippy map / XYZ standard)
-// Or quadkey: tiles/{quadkey}.png  (Microsoft Bing style — each char is 0/1/2/3)
 
-// Road graph (in-memory on routing servers, sourced from OpenStreetMap + proprietary)
-// Node: intersection (lat/lng)
-// Edge: road segment with distance_meters, speed_limit_kph, road_type
-// Graph stored as adjacency list, serialized to binary (Protocol Buffers)
+          <h3>Map Tile Storage (Object Storage — GCS/S3)</h3>
+          <pre><code class="language-java">// Tile key formats:
+// XYZ (slippy map): tiles/{zoom}/{x}/{y}.pbf
+//   → standard; human-readable; but no spatial locality in object storage keys
+//
+// Quadkey (Bing-style): tiles/{quadkey}.pbf
+//   → spatially adjacent tiles share a key prefix (great for CDN routing and prefix-scan)
+//   → each char = one zoom level's quadrant: 0=NW, 1=NE, 2=SW, 3=SE
+//   e.g., zoom=3 tile at center of North America → "012"
+//
+// Google internal: uses a proprietary encoding but follows the same quadtree principle.
+// For this design, use quadkey for object storage + standard XYZ in tile URLs for client compatibility.
 
-// Real-time traffic (Redis time-series)
-// Key: traffic:{segment_id}  Value: current_speed_kph with 60s TTL
-// Updated by GPS-reporting clients and traffic sensors
+// Tile metadata (Spanner / Bigtable)
+// Row key: {zoom}#{quadkey}
+// Columns: tile_version, last_rendered_at, file_size_bytes, content_hash_sha256
+// Used to: detect stale tiles, serve conditional GET (ETag), drive re-render pipeline</code></pre>
 
-// Places index (Elasticsearch)
-// Fields: place_id, name, address, lat, lng, category, rating
-// Geo-indexed for radius queries</code></pre>
+          <h3>Road Graph (In-memory on Routing Servers)</h3>
+          <pre><code class="language-java">// Serialized as Protocol Buffers, loaded entirely into RAM on routing server startup.
+// Source: OpenStreetMap + HERE/TomTom proprietary data, merged and cleaned.
+
+// Node (intersection or shape point on a road)
+// node_id: uint64 (OSM node id)
+// lat: float32 (4 decimal places ≈ 11m precision — sufficient for routing)
+// lng: float32
+// ch_level: uint8  ← Contraction Hierarchy level; 0 = contracted first (least important)
+
+// Edge (road segment between two nodes)
+// from_node: uint64
+// to_node:   uint64
+// distance_meters:  uint32
+// speed_limit_kph:  uint8
+// road_type:        uint8  (motorway=0, primary=1, residential=2, ...)
+// is_oneway:        bool
+// ch_shortcut:      bool   ← true if this edge was added during CH preprocessing
+// shortcut_via:     uint64 ← the contracted node this shortcut bypasses (0 if not shortcut)
+
+// Stored as compressed adjacency list:
+// node_offsets: int[]  (index into edge array where each node's edges start)
+// edges:        Edge[] (sorted by from_node)</code></pre>
+
+          <h3>Real-time Traffic (Redis + Kafka)</h3>
+          <pre><code class="language-java">// Redis hash per segment (updated every ~30s by Traffic Aggregation Service)
+// Key:   traffic:segment:{segment_id}
+// Field: current_speed_kph   (float, derived from GPS probe data + sensors)
+//        confidence:          0–100 (how many probes in last 5 min)
+//        updated_at:          unix timestamp
+// TTL:   120 seconds (stale data is worse than no data — fall back to speed limit)
+
+// Kafka topic: gps-pings
+// Message: { user_id, lat, lng, speed_kph, heading_degrees, timestamp_ms }
+// Partitioned by: geohash prefix (geographic partitioning → spatial locality)
+// Consumer: Traffic Aggregation Service → maps GPS ping to road segment via map matching</code></pre>
+
+          <h3>Places / POI Index (Elasticsearch)</h3>
+          <pre><code class="language-java">// Index: places
+// Mapping:
+{
+  "place_id":     "keyword",       // stable ID (e.g., "ChIJ...")
+  "name":         "text",          // full-text searchable
+  "name_suggest": "completion",    // autocomplete field
+  "address":      "text",
+  "location":     "geo_point",     // lat/lng — enables geo_distance queries
+  "category":     "keyword[]",     // ["restaurant", "italian", "dine_in"]
+  "rating":       "float",
+  "review_count": "integer",
+  "s2_cell_id":   "keyword"        // Google S2 cell token for fast bounding-box queries
+}
+
+// Geocoding address DB (PostgreSQL + PostGIS or Elasticsearch)
+// Separate index with address components tokenized for fuzzy matching
+// (street_number, street_name, city, state, country) → geo_point</code></pre>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight — why not store the road graph in a graph DB like Neo4j?</strong> Graph databases are optimized for multi-hop traversal and OLAP-style queries. For shortest-path routing you need: (1) the full graph in RAM to avoid disk I/O on hot paths, (2) O(1) access to adjacency lists by node ID, (3) custom algorithms (CH) not supported by any off-the-shelf graph DB. A hand-crafted binary adjacency list in memory outperforms Neo4j by 100–1000× for routing queries. This is why Google, HERE, and OSRM all use custom in-memory graph representations.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           H — HIGH-LEVEL DESIGN
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon">🏗️</span>H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
-          <ul>
-            <li><strong>Tile Service:</strong> Tiles pre-rendered and stored in S3. CDN caches tiles with long TTL (months — tiles rarely change). Client requests tile by (zoom, x, y).</li>
-            <li><strong>Routing Service:</strong> Loads road graph into memory. Uses A* with a geographical heuristic (straight-line distance) — faster than Dijkstra on large graphs. Traffic data modifies edge weights at query time.</li>
-            <li><strong>Traffic Ingestion:</strong> GPS-reporting users send location every 15s. Aggregation service maps (lat/lng, speed) to road segment IDs, updates Redis TTL-keyed traffic speeds.</li>
-            <li><strong>Geocoding Service:</strong> Address → coordinates uses indexed address database (ElasticSearch). Coordinates → address uses reverse geocoding tree (hierarchical polygon containment).</li>
-            <li><strong>ETA Engine:</strong> Sum of (distance / current_speed) for each segment on route. Recalculates every 30s while navigating.</li>
-          </ul>
+
+          <div class="hld-diagram">
+            <p style="font-weight:600;margin:0 0 12px 0;font-size:14px;">Map Tile Pipeline</p>
+            <div class="hld-flow">
+              <div class="hld-box hld-box--client">OSM / Satellite</div>
+              <div class="hld-arrow">→ raw data</div>
+              <div class="hld-box">Tile Renderer<br><small>(MapTiler / internal)</small></div>
+              <div class="hld-arrow">→ .pbf / .png</div>
+              <div class="hld-box hld-box--storage">GCS Object Store<br><small>(quadkey keys)</small></div>
+              <div class="hld-arrow">→ origin pull</div>
+              <div class="hld-box hld-box--storage">CDN Edge<br><small>(Cloud CDN / Fastly)</small></div>
+              <div class="hld-arrow">→ cached tile</div>
+              <div class="hld-box hld-box--client">Client (Browser / App)</div>
+            </div>
+
+            <p style="font-weight:600;margin:16px 0 12px 0;font-size:14px;">Routing Pipeline</p>
+            <div class="hld-flow">
+              <div class="hld-box hld-box--client">Client</div>
+              <div class="hld-arrow">→ GET /route</div>
+              <div class="hld-box">API Gateway</div>
+              <div class="hld-arrow">→</div>
+              <div class="hld-box">Route Service<br><small>(CH query)</small></div>
+              <div class="hld-arrow">→ segment IDs</div>
+              <div class="hld-box hld-box--storage">Redis<br><small>(live speeds)</small></div>
+            </div>
+            <div class="hld-flow" style="margin-top:8px">
+              <div style="width:80px"></div>
+              <div class="hld-arrow" style="visibility:hidden">→</div>
+              <div class="hld-box">Route Service</div>
+              <div class="hld-arrow">← in-memory</div>
+              <div class="hld-box hld-box--storage">CH Graph<br><small>(50GB RAM)</small></div>
+            </div>
+
+            <p style="font-weight:600;margin:16px 0 12px 0;font-size:14px;">Traffic Ingestion Pipeline</p>
+            <div class="hld-flow">
+              <div class="hld-box hld-box--client">Navigating Users<br><small>(GPS pings)</small></div>
+              <div class="hld-arrow">→ POST /location-update</div>
+              <div class="hld-box hld-box--queue">Kafka<br><small>gps-pings topic</small></div>
+              <div class="hld-arrow">→</div>
+              <div class="hld-box">Map Matching<br><small>Service</small></div>
+              <div class="hld-arrow">→</div>
+              <div class="hld-box">Traffic Aggregation</div>
+              <div class="hld-arrow">→ SET speed</div>
+              <div class="hld-box hld-box--storage">Redis</div>
+            </div>
+          </div>
+
+          <h3>Service Breakdown</h3>
+          <ol>
+            <li><strong>Tile Service:</strong> Serves map tiles. Client requests a tile by (zoom, x, y) using standard XYZ. Service translates to quadkey, redirects to CDN. Cache-Control: max-age=2592000 (30 days) for vector tiles — they rarely change. When map data updates, the Tile Renderer writes new tiles with a version suffix and invalidates CDN via cache tag.</li>
+
+            <li><strong>Route Service:</strong> Loads the Contraction Hierarchies graph into RAM at startup (~50GB for world graph; 5–10GB per continent shard). For each route request: snap origin/destination to nearest CH node via spatial index, run bidirectional CH-Dijkstra, look up live speeds from Redis for each segment, compute ETA, serialize as encoded polyline + turn-by-turn instructions.</li>
+
+            <li><strong>Traffic Ingestion Service:</strong> Receives 500K GPS pings/sec from navigating users. Each ping (lat, lng, speed, heading) is published to Kafka. Map Matching consumers snap GPS traces to road segments using a Hidden Markov Model (to handle GPS noise). Traffic Aggregation computes rolling average speed per segment, writes to Redis with 120s TTL.</li>
+
+            <li><strong>Geocoding Service:</strong> Forward geocoding: tokenize input address → Elasticsearch query with fuzzy matching + geo_distance boost. Reverse geocoding: given (lat, lng), find the S2 cell, look up polygon hierarchy (country → state → city → neighborhood → street), find the nearest addressed building using a k-d tree. Returns structured address components.</li>
+
+            <li><strong>Navigation Service:</strong> Stateful service managing active navigation sessions. Tracks user GPS via WebSocket. When user deviates from route by >50m or a faster route emerges from traffic data, triggers Route Service to compute a new route. Pushes updated turn instructions to the client.</li>
+
+            <li><strong>Map Data Pipeline:</strong> OSM changesets arrive every minute. A diff processor detects changed road segments. Triggers incremental graph rebuild (rebuild only affected CH nodes, not the full graph). Also triggers tile re-render for affected zoom levels. For satellite imagery, ingests new imagery, runs cloud-masking and color-balancing, tiles at zoom levels 14–20.</li>
+          </ol>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           A — APIS
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon">🔌</span>A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">GET /v1/tiles/{zoom}/{x}/{y}                      // map tile PNG
-GET /v1/route?origin={lat,lng}&dest={lat,lng}&mode=driving
-  // returns: { steps: [...], total_distance_m, eta_seconds, polyline }
-GET /v1/geocode?address={string}                  // → { lat, lng, formatted_address }
-GET /v1/reverse-geocode?lat={}&lng={}             // → { address }
-GET /v1/places?q={query}&lat={}&lng={}&radius={}  // nearby search
-POST /v1/location-update                          // GPS report from navigating user</code></pre>
+
+          <h3>Tile API</h3>
+          <pre><code class="language-java">// Vector tiles (MapLibre GL compatible, Protocol Buffer format)
+GET /v1/tiles/{zoom}/{x}/{y}.pbf
+  Headers:
+    If-None-Match: {etag}           // conditional GET support
+  Response:
+    Content-Type: application/x-protobuf
+    Cache-Control: max-age=2592000  // 30 days
+    ETag: {content_hash}
+    // Body: Mapbox Vector Tile (MVT) format — roads, buildings, land use polygons
+
+// Raster fallback (for low-memory devices, older clients)
+GET /v1/tiles/raster/{zoom}/{x}/{y}.png
+  // 256×256 PNG, pre-rendered at tile server, cached on CDN</code></pre>
+
+          <h3>Routing API</h3>
+          <pre><code class="language-java">GET /v1/route
+  Query params:
+    origin      = {lat},{lng}          // e.g., "37.7749,-122.4194"
+    destination = {lat},{lng}
+    mode        = DRIVE | WALK | CYCLE | TRANSIT
+    departure_time = unix_timestamp    // for transit; omit for "leave now"
+    alternatives = true | false        // return up to 3 alternative routes
+    avoid       = tolls | ferries | highways  // comma-separated
+
+  Response 200:
+  {
+    "routes": [
+      {
+        "summary": "US-101 N",
+        "total_distance_meters": 62400,
+        "total_duration_seconds": 2820,
+        "traffic_duration_seconds": 3150,   // with current traffic
+        "polyline": "encoded_polyline_v2",
+        "legs": [
+          {
+            "steps": [
+              {
+                "instruction": "Head north on Market St",
+                "distance_meters": 450,
+                "duration_seconds": 55,
+                "maneuver": "STRAIGHT",
+                "start_location": { "lat": 37.7749, "lng": -122.4194 }
+              }
+            ]
+          }
+        ],
+        "warnings": ["Heavy traffic on Bay Bridge (add 15 min)"]
+      }
+    ]
+  }</code></pre>
+
+          <h3>Geocoding & Navigation APIs</h3>
+          <pre><code class="language-java">// Forward geocoding
+GET /v1/geocode
+  Query: address="1600 Amphitheatre Pkwy, Mountain View, CA"
+  Response: { "lat": 37.4220, "lng": -122.0841,
+              "formatted_address": "1600 Amphitheatre Pkwy, Mountain View, CA 94043",
+              "place_id": "ChIJ2eUgeAK6j4ARbn5u_wAGqWA",
+              "confidence": 0.98 }
+
+// Reverse geocoding
+GET /v1/reverse-geocode?lat=37.7749&lng=-122.4194
+  Response: { "address": "1 Market St, San Francisco, CA 94105",
+              "components": { "street_number": "1", "route": "Market St",
+                              "city": "San Francisco", "state": "CA",
+                              "postal_code": "94105", "country": "US" } }
+
+// Place search
+GET /v1/places/search
+  Query: q="coffee", lat=37.7749, lng=-122.4194, radius_meters=500, max_results=10
+  Response: { "places": [{ "place_id": "...", "name": "Blue Bottle Coffee",
+                            "rating": 4.4, "distance_meters": 120,
+                            "open_now": true, "category": "cafe" }] }
+
+// GPS ping (from navigating user — batched every 15s)
+POST /v1/navigation/location-update
+  Body: {
+    "session_id": "nav_abc123",
+    "pings": [
+      { "lat": 37.7750, "lng": -122.4195, "speed_kph": 35.2,
+        "heading": 15, "accuracy_meters": 5, "timestamp_ms": 1716000001000 },
+      { "lat": 37.7752, "lng": -122.4196, "speed_kph": 32.1,
+        "heading": 16, "accuracy_meters": 4, "timestamp_ms": 1716000016000 }
+    ]
+  }
+  Response: {
+    "on_route": true,
+    "next_instruction": "Turn right on Howard St in 200m",
+    "eta_seconds": 1420
+  }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           D — DEEP DIVE
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Tile Storage with Quadkeys<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon">🔬</span>D — Deep Dive
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
-          <p>The world map is divided into a hierarchical quadtree. At zoom 0: 1 tile covers the whole world. At zoom 1: 4 tiles. At zoom z: 4^z tiles. Each tile is 256×256 pixels.</p>
-          <p><strong>Quadkey encoding:</strong> At each zoom level, each tile's position in the quadrant (NW=0, NE=1, SW=2, SE=3) appends one digit. Zoom 3, tile at position (0,0) = "000". This encodes location + zoom in one string — great for object storage key prefix-based routing.</p>
-          <p><strong>Why quadkeys beat (zoom, x, y) for object storage:</strong> Spatially adjacent tiles share a key prefix. You can list all tiles in a region with a prefix scan. S3 partitions by key prefix — spatially related tiles end up on the same S3 partition, improving cache locality.</p>
+
+          <!-- ─── Tile Pyramid ─────────────────────────────────────── -->
+          <h3>1. Map Tile System: The Tile Pyramid</h3>
+          <p>The world map is divided into a hierarchical quadtree. At zoom 0, a single 512×512 pixel tile covers the entire globe. Each zoom level doubles resolution in both dimensions, quadrupling the tile count:</p>
+
+          <div id="js-tile-pyramid-container" aria-label="Animated tile pyramid diagram">
+            <div class="tile-pyramid" id="js-tile-pyramid">
+              <!-- Populated by JavaScript -->
+            </div>
+            <div style="text-align:center;margin-top:8px">
+              <button id="js-pyramid-animate" class="btn btn--outline btn--sm" type="button" aria-label="Animate tile pyramid zoom levels">
+                ▶ Animate Zoom Levels
+              </button>
+              <span id="js-pyramid-label" style="margin-left:12px;font-size:13px;color:var(--color-text-muted,#888)">Zoom 0 — 1 tile covers the world</span>
+            </div>
+          </div>
+
+          <p style="margin-top:16px"><strong>Quadkey encoding:</strong> Each tile's position in the quadrant hierarchy is encoded as a string where each character (0–3) represents one zoom level's quadrant: 0=NW, 1=NE, 2=SW, 3=SE. A zoom-3 tile covering central North America encodes as "012" — 3 characters for 3 zoom levels.</p>
+          <p><strong>Why quadkeys beat (zoom, x, y) for object storage:</strong> In GCS/S3, spatially adjacent tiles share a key prefix. A region query becomes a prefix scan. S3 partitions by key prefix — geographically close tiles land on the same storage partition, improving cache locality. Serving a viewport requires 12–16 adjacent tiles; with quadkey encoding, these tiles are likely in the same CDN cache shard.</p>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight — vector tiles change the economics:</strong> Raster tiles (PNG) are pre-rendered server-side and immutable once created. Vector tiles (PBF/MVT format) contain raw geometry — road lines, building polygons, labels — and are styled client-side using WebGL (MapLibre GL JS). This shifts rendering from server to client, reducing tile count from 23 zoom levels to about 15 (zoom 14 vector tiles contain enough detail to render zoom 15–22 at higher DPI). The storage cost drops 10×, the pipeline simplifies, and the map can be styled dynamically (dark mode, colorblind mode) without re-rendering any tiles. This is why Google switched to vector tiles in 2013.
+          </div>
+
+          <!-- ─── Contraction Hierarchies ──────────────────────────── -->
+          <h3>2. Routing: Why Contraction Hierarchies Beat A*</h3>
+
+          <p>The world road graph has ~50M nodes and ~120M edges. A naive Dijkstra to route from New York to Los Angeles would explore millions of nodes. Even A* with a straight-line heuristic explores ~1M nodes for long routes. Production systems need sub-100ms routing — this requires preprocessing.</p>
+
+          <h4>Algorithm Comparison</h4>
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Algorithm</th><th>Query Time</th><th>Preprocessing</th><th>Traffic Updates</th><th>Production Use</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Dijkstra</td>
+                  <td>~30 min (world graph)</td>
+                  <td>None</td>
+                  <td>Trivial — just update weights</td>
+                  <td>Never at scale</td>
+                </tr>
+                <tr>
+                  <td>A*</td>
+                  <td>~5 min (world), ~2s (city)</td>
+                  <td>None</td>
+                  <td>Trivial — just update weights</td>
+                  <td>City-scale only</td>
+                </tr>
+                <tr>
+                  <td>ALT (A* + Landmarks)</td>
+                  <td>~100ms (world)</td>
+                  <td>Hours, ~few GB</td>
+                  <td>Moderate — landmark distances fixed</td>
+                  <td>Sometimes</td>
+                </tr>
+                <tr>
+                  <td><strong>Contraction Hierarchies (CH)</strong></td>
+                  <td><strong>~0.5ms (world)</strong></td>
+                  <td><strong>~1–2h, ~2× graph size</strong></td>
+                  <td><strong>Hard — requires customizable CH</strong></td>
+                  <td><strong>OSRM, HERE, Waze</strong></td>
+                </tr>
+                <tr>
+                  <td>Customizable CH (CCH)</td>
+                  <td>~2ms (world)</td>
+                  <td>Hours (metric-independent phase)</td>
+                  <td>Easy — customization in milliseconds</td>
+                  <td>Google, Microsoft</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>How Contraction Hierarchies Work</h4>
+
+          <p><strong>Phase 1 — Preprocessing (offline, run once or on graph change):</strong></p>
+          <ol class="algorithm-steps">
+            <li><strong>Node Ordering:</strong> Assign an "importance" level to every node. Less important nodes are contracted first. Importance = edge difference (shortcuts added − edges removed) + weighted node depth + search space size estimate.</li>
+            <li><strong>Node Contraction:</strong> Remove the least important node <em>v</em> from the graph. For every pair of neighbors (u, w) where the shortest path u→w goes through <em>v</em>, add a <em>shortcut edge</em> u→w with weight = dist(u,v) + dist(v,w). This preserves all shortest paths even with <em>v</em> removed.</li>
+            <li><strong>Repeat:</strong> After contracting <em>v</em>, update importance of its neighbors and repeat. The contracted graph grows (shortcuts added) but is now hierarchical — high-importance nodes (motorways, highway interchanges) survive longest.</li>
+          </ol>
+
+          <p><strong>Phase 2 — Query (online, per route request):</strong></p>
+          <ol class="algorithm-steps">
+            <li><strong>Bidirectional search:</strong> Run Dijkstra forward from source <em>s</em> and backward from target <em>t</em> simultaneously, but only relax edges going <em>up</em> the hierarchy (toward higher importance nodes).</li>
+            <li><strong>Meeting point:</strong> The two search spaces meet at the highest-importance node on the optimal path (e.g., a major highway interchange). The optimal path cost = min(forward_dist[v] + backward_dist[v]) over all meeting nodes v.</li>
+            <li><strong>Path unpacking:</strong> Shortcuts are expanded recursively to recover the actual road sequence. A shortcut edge (u, w) via node v expands to the original path u→v→w.</li>
+          </ol>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight — CH query explores only ~1,000 nodes vs 50M:</strong> The bidirectional search only goes "up" the hierarchy. For a cross-country route, the forward search quickly reaches the interstate highway level (high importance), and so does the backward search. They meet at a highway node and terminate. The total nodes examined is typically 1,000–10,000 even for transcontinental routes — a 5,000× speedup over Dijkstra. This is why a CH-powered routing server can handle 200K QPS with just a few CPU cores.
+          </div>
+
+          <p><strong>Traffic integration with Customizable CH (CCH):</strong> Standard CH bakes edge weights into shortcuts during preprocessing. When live traffic changes edge weights, the shortcuts are invalidated — you can't re-preprocess the full graph every minute. CCH separates the graph structure from edge weights:</p>
+          <ul>
+            <li><em>Offline phase:</em> Preprocess graph topology only (which shortcuts to add, node order) — runs once or on structural changes (new roads). Takes hours.</li>
+            <li><em>Customization phase:</em> Apply current edge weights to the preprocessed structure. Recomputes shortcut weights using live traffic data. Takes ~100ms for world-scale graphs — fast enough to run every 60s.</li>
+            <li><em>Query phase:</em> Same bidirectional CH-Dijkstra, but now shortcut weights reflect current traffic.</li>
+          </ul>
+
+          <!-- ─── Geospatial Indexing ──────────────────────────────── -->
+          <h3>3. Geospatial Indexing: S2 Geometry vs Geohash</h3>
+
+          <p>Google Maps uses the S2 Geometry Library — an open-source library (now open to all) that Google developed for internal use. Understanding why S2 is superior to Geohash is an L6 signal.</p>
+
+          <div class="table-wrapper">
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Property</th><th>Geohash</th><th>S2 Geometry</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Cell shape</td>
+                  <td>Rectangular (lat/lng grid)</td>
+                  <td>Quadrilateral projected on sphere</td>
+                </tr>
+                <tr>
+                  <td>Area uniformity</td>
+                  <td>Bad — cells near poles are tiny</td>
+                  <td>Good — cells near poles same area as equatorial cells</td>
+                </tr>
+                <tr>
+                  <td>Cell ID</td>
+                  <td>Base-32 string (12 chars = ~cm precision)</td>
+                  <td>64-bit integer — fast arithmetic, no string ops</td>
+                </tr>
+                <tr>
+                  <td>Neighbor finding</td>
+                  <td>Moderate — need 8 adjacent cell calculations</td>
+                  <td>O(1) — arithmetic on cell IDs</td>
+                </tr>
+                <tr>
+                  <td>Region covering</td>
+                  <td>Poor — rectangular regions don't cover arbitrary shapes</td>
+                  <td>Excellent — covers arbitrary polygon with min cells</td>
+                </tr>
+                <tr>
+                  <td>Hierarchy</td>
+                  <td>30 levels (level 1 = 5,009 km²)</td>
+                  <td>30 levels (level 0 = face, level 30 = ~1cm²)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p><strong>How Google Maps uses S2:</strong></p>
+          <ul>
+            <li>Every Point of Interest is indexed by its S2 cell ID at multiple levels (e.g., level 13 ≈ 1.5km², level 15 ≈ 0.1km²)</li>
+            <li>A viewport query (what's on screen?) is converted to a set of S2 cell IDs that cover the viewport region. This is a "cell union" — typically 4–8 cells at the right level</li>
+            <li>Query Bigtable for all POIs with cell ID in that set — O(1) per cell lookup, O(k) where k is cell count</li>
+            <li>The map-matching algorithm (snapping GPS traces to roads) uses S2 to find candidate road segments within a 50m S2 cell</li>
+          </ul>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight — S2 enables polygon containment without geometry:</strong> Traditional GIS uses polygon containment queries (is point P inside polygon Q?) which require expensive computational geometry. With S2, a city boundary is pre-computed as a "cell union" — a set of S2 cell IDs that approximates the polygon. To check if a point is in San Francisco, compute its cell ID and check if it's in the cell union — pure integer comparison, no geometry. This is how reverse geocoding scales to millions of QPS.
+          </div>
+
+          <!-- ─── Live Traffic ─────────────────────────────────────── -->
+          <h3>4. Live Traffic: From GPS Ping to ETA Adjustment</h3>
+
+          <p>Google Maps has an inherent advantage: it IS the traffic sensor. 100M+ users navigating simultaneously send GPS pings every 15 seconds. This creates a real-time, planet-scale speed measurement system:</p>
+
+          <ol class="algorithm-steps">
+            <li><strong>GPS Ping Collection:</strong> Navigating user sends {lat, lng, speed_kph, heading, accuracy_meters} every 15s. Batched and sent over existing WebSocket/HTTP/2 connection. At 100M navigating users: 100M / 15s = 6.7M pings/sec ingested into Kafka (partitioned by S2 cell prefix).</li>
+            <li><strong>Map Matching:</strong> Raw GPS traces are noisy (multipath errors, tunnel exits). A Hidden Markov Model (HMM) matches each trace to the most likely road segment sequence. Candidate segments are found via S2 cell lookup. The HMM considers: GPS error radius, road connectivity, heading alignment, speed plausibility.</li>
+            <li><strong>Speed Aggregation:</strong> Map Matching outputs (segment_id, speed_kph) pairs. Traffic Aggregation Service computes a rolling 5-minute exponential moving average per segment. Minimum probe density required: fewer than 3 probes → inherit historical speed; 3+ probes → use probe average. Anomaly detection flags sudden speed drops (potential accident).</li>
+            <li><strong>Redis Update:</strong> Current speed written to Redis with 120s TTL. Route Service reads these during query: travel_time = distance_meters / current_speed_kph. ETA = sum of travel_times for all segments on route.</li>
+            <li><strong>Historical Baselines:</strong> For segments with no live probes, fall back to historical speed patterns (day-of-week + time-of-day buckets, trained from 5 years of GPS history). This is how Google Maps predicts "usually fast on Sunday at 2pm."</li>
+          </ol>
+
+          <div class="callout callout--info">
+            <strong>ETA accuracy:</strong> Google Maps reports ±10% ETA accuracy for typical routes. The dominant error source is not algorithmic but probabilistic — a traffic jam that forms 5 minutes from now cannot be predicted, only observed. Machine learning models trained on historical patterns can predict likely congestion, but real-time GPS data is still the ground truth.
+          </div>
+
+          <!-- ─── Map Rendering ────────────────────────────────────── -->
+          <h3>5. Map Rendering: Vector Tiles and Client-Side WebGL</h3>
+
+          <p>Modern Google Maps and its open-source equivalents (MapLibre GL) use a pipeline:</p>
+          <ul>
+            <li><strong>Server:</strong> Pre-generates vector tiles in Mapbox Vector Tile (MVT/PBF) format. Each tile contains layers: roads, buildings, water, land use, labels. Raw geometry in tile-local coordinates (0–4096). No styling — just data.</li>
+            <li><strong>Client (WebGL / MapLibre GL JS):</strong> Downloads tile PBF, deserializes geometry, applies style rules (color, width, visibility based on zoom). Renders roads as WebGL polylines, buildings as extruded 3D polygons, using GPU for real-time performance.</li>
+            <li><strong>Style spec:</strong> A JSON document defines what to draw and how. Changing dark mode = swap one JSON file. No re-render needed on server. The same tiles serve light mode, dark mode, satellite hybrid, colorblind mode.</li>
+          </ul>
+
+          <p><strong>Tile generation pipeline:</strong></p>
+          <pre><code class="language-java">// Simplified tile generation pipeline:
+// 1. OSM data + proprietary road data → PostGIS or Tilemaker
+// 2. Feature extraction: roads, buildings, water bodies, admin boundaries
+// 3. Generalization (simplify geometry for lower zoom levels — don't show every building at zoom 5)
+// 4. Tile cutting: clip features to tile boundaries, encode as MVT
+// 5. Compression: gzip (or Brotli) → typical tile: 3–20 KB
+// 6. Upload to GCS with quadkey as object key
+// 7. Invalidate CDN cache for changed tiles (versioned keys avoid cache purge storms)
+
+// Tile size budget (per tile):
+// zoom 0–6:   &lt;5 KB  (continent outlines, major roads only)
+// zoom 7–12:  5–30 KB (cities, secondary roads, coastlines)
+// zoom 13–16: 20–80 KB (streets, buildings, parks)
+// zoom 17+:   30–120 KB (detailed buildings, sidewalks, lane markings)</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           E — EVALUATE
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon">✅</span>E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Does This Meet the Requirements?</h3>
+
+          <h4>Routing latency P99 &lt; 200ms</h4>
+          <p>CH query: ~0.5ms. Redis lookups for segment speeds: ~5ms (pipelined). Serializing response: ~2ms. Network round-trip (client → PoP → routing server): ~20–50ms. <strong>Total: ~30–60ms P50; ~150ms P99. ✓</strong></p>
+          <p>Failure modes: cold start (loading 10GB graph shard into RAM takes ~45s — mitigated by warm spare, rolling restarts). Hot spot if a single city shard gets >10K QPS — solved by horizontal sharding of the routing tier.</p>
+
+          <h4>Tile latency &lt; 20ms from CDN</h4>
+          <p>CDN cache hit rate for tiles should be >99% — tiles at popular zoom levels in dense cities are requested constantly. Long TTL (30 days) means CDN never evicts them. <strong>P50 tile latency from CDN edge: ~5–8ms. ✓</strong></p>
+
+          <h4>Traffic freshness within 60s</h4>
+          <p>GPS ping → Kafka (sub-second) → Map Matching (~5s processing window) → Aggregation → Redis write. End-to-end latency: ~15–30s for a meaningful speed estimate to appear. Redis TTL of 120s ensures stale data is purged. <strong>✓ Well within 60s target.</strong></p>
+
+          <h4>Failures and Edge Cases</h4>
           <ul>
-            <li><strong>Routing at scale:</strong> Road graph for whole world is ~100GB. Not practical to load into one server's memory. Solution: partition graph by geographic region. Most routes are local — route within region, stitch at boundaries (contraction hierarchies).</li>
-            <li><strong>Traffic update latency:</strong> Redis TTL approach means traffic data is at most 60s stale. Acceptable for ETA accuracy.</li>
-            <li><strong>Tile freshness:</strong> Roads change rarely. Tiles can have months-long CDN TTL. When map data changes, use versioned tile keys (tile/v2/...) and deploy new CDN content.</li>
+            <li><strong>Routing server crash:</strong> Geographic sharding means only one continent's routing is affected. Traffic is redirected to a hot standby. Graph reload takes ~45s — acceptable given 99.99% availability target allows 52 min/year downtime.</li>
+            <li><strong>Kafka consumer lag:</strong> If traffic ingestion falls behind (e.g., during a concert when millions of users are in one area), segment speeds fall back to historical baselines after 120s TTL. ETA accuracy degrades gracefully — doesn't fail catastrophically.</li>
+            <li><strong>GPS spoofing / bad data:</strong> Anomaly detection in Traffic Aggregation rejects pings with implausible speed changes (>10 m/s² acceleration), speed > physical road limit × 1.5, or heading inconsistent with road geometry. Probes from verified navigation sessions weighted higher than probes from passive location sharing.</li>
+            <li><strong>Map data errors:</strong> OSM vandalism can introduce false roads. Road data goes through validation pipeline: cross-check against satellite imagery, flag sharp geometry angles (likely editing errors), require 3+ independent sources for new road additions. Emergency data rollback restores previous graph version in minutes.</li>
+            <li><strong>International routing (routing across geographic shards):</strong> Most routes are within one continent shard. Cross-continent routes (NYC → London — not meaningful by car, but relevant for global graph consistency) are handled by "stitching" nodes at border crossings between shards using precomputed inter-shard distances.</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <strong>Cold start problem — the hardest operational challenge:</strong> A routing server loads a 10GB graph shard at startup. During this 45-second window, it cannot serve requests. In a rolling restart (normal deployment), the old server continues serving until the new one is ready. But if an entire shard crashes simultaneously (e.g., AZ failure), users in that region see routing failures until the backup AZ warms up. Mitigation: pre-warm routing servers in secondary AZ continuously, not just on failure.
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════════
+           D — DELIVER
+      ═══════════════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon">🚀</span>D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>We designed Google Maps at planet scale (1B+ users, 5B routes/day) around three architectural pillars:</p>
+
+          <ol>
+            <li><strong>Tile System:</strong> Quadkey-encoded vector tiles (PBF format) stored in GCS, served via CDN with 30-day cache TTL, rendered client-side via MapLibre GL WebGL. The vector tile approach shifts rendering work to the client, reduces storage 10× vs raster, and enables dynamic styling without server re-renders.</li>
+            <li><strong>Routing with Contraction Hierarchies:</strong> Road graph loaded into RAM per geographic shard (~10GB/shard). CH preprocessing reduces query time from minutes (Dijkstra) to ~0.5ms. Customizable CH re-applies live traffic weights in ~100ms — enabling per-minute traffic refresh without full preprocessing. 200K QPS served by ~2–4 servers per continent.</li>
+            <li><strong>Traffic Pipeline:</strong> 100M navigating users produce 6.7M GPS pings/sec → Kafka → HMM map-matching → rolling average per road segment → Redis (120s TTL). Historical patterns serve as fallback when live probe density is low. ETA accuracy ±10% for typical routes.</li>
+          </ol>
+
+          <p>Supporting services: S2 Geometry Library for all geospatial indexing (POI search, reverse geocoding, map-matching), Elasticsearch for forward geocoding and POI full-text search, Bigtable for tile metadata and historical traffic patterns.</p>
+
+          <p><strong>What would be different at earlier scale:</strong></p>
+          <ul>
+            <li>Under 10M users: single routing server with A* (no CH needed), Postgres with PostGIS for geocoding</li>
+            <li>Under 100M users: A* with continent sharding, Redis for traffic, CDN with raster tiles</li>
+            <li>1B+ users: Full CH/CCH, vector tiles, S2 geometry throughout, dedicated traffic ingestion pipeline as described above</li>
           </ul>
         </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body">
-          <p>We designed Google Maps handling 1B users, 100TB of map tile storage, and real-time routing. Key decisions: quadkey-encoded tiles on S3 with CDN (long TTL), A* routing with traffic-adjusted edge weights loaded in-memory, Redis for real-time traffic speeds with 60s TTL, and ElasticSearch for geocoding and place search.</p>
-        </div>
-      </section>
-
+      <!-- ═══════════════════════════════════════════════════════════════
+           TRADE-OFFS
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon">⚖️</span>Trade-offs
+        </h2>
         <div class="content-section__body">
           <div class="table-wrapper">
-            <table>
-              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <table class="tradeoff-table">
+              <thead>
+                <tr><th>Decision</th><th>Option A</th><th>Option B</th><th>Chosen</th><th>Why</th></tr>
+              </thead>
               <tbody>
-                <tr><td>Routing algorithm</td><td>A* with heuristic</td><td>Dijkstra</td><td>A* is faster when a good heuristic exists (straight-line distance). Dijkstra explores all nodes; A* focuses toward the destination.</td></tr>
-                <tr><td>Tile encoding</td><td>Quadkey prefix</td><td>(zoom, x, y) tuple</td><td>Spatial locality in object storage keys; prefix-based region queries; single string key simpler to CDN-cache</td></tr>
-                <tr><td>Traffic storage</td><td>Redis with TTL</td><td>Time-series DB</td><td>Redis provides sub-ms reads with automatic expiry; we only need current speed, not history</td></tr>
-                <tr><td>Graph partitioning</td><td>Contraction hierarchies</td><td>Single in-memory graph</td><td>World graph is too large for single node; CH allows efficient routing across partition boundaries</td></tr>
+                <tr>
+                  <td><strong>Routing algorithm</strong></td>
+                  <td>A* (no preprocessing)</td>
+                  <td>Contraction Hierarchies</td>
+                  <td><span class="tag--chosen">CH / CCH</span></td>
+                  <td>A* explores ~1M nodes for long routes (~seconds). CH queries ~1K nodes (~0.5ms). 5B routes/day makes this a 5000× difference in CPU cost. Preprocessing cost (hours, once per structural change) is dwarfed by query savings.</td>
+                </tr>
+                <tr>
+                  <td><strong>Tile format</strong></td>
+                  <td>Raster PNG (pre-rendered)</td>
+                  <td>Vector PBF (client-rendered)</td>
+                  <td><span class="tag--chosen">Vector PBF</span></td>
+                  <td>Raster: simple pipeline, works on any device. Vector: 10× storage savings, dynamic styling (dark mode, colorblind), retina/HiDPI without extra tile sets, smoother zoom animations. Downside: CPU/GPU cost shifts to client — acceptable on modern phones but fallback to raster for low-end devices.</td>
+                </tr>
+                <tr>
+                  <td><strong>Geospatial indexing</strong></td>
+                  <td>Geohash</td>
+                  <td>S2 Geometry Library</td>
+                  <td><span class="tag--chosen">S2</span></td>
+                  <td>Geohash cells vary 10× in area between equator and poles — bad for global consistency. S2 cells are ~equal area globally. S2 IDs are 64-bit integers (fast arithmetic, no string ops). S2 region covering (polygon → cell union) is superior for arbitrary shapes. Geohash is simpler to implement — acceptable for small geo services.</td>
+                </tr>
+                <tr>
+                  <td><strong>Traffic storage</strong></td>
+                  <td>Redis TTL per segment</td>
+                  <td>Time-series DB (Prometheus/InfluxDB)</td>
+                  <td><span class="tag--chosen">Redis + historical DB</span></td>
+                  <td>Redis: sub-ms reads, automatic expiry of stale data, simple schema. We only need current speed for routing — not history. Historical patterns (for ETA prediction) are stored separately in Bigtable with daily/hourly granularity. A time-series DB would be overkill for 120s TTL data and would add operational complexity.</td>
+                </tr>
+                <tr>
+                  <td><strong>Traffic freshness vs accuracy</strong></td>
+                  <td>Update Redis every 5s (high freshness)</td>
+                  <td>Update Redis every 60s (aggregated, higher confidence)</td>
+                  <td><span class="tag--chosen">~30s cadence</span></td>
+                  <td>Too-frequent updates with few probes produce noisy data (one speedster inflates a segment to 120 km/h). 30s window with EMA gives 3–10 probes on typical urban roads — enough for statistical confidence while staying fresh enough for accurate ETAs. Below 3 probes in 5 min → fall back to historical baseline.</td>
+                </tr>
+                <tr>
+                  <td><strong>Tile key scheme</strong></td>
+                  <td>XYZ (zoom/x/y)</td>
+                  <td>Quadkey (hierarchical string)</td>
+                  <td><span class="tag--chosen">Quadkey for storage, XYZ for URLs</span></td>
+                  <td>XYZ is the standard client-facing format (all map libraries understand it). Quadkey provides spatial locality in object storage (adjacent tiles share prefix → same storage partition). Use XYZ in CDN URLs (client compatibility), translate to quadkey internally for GCS storage organization.</td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           JAVA IMPLEMENTATION
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon">☕</span>Java Implementation — Contraction Hierarchies
+        </h2>
         <div class="content-section__body">
+          <p>Below is a simplified but algorithmically correct implementation of CH preprocessing and query. Production implementations (OSRM, RoutingKit) are 10× more optimized, but this captures the essential structure an L6 would be expected to understand.</p>
+
+          <h3>Part 1: Graph Representation and Node Ordering</h3>
           <pre><code class="language-java">/**
- * TileServer — encodes map coordinates to quadkey format and generates
- * CDN-friendly tile URLs for the slippy map tile system.
+ * ContractionHierarchies.java
+ *
+ * Simplified Contraction Hierarchies (CH) preprocessing and query.
+ * Demonstrates: node ordering by importance, shortcut creation,
+ * and bidirectional Dijkstra on the augmented CH graph.
+ *
+ * Production CH (e.g., OSRM, RoutingKit) uses the same algorithmic
+ * structure but adds: witness search optimization, lazy updates for
+ * importance, parallel contraction, and efficient binary heap.
+ */
+import java.util.*;
+
+public class ContractionHierarchies {
+
+    // ── Graph representation ───────────────────────────────────────────────
+    // Stored as adjacency list: nodeEdges[nodeId] = list of (toNode, weight, isShortcut)
+    private final int nodeCount;
+    private final List<int[]>[] forwardEdges;   // forwardEdges[u] = {v, weight, viaNode}
+    private final List<int[]>[] backwardEdges;  // backwardEdges[v] = {u, weight, viaNode}
+    private final int[] chLevel;               // contraction order (lower = contracted earlier)
+    private final boolean[] contracted;
+
+    private static final int VIA_NODE_NONE = -1;
+
+    @SuppressWarnings("unchecked")
+    public ContractionHierarchies(int nodeCount) {
+        this.nodeCount = nodeCount;
+        this.forwardEdges = new List[nodeCount];
+        this.backwardEdges = new List[nodeCount];
+        this.chLevel = new int[nodeCount];
+        this.contracted = new boolean[nodeCount];
+        for (int nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
+            forwardEdges[nodeIndex] = new ArrayList<>();
+            backwardEdges[nodeIndex] = new ArrayList<>();
+        }
+    }
+
+    /** Adds a directed edge. Call twice for undirected roads. */
+    public void addEdge(int fromNode, int toNode, int weightMs) {
+        forwardEdges[fromNode].add(new int[]{toNode, weightMs, VIA_NODE_NONE});
+        backwardEdges[toNode].add(new int[]{fromNode, weightMs, VIA_NODE_NONE});
+    }
+
+    // ── Node importance scoring ────────────────────────────────────────────
+    /**
+     * Computes node importance for ordering.
+     *
+     * The key metric is "edge difference": number of shortcuts added minus
+     * number of edges removed when contracting this node. Nodes that cause
+     * many shortcuts (high connectivity, graph-critical) get contracted last
+     * (high importance = high CH level).
+     *
+     * @param nodeId  the node to evaluate
+     * @return importance score (lower = contract sooner)
+     */
+    private int computeImportance(int nodeId) {
+        int predecessorCount = 0;
+        int successorCount = 0;
+        int shortcutsNeeded = 0;
+
+        // Count in-edges (predecessors) and out-edges (successors, excluding contracted)
+        for (int[] backEdge : backwardEdges[nodeId]) {
+            if (!contracted[backEdge[0]]) {
+                predecessorCount++;
+            }
+        }
+        for (int[] fwdEdge : forwardEdges[nodeId]) {
+            if (!contracted[fwdEdge[0]]) {
+                successorCount++;
+            }
+        }
+
+        // Estimate shortcuts: for each (predecessor u, successor w) pair,
+        // check if u→nodeId→w is the only shortest path u→w (simplified — no witness search).
+        // Real CH runs Dijkstra from each predecessor to verify if a witness path exists.
+        // Here we use the upper bound: all u→w pairs may need shortcuts.
+        shortcutsNeeded = predecessorCount * successorCount;
+
+        int edgesRemoved = predecessorCount + successorCount;
+        int edgeDifference = shortcutsNeeded - edgesRemoved;
+
+        // Depth bonus discourages contracting nodes that were neighbors of many contracted nodes
+        // (deep in the hierarchy already) — keeps the hierarchy balanced.
+        int depth = 0; // simplified: in production, track max contracted-neighbor depth
+
+        return edgeDifference * 10 + depth;
+    }
+
+    // ── Preprocessing: contract all nodes ─────────────────────────────────
+    /**
+     * Builds the Contraction Hierarchy.
+     *
+     * Contracts nodes in order of increasing importance. After contracting
+     * a node, shortcuts are added to preserve all shortest paths in the
+     * remaining graph. The result is an augmented graph that supports
+     * O(log n)-ish bidirectional Dijkstra queries.
+     */
+    public void preprocess() {
+        // Priority queue ordered by importance (min-heap = contract least important first)
+        PriorityQueue<int[]> nodeQueue = new PriorityQueue<>(
+            Comparator.comparingInt(entry -> entry[1])
+        );
+
+        // Initialize importance for all nodes
+        for (int nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
+            nodeQueue.offer(new int[]{nodeIndex, computeImportance(nodeIndex)});
+        }
+
+        int contractionLevel = 0;
+        while (!nodeQueue.isEmpty()) {
+            int[] entry = nodeQueue.poll();
+            int nodeToContract = entry[0];
+
+            // Lazy update: recompute importance — may have changed as neighbors were contracted
+            int currentImportance = computeImportance(nodeToContract);
+            if (currentImportance > entry[1]) {
+                // Importance increased — reinsert with updated importance
+                nodeQueue.offer(new int[]{nodeToContract, currentImportance});
+                continue;
+            }
+
+            // Contract this node
+            contractNode(nodeToContract, contractionLevel);
+            contracted[nodeToContract] = true;
+            chLevel[nodeToContract] = contractionLevel++;
+        }
+    }
+
+    /**
+     * Contracts a single node: adds shortcuts for all (predecessor, successor) pairs
+     * where the shortest path goes through this node.
+     *
+     * In production, a "witness search" Dijkstra runs from each predecessor to find
+     * if an alternative path (not through this node) is equally short — if so,
+     * no shortcut is needed for that pair. We omit witness search here for clarity.
+     */
+    private void contractNode(int nodeToContract, int level) {
+        List<int[]> predecessors = backwardEdges[nodeToContract];
+        List<int[]> successors = forwardEdges[nodeToContract];
+
+        for (int[] inEdge : predecessors) {
+            int predecessorNode = inEdge[0];
+            int weightToContracted = inEdge[1];
+
+            if (contracted[predecessorNode]) continue;
+
+            for (int[] outEdge : successors) {
+                int successorNode = outEdge[0];
+                int weightFromContracted = outEdge[1];
+
+                if (contracted[successorNode]) continue;
+                if (predecessorNode == successorNode) continue;
+
+                int shortcutWeight = weightToContracted + weightFromContracted;
+
+                // Add shortcut edge: predecessor → successor (bypassing nodeToContract)
+                // This preserves the shortest path through the contracted node.
+                int[] shortcutForward = {successorNode, shortcutWeight, nodeToContract};
+                int[] shortcutBackward = {predecessorNode, shortcutWeight, nodeToContract};
+
+                // Only add if no cheaper path already exists (simplified check)
+                boolean shortcutNeeded = true;
+                for (int[] existingEdge : forwardEdges[predecessorNode]) {
+                    if (existingEdge[0] == successorNode && existingEdge[1] <= shortcutWeight) {
+                        shortcutNeeded = false;
+                        break;
+                    }
+                }
+
+                if (shortcutNeeded) {
+                    forwardEdges[predecessorNode].add(shortcutForward);
+                    backwardEdges[successorNode].add(shortcutBackward);
+                }
+            }
+        }
+    }</code></pre>
+
+          <h3>Part 2: Bidirectional CH-Dijkstra Query</h3>
+          <pre><code class="language-java">    // ── Bidirectional CH-Dijkstra query ───────────────────────────────────
+    /**
+     * Finds the shortest path from sourceNode to targetNode using
+     * bidirectional Dijkstra on the CH graph.
+     *
+     * Key insight: only relax edges going UPWARD in the hierarchy
+     * (toward higher CH level nodes). This ensures both searches
+     * meet at the "highest importance" node on the optimal path.
+     *
+     * @param sourceNode  origin node ID (snapped to nearest road node)
+     * @param targetNode  destination node ID
+     * @return shortest path distance in milliseconds, or Integer.MAX_VALUE if unreachable
+     */
+    public QueryResult query(int sourceNode, int targetNode) {
+        int[] forwardDist = new int[nodeCount];
+        int[] backwardDist = new int[nodeCount];
+        int[] forwardParent = new int[nodeCount];
+        int[] backwardParent = new int[nodeCount];
+        Arrays.fill(forwardDist, Integer.MAX_VALUE);
+        Arrays.fill(backwardDist, Integer.MAX_VALUE);
+        Arrays.fill(forwardParent, -1);
+        Arrays.fill(backwardParent, -1);
+
+        forwardDist[sourceNode] = 0;
+        backwardDist[targetNode] = 0;
+
+        // PQ entries: {distance, nodeId}
+        PriorityQueue<int[]> forwardQueue = new PriorityQueue<>(Comparator.comparingInt(e -> e[0]));
+        PriorityQueue<int[]> backwardQueue = new PriorityQueue<>(Comparator.comparingInt(e -> e[0]));
+        forwardQueue.offer(new int[]{0, sourceNode});
+        backwardQueue.offer(new int[]{0, targetNode});
+
+        int bestPathCost = Integer.MAX_VALUE;
+        int meetingNode = -1;
+
+        Set<Integer> forwardSettled = new HashSet<>();
+        Set<Integer> backwardSettled = new HashSet<>();
+
+        while (!forwardQueue.isEmpty() || !backwardQueue.isEmpty()) {
+            // Alternate between forward and backward search
+            if (!forwardQueue.isEmpty()) {
+                int[] current = forwardQueue.poll();
+                int currentDist = current[0];
+                int currentNode = current[1];
+
+                if (forwardSettled.contains(currentNode)) continue;
+                forwardSettled.add(currentNode);
+
+                // Pruning: if current distance exceeds best found path, stop
+                if (currentDist > bestPathCost) break;
+
+                // Check if backward search has reached this node → candidate meeting point
+                if (backwardDist[currentNode] != Integer.MAX_VALUE) {
+                    int candidateCost = currentDist + backwardDist[currentNode];
+                    if (candidateCost < bestPathCost) {
+                        bestPathCost = candidateCost;
+                        meetingNode = currentNode;
+                    }
+                }
+
+                // Only relax edges going UPWARD in the CH hierarchy
+                for (int[] edge : forwardEdges[currentNode]) {
+                    int neighborNode = edge[0];
+                    int edgeWeight = edge[1];
+
+                    // CH constraint: only explore if neighbor has higher CH level
+                    if (chLevel[neighborNode] <= chLevel[currentNode]) continue;
+
+                    int newDist = currentDist + edgeWeight;
+                    if (newDist < forwardDist[neighborNode]) {
+                        forwardDist[neighborNode] = newDist;
+                        forwardParent[neighborNode] = currentNode;
+                        forwardQueue.offer(new int[]{newDist, neighborNode});
+                    }
+                }
+            }
+
+            // Symmetric backward search (same logic, using backwardEdges, going upward)
+            if (!backwardQueue.isEmpty()) {
+                int[] current = backwardQueue.poll();
+                int currentDist = current[0];
+                int currentNode = current[1];
+
+                if (backwardSettled.contains(currentNode)) continue;
+                backwardSettled.add(currentNode);
+
+                if (currentDist > bestPathCost) break;
+
+                if (forwardDist[currentNode] != Integer.MAX_VALUE) {
+                    int candidateCost = forwardDist[currentNode] + currentDist;
+                    if (candidateCost < bestPathCost) {
+                        bestPathCost = candidateCost;
+                        meetingNode = currentNode;
+                    }
+                }
+
+                for (int[] edge : backwardEdges[currentNode]) {
+                    int neighborNode = edge[0];
+                    int edgeWeight = edge[1];
+
+                    if (chLevel[neighborNode] <= chLevel[currentNode]) continue;
+
+                    int newDist = currentDist + edgeWeight;
+                    if (newDist < backwardDist[neighborNode]) {
+                        backwardDist[neighborNode] = newDist;
+                        backwardParent[neighborNode] = currentNode;
+                        backwardQueue.offer(new int[]{newDist, neighborNode});
+                    }
+                }
+            }
+        }
+
+        return new QueryResult(bestPathCost, meetingNode, forwardParent, backwardParent);
+    }
+
+    /** Result of a CH query — includes the meeting node for path unpacking. */
+    public static class QueryResult {
+        public final int totalDistanceMs;
+        public final int meetingNode;
+        private final int[] forwardParent;
+        private final int[] backwardParent;
+
+        QueryResult(int totalDistanceMs, int meetingNode,
+                    int[] forwardParent, int[] backwardParent) {
+            this.totalDistanceMs = totalDistanceMs;
+            this.meetingNode = meetingNode;
+            this.forwardParent = forwardParent;
+            this.backwardParent = backwardParent;
+        }
+
+        /**
+         * Reconstructs the node sequence from source to target.
+         * Shortcuts are NOT unpacked here — production code recursively
+         * expands shortcut edges via their stored viaNode reference.
+         */
+        public List<Integer> reconstructPath(int sourceNode, int targetNode) {
+            if (meetingNode < 0) return Collections.emptyList();
+
+            LinkedList<Integer> path = new LinkedList<>();
+
+            // Walk backward from meeting node to source
+            int currentNode = meetingNode;
+            while (currentNode != sourceNode && forwardParent[currentNode] >= 0) {
+                path.addFirst(currentNode);
+                currentNode = forwardParent[currentNode];
+            }
+            path.addFirst(sourceNode);
+
+            // Walk forward from meeting node to target
+            currentNode = backwardParent[meetingNode];
+            while (currentNode >= 0 && currentNode != targetNode) {
+                path.addLast(currentNode);
+                currentNode = backwardParent[currentNode];
+            }
+            if (currentNode == targetNode) path.addLast(targetNode);
+
+            return path;
+        }
+    }
+}</code></pre>
+
+          <h3>Part 3: Tile Server with Web Mercator Projection</h3>
+          <pre><code class="language-java">/**
+ * TileServer.java
+ * Converts between geographic coordinates, tile coordinates,
+ * and quadkey encoding for the map tile serving pipeline.
  */
 public class TileServer {
 
     private static final String CDN_BASE_URL = "https://tiles.maps.example.com";
     private static final int MAX_ZOOM_LEVEL = 22;
+    private static final double EARTH_CIRCUMFERENCE_METERS = 40_075_016.686;
 
     /**
      * Converts (zoom, x, y) tile coordinates to a quadkey string.
-     * Each character in the quadkey represents one zoom level's quadrant (0-3).
+     *
+     * Each character in the quadkey represents one zoom level's quadrant:
+     * 0=NW, 1=NE, 2=SW, 3=SE. Length of quadkey == zoom level.
+     * Spatially adjacent tiles share a common quadkey prefix — this is the
+     * property that gives S3/GCS storage spatial locality for free.
      *
      * @param zoomLevel zoom level (0 = whole world, 22 = street level)
-     * @param tileX     tile column (0 to 2^zoom - 1)
-     * @param tileY     tile row (0 to 2^zoom - 1)
+     * @param tileX     tile column (0 to 2^zoom - 1, increasing east)
+     * @param tileY     tile row (0 to 2^zoom - 1, increasing south)
      * @return quadkey string of length == zoomLevel
      */
     public String encodeToQuadkey(int zoomLevel, int tileX, int tileY) {
-        if (zoomLevel &lt; 0 || zoomLevel &gt; MAX_ZOOM_LEVEL) {
-            throw new IllegalArgumentException("Zoom level must be 0–" + MAX_ZOOM_LEVEL);
+        if (zoomLevel < 0 || zoomLevel > MAX_ZOOM_LEVEL) {
+            throw new IllegalArgumentException(
+                "Zoom level must be 0–" + MAX_ZOOM_LEVEL + ", got: " + zoomLevel
+            );
         }
-        StringBuilder quadkey = new StringBuilder();
-        for (int level = zoomLevel; level &gt; 0; level--) {
+        StringBuilder quadkey = new StringBuilder(zoomLevel);
+        for (int level = zoomLevel; level > 0; level--) {
             int digit = 0;
-            int mask = 1 &lt;&lt; (level - 1);
-            if ((tileX &amp; mask) != 0) {
-                digit++; // bit set in X → east half → +1
-            }
-            if ((tileY &amp; mask) != 0) {
-                digit += 2; // bit set in Y → south half → +2
-            }
+            int mask = 1 << (level - 1);
+            if ((tileX & mask) != 0) digit++;      // bit set in X → east half → +1
+            if ((tileY & mask) != 0) digit += 2;   // bit set in Y → south half → +2
             quadkey.append(digit);
         }
         return quadkey.toString();
     }
 
     /**
-     * Generates the full CDN URL for a map tile.
-     * Tiles are immutable — URL includes zoom+quadkey for natural CDN caching.
+     * Decodes a quadkey back to (zoom, x, y) tile coordinates.
+     * Inverse of encodeToQuadkey.
      */
-    public String buildTileUrl(int zoomLevel, int tileX, int tileY) {
-        String quadkey = encodeToQuadkey(zoomLevel, tileX, tileY);
-        return CDN_BASE_URL + "/tiles/" + zoomLevel + "/" + quadkey + ".png";
+    public int[] decodeQuadkey(String quadkey) {
+        int zoomLevel = quadkey.length();
+        int tileX = 0;
+        int tileY = 0;
+        for (int level = zoomLevel; level > 0; level--) {
+            int mask = 1 << (level - 1);
+            char quadrant = quadkey.charAt(zoomLevel - level);
+            switch (quadrant) {
+                case '0': break;                    // NW — no bit set
+                case '1': tileX |= mask; break;    // NE — X bit set
+                case '2': tileY |= mask; break;    // SW — Y bit set
+                case '3': tileX |= mask; tileY |= mask; break; // SE — both set
+                default: throw new IllegalArgumentException(
+                    "Invalid quadkey character: " + quadrant + " in " + quadkey
+                );
+            }
+        }
+        return new int[]{zoomLevel, tileX, tileY};
     }
 
     /**
-     * Converts latitude/longitude to tile coordinates at a given zoom level.
-     * Uses the standard Web Mercator (EPSG:3857) projection.
+     * Converts latitude/longitude to Web Mercator tile coordinates.
+     *
+     * Uses the Web Mercator projection (EPSG:3857) — the same projection
+     * used by Google Maps, OpenStreetMap, and all slippy-map tile systems.
+     * Note: Web Mercator distorts area near the poles significantly —
+     * this is an accepted trade-off for mathematical simplicity and
+     * 90-degree north/south alignment.
+     *
+     * @param latitudeDegrees  latitude (-85.05 to +85.05 — Web Mercator valid range)
+     * @param longitudeDegrees longitude (-180 to +180)
+     * @param zoomLevel        target zoom level
+     * @return int[]{tileX, tileY}
      */
     public int[] latLngToTile(double latitudeDegrees, double longitudeDegrees, int zoomLevel) {
-        int totalTiles = 1 &lt;&lt; zoomLevel;
-        double latitudeRadians = Math.toRadians(latitudeDegrees);
-        int tileX = (int) Math.floor((longitudeDegrees + 180.0) / 360.0 * totalTiles);
-        int tileY = (int) Math.floor(
-            (1.0 - Math.log(Math.tan(latitudeRadians) + 1.0 / Math.cos(latitudeRadians)) / Math.PI)
-            / 2.0 * totalTiles
+        // Clamp to Web Mercator valid range (poles are at infinity in Mercator)
+        double clampedLat = Math.max(-85.05112878, Math.min(85.05112878, latitudeDegrees));
+
+        int totalTilesPerAxis = 1 << zoomLevel; // 2^zoom tiles in each dimension
+        double latitudeRadians = Math.toRadians(clampedLat);
+
+        int tileX = (int) Math.floor(
+            (longitudeDegrees + 180.0) / 360.0 * totalTilesPerAxis
         );
+        int tileY = (int) Math.floor(
+            (1.0 - Math.log(Math.tan(latitudeRadians) + 1.0 / Math.cos(latitudeRadians))
+             / Math.PI) / 2.0 * totalTilesPerAxis
+        );
+
+        // Clamp to valid range (floating-point can push us 1 tile out of bounds)
+        tileX = Math.max(0, Math.min(totalTilesPerAxis - 1, tileX));
+        tileY = Math.max(0, Math.min(totalTilesPerAxis - 1, tileY));
+
         return new int[]{tileX, tileY};
     }
+
+    /**
+     * Returns the set of tile coordinates needed to cover a rectangular viewport.
+     * Used by the client to determine which tiles to fetch for the current map view.
+     *
+     * @param northLat  northern boundary latitude
+     * @param southLat  southern boundary latitude
+     * @param westLng   western boundary longitude
+     * @param eastLng   eastern boundary longitude
+     * @param zoomLevel current zoom level
+     * @return list of {tileX, tileY} pairs covering the viewport
+     */
+    public List<int[]> getTilesForViewport(double northLat, double southLat,
+                                            double westLng, double eastLng,
+                                            int zoomLevel) {
+        int[] topLeftTile = latLngToTile(northLat, westLng, zoomLevel);
+        int[] bottomRightTile = latLngToTile(southLat, eastLng, zoomLevel);
+
+        List<int[]> viewportTiles = new ArrayList<>();
+        for (int tileX = topLeftTile[0]; tileX <= bottomRightTile[0]; tileX++) {
+            for (int tileY = topLeftTile[1]; tileY <= bottomRightTile[1]; tileY++) {
+                viewportTiles.add(new int[]{tileX, tileY});
+            }
+        }
+        return viewportTiles;
+    }
+
+    /**
+     * Builds the CDN URL for a vector tile request.
+     * Uses XYZ format in the URL (client-compatible) while the backend
+     * resolves this to the quadkey-keyed GCS object internally.
+     */
+    public String buildTileUrl(int zoomLevel, int tileX, int tileY) {
+        // XYZ format in URL for client library compatibility
+        return CDN_BASE_URL + "/v1/tiles/" + zoomLevel + "/" + tileX + "/" + tileY + ".pbf";
+    }
+
+    /**
+     * Returns the ground resolution in meters per pixel at a given zoom and latitude.
+     * At zoom 0, one pixel = 78.27 km at the equator.
+     * At zoom 20, one pixel = ~0.075 m at the equator.
+     * Near the poles, the same zoom level shows less ground area per pixel.
+     */
+    public double groundResolutionMetersPerPixel(double latitudeDegrees, int zoomLevel) {
+        double latitudeRadians = Math.toRadians(latitudeDegrees);
+        int tilePixelSize = 512; // standard tile size in pixels
+        long totalPixels = (long) tilePixelSize << zoomLevel; // 512 × 2^zoom pixels wrap Earth
+        return Math.cos(latitudeRadians) * EARTH_CIRCUMFERENCE_METERS / totalPixels;
+    }
 }</code></pre>
+
+          <div class="callout callout--l6">
+            <strong>L6 insight on the implementation:</strong> The bidirectional CH query settles only ~1,000 nodes for a transcontinental route because the "only go upward" constraint prunes the search space dramatically. A motorway network (high CH level) is reached within a few hops from any city-center node. The forward and backward searches both converge on the highway network and meet there. In production, this is combined with "stall-on-demand" — if a settled node can be reached more cheaply via a non-upward edge, its distance is marked as a "stall" and not used to relax neighbors. This further reduces the search space and handles the minor correctness issue in simplified bidirectional CH.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════════
+           QUIZ
+      ═══════════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon">🧠</span>Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-google-maps-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header">
             <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="At zoom level 3, how many map tiles cover the entire world?" data-options='["8 tiles","64 tiles (4^3)","16 tiles","256 tiles"]' data-correct="1" data-explanation="At zoom z, the world is divided into 4^z tiles. Zoom 0 = 1 tile (whole world). Zoom 1 = 4 tiles. Zoom 2 = 16. Zoom 3 = 64. Zoom 22 = over 17 trillion tiles (but most are ocean so not all are pre-rendered)." style="display:none"></div>
-          <div data-question="Why is A* preferred over Dijkstra for road routing on Google Maps?" data-options='["A* uses less memory because it only stores the current path","A* uses a geographical heuristic (straight-line distance to destination) to prioritize exploring nodes toward the destination, reducing the search space — Dijkstra explores nodes in all directions equally","A* can handle negative edge weights which appear in traffic models","Dijkstra requires the graph to be loaded into memory; A* can stream from disk"]' data-correct="1" data-explanation="Dijkstra explores all nodes up to the solution radius. A* uses the heuristic h(n) = straight-line distance to goal to skip exploring nodes that are going the wrong direction. On a road graph with billions of nodes, this dramatically reduces the nodes examined — often 10× fewer than Dijkstra." style="display:none"></div>
-          <div data-question="How does Google Maps incorporate real-time traffic without recomputing the full road graph?" data-options='["The entire graph is re-loaded from disk every minute with updated speeds","Traffic speeds are stored in Redis with TTL. At routing query time, A* looks up current speed for each edge from Redis, adjusting travel time without modifying graph structure","Road segments with traffic are removed from the graph and added as new edges","Traffic data is only used to display the overlay, not to affect route calculation"]' data-correct="1" data-explanation="The road graph structure (topology) doesn't change — roads don't appear/disappear. Only edge weights (travel time = distance / current_speed) change. Redis stores current_speed per segment with a short TTL. The routing engine reads these at query time to compute realistic ETAs without rebuilding the graph." style="display:none"></div>
-          <div data-question="What advantage do quadkey-encoded tile keys have over (zoom, x, y) tuples for object storage?" data-options='["Quadkeys are shorter strings, reducing storage costs","Spatially adjacent tiles share a key prefix in quadkey encoding, enabling spatial locality in object storage — adjacent tiles are partitioned together, improving cache performance and prefix scan queries","Quadkeys encode altitude information that (x,y) tuples lack","Object storage systems cannot index numeric tuples"]' data-correct="1" data-explanation="Quadkeys encode hierarchy — a tile's quadkey starts with its parent tile's quadkey. All tiles in a geographic region share a common prefix. This means object storage can cluster geographically related tiles together, prefix-scan returns a complete region, and CDN cache keys are naturally spatial." style="display:none"></div>
+
+          <!-- Question data — hidden, parsed by quiz.js -->
+          <div data-question="Why does Contraction Hierarchies (CH) reduce route query time from minutes to under 1ms, even on the world road graph?"
+               data-options='[
+                 "CH compresses the graph into a smaller representation that fits in CPU cache",
+                 "CH only explores edges going upward in the node importance hierarchy — both forward and backward searches converge on high-importance nodes (motorways, interchanges), examining only ~1,000 nodes instead of millions",
+                 "CH pre-computes all pairwise shortest paths and stores them in a lookup table",
+                 "CH replaces Dijkstra with a more efficient algorithm that has O(1) time complexity"
+               ]'
+               data-correct="1"
+               data-explanation="Standard Dijkstra explores nodes in all directions until reaching the target — on a 50M-node graph, this can mean millions of node expansions. CH preprocessing creates a hierarchical ordering where less important nodes (residential streets) are contracted first. The query then only relaxes edges going upward — toward highway nodes. Both forward and backward searches quickly reach the motorway network and meet there, examining typically 1,000–10,000 nodes total. This is a 5,000× speedup, not from a different algorithm, but from dramatically pruning the search space via preprocessing."
+               style="display:none"></div>
+
+          <div data-question="Google Maps can display routes with current traffic conditions in under 200ms. How does it update edge weights from real-time GPS data without re-running CH preprocessing (which takes hours)?"
+               data-options='[
+                 "The graph is re-preprocessed every 60 seconds using a faster incremental CH algorithm",
+                 "A/B testing shows that traffic does not significantly affect most routes, so static weights are used",
+                 "Customizable CH (CCH) separates structure preprocessing (run once) from metric customization (apply live weights to shortcuts in ~100ms). The routing query uses the latest customized weights.",
+                 "Traffic edge weights are only applied post-query by scaling the raw route duration by a congestion multiplier"
+               ]'
+               data-correct="2"
+               data-explanation="Standard CH bakes edge weights into shortcut distances during preprocessing — changing any weight invalidates shortcuts. Customizable CH (CCH) solves this by separating two phases: (1) the structure phase processes graph topology only — which shortcuts to add, node ordering — and runs once or when roads change structurally (hours). (2) The customization phase takes current edge weights and propagates them through the precomputed shortcut structure in ~100ms for world-scale graphs. This enables per-minute traffic refresh: Route Service calls customization with latest Redis speeds, gets an updated CH graph, and queries it. Full re-preprocessing is never needed for traffic updates."
+               style="display:none"></div>
+
+          <div data-question="Why does Google Maps use S2 Geometry Library instead of Geohash for geospatial indexing?"
+               data-options='[
+                 "S2 cells are hexagonal, which provides better coverage for circular search areas",
+                 "S2 cells use 64-bit integer IDs (fast arithmetic), have near-equal area globally (Geohash cells shrink near poles), and support efficient arbitrary polygon covering via cell unions — enabling O(1) containment checks without computational geometry",
+                 "S2 is a proprietary Google library that cannot be used without a license, giving Google a competitive advantage",
+                 "Geohash requires a database index while S2 can be computed in-memory without any persistence layer"
+               ]'
+               data-correct="1"
+               data-explanation="Three properties make S2 superior to Geohash at Google's scale: (1) Equal-area cells — Geohash uses a lat/lng grid where cells near the poles are tiny, causing inconsistent search radii. S2 projects the sphere onto a cube face, giving near-equal cell areas globally. (2) Integer IDs — S2 cell IDs are 64-bit integers enabling fast arithmetic for neighbor finding and range queries; Geohash is base-32 string manipulation. (3) Region covering — S2 can approximate any polygon (city boundary, search area) with a minimal set of cells (a 'cell union'). Containment check becomes 'is this cell ID in this set?' — pure integer comparison, no geometry computation. This is how reverse geocoding scales to millions of QPS."
+               style="display:none"></div>
+
+          <div data-question="A GPS ping from a user shows them at 150 km/h on a residential street (speed limit 50 km/h). The Traffic Aggregation Service receives this ping. What should happen?"
+               data-options='[
+                 "Accept the reading — the user may be in an emergency vehicle or the GPS speed is accurate",
+                 "The ping is flagged by anomaly detection (speed > speed_limit × 1.5 threshold) and rejected or down-weighted. The segment speed is not updated. If only 2 valid probes remain in the window, fall back to the historical baseline.",
+                 "The segment speed is capped at the speed limit automatically",
+                 "The user account is flagged for review and all their historical GPS data is invalidated"
+               ]'
+               data-correct="1"
+               data-explanation="Real-time traffic accuracy depends on probe quality. Accepting implausible readings corrupts speed estimates — a single bad data point showing 150 km/h would falsely suggest the street is clear and fast, leading to wrong ETAs and routing decisions. Anomaly detection rejects pings where: speed > speed_limit × 1.5 (physical implausibility), acceleration > 10 m/s² (impossible for cars), or heading is inconsistent with road geometry (GPS multipath error). With fewer than 3 valid probes in a 5-minute window, the Traffic Aggregation Service falls back to the historical baseline for that time-of-day and day-of-week. Graceful degradation preserves ETA accuracy even with noisy probe data."
+               style="display:none"></div>
+
+          <div data-question="At zoom level 0, a single tile covers the entire world (512×512 pixels). At zoom level 20, what is the approximate ground resolution (meters per pixel) at the equator, and what does this mean for map detail?"
+               data-options='[
+                 "~1 meter/pixel — enough to show individual lanes on roads, but not individual people",
+                 "~0.15 meters/pixel — enough to see cars, large vehicles, and road markings; building footprints are clearly visible",
+                 "~0.01 meters/pixel — centimeter accuracy, enough to see individual people",
+                 "~10 meters/pixel — you can see city blocks but not individual buildings"
+               ]'
+               data-correct="1"
+               data-explanation="The Web Mercator projection formula gives ground resolution ≈ cos(latitude) × Earth_circumference / (512 × 2^zoom). At zoom 20, equator: cos(0°) × 40,075,017m / (512 × 2^20) = 40,075,017 / 536,870,912 ≈ 0.075 m/pixel. So zoom 20 is ~7.5 cm/pixel — enough to clearly resolve cars (~1.8m wide = 24 pixels) and lane markings. Google Maps typically uses zoom 19–20 for maximum detail views, showing individual parking spaces and building details. This also explains why max-zoom satellite imagery is so large — each zoom-20 tile covers roughly 76m × 76m of ground at the equator."
+               style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>
@@ -315,5 +1447,155 @@ public class TileServer {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>
+  <script>
+    /**
+     * @file google-maps.html inline script
+     * @description Tile pyramid animation for the zoom levels diagram.
+     * Kept inline because it is specific to this page and lightweight.
+     */
+
+    // ── Constants ─────────────────────────────────────────────────────────
+    const MAX_PYRAMID_ZOOM = 5;     // show zoom 0–5 in diagram (beyond 5 is impractical to render)
+    const ANIMATION_STEP_MS = 900;  // pause between zoom levels during animation
+    const TILE_SIZE_BASE_PX = 48;   // pixel size of a zoom-0 tile in the diagram
+
+    const ZOOM_DESCRIPTIONS = [
+      'Zoom 0 — 1 tile covers the world',
+      'Zoom 1 — 4 tiles (continental view)',
+      'Zoom 2 — 16 tiles (country level)',
+      'Zoom 3 — 64 tiles (region level)',
+      'Zoom 4 — 256 tiles (city level)',
+      'Zoom 5 — 1,024 tiles (neighborhood level)',
+    ];
+
+    // ── DOM references ─────────────────────────────────────────────────────
+    const pyramidContainerElement = document.getElementById('js-tile-pyramid');
+    const animateButtonElement = document.getElementById('js-pyramid-animate');
+    const pyramidLabelElement = document.getElementById('js-pyramid-label');
+
+    // ── State ──────────────────────────────────────────────────────────────
+    let currentZoomLevel = 0;
+    let animationIntervalId = null;
+    let isAnimating = false;
+
+    // ── Core logic ─────────────────────────────────────────────────────────
+
+    /**
+     * Builds the static tile pyramid DOM structure (rows for zoom 0–5).
+     * Each zoom level row shows all tiles as colored cells.
+     */
+    function buildPyramidRows() {
+      pyramidContainerElement.innerHTML = '';
+
+      for (let zoomLevel = 0; zoomLevel <= MAX_PYRAMID_ZOOM; zoomLevel++) {
+        const tileCount = Math.pow(4, zoomLevel);
+        const tilesPerRow = Math.pow(2, zoomLevel);   // tiles along one axis
+        const tileSizePx = Math.max(6, TILE_SIZE_BASE_PX / Math.pow(2, zoomLevel));
+        const maxVisibleTiles = Math.min(tilesPerRow, 32); // cap for visual clarity
+
+        const rowWrapper = document.createElement('div');
+        rowWrapper.style.cssText = 'display:flex;align-items:center;';
+        rowWrapper.dataset.zoom = zoomLevel;
+
+        const rowLabel = document.createElement('span');
+        rowLabel.className = 'tile-row-label';
+        rowLabel.textContent = 'Zoom ' + zoomLevel;
+        rowWrapper.appendChild(rowLabel);
+
+        const tileRow = document.createElement('div');
+        tileRow.className = 'tile-row';
+
+        for (let tileIndex = 0; tileIndex < maxVisibleTiles; tileIndex++) {
+          const tileCell = document.createElement('div');
+          tileCell.className = 'tile-cell';
+          tileCell.style.cssText = 'width:' + tileSizePx + 'px;height:' + tileSizePx + 'px;';
+          tileCell.dataset.zoom = zoomLevel;
+          tileRow.appendChild(tileCell);
+        }
+        if (maxVisibleTiles < tilesPerRow) {
+          const ellipsis = document.createElement('span');
+          ellipsis.style.cssText = 'font-size:11px;color:var(--color-text-muted,#888);padding:0 4px;';
+          ellipsis.textContent = '…';
+          tileRow.appendChild(ellipsis);
+        }
+        rowWrapper.appendChild(tileRow);
+
+        const countLabel = document.createElement('span');
+        countLabel.className = 'tile-row-count';
+        countLabel.textContent = tileCount.toLocaleString() + ' tiles';
+        rowWrapper.appendChild(countLabel);
+
+        pyramidContainerElement.appendChild(rowWrapper);
+      }
+    }
+
+    /**
+     * Highlights all tile cells for a specific zoom level and
+     * dims cells from all other zoom levels.
+     */
+    function highlightZoomLevel(zoomLevel) {
+      const allCells = pyramidContainerElement.querySelectorAll('.tile-cell');
+      allCells.forEach(function(cell) {
+        const cellZoom = parseInt(cell.dataset.zoom, 10);
+        if (cellZoom === zoomLevel) {
+          cell.classList.add('is-active');
+        } else {
+          cell.classList.remove('is-active');
+        }
+      });
+      pyramidLabelElement.textContent = ZOOM_DESCRIPTIONS[zoomLevel] || '';
+    }
+
+    /**
+     * Advances animation to the next zoom level, looping back to 0 after MAX.
+     */
+    function advanceAnimationStep() {
+      currentZoomLevel = (currentZoomLevel + 1) % (MAX_PYRAMID_ZOOM + 1);
+      highlightZoomLevel(currentZoomLevel);
+    }
+
+    // ── DOM functions ──────────────────────────────────────────────────────
+
+    /** Starts the zoom-level animation loop. */
+    function startAnimation() {
+      if (isAnimating) return;
+      isAnimating = true;
+      animateButtonElement.textContent = '⏸ Pause';
+      animationIntervalId = setInterval(advanceAnimationStep, ANIMATION_STEP_MS);
+    }
+
+    /** Stops the animation loop. */
+    function stopAnimation() {
+      if (!isAnimating) return;
+      isAnimating = false;
+      animateButtonElement.textContent = '▶ Animate Zoom Levels';
+      clearInterval(animationIntervalId);
+      animationIntervalId = null;
+    }
+
+    // ── Event handlers ─────────────────────────────────────────────────────
+
+    function handleAnimateButtonClick() {
+      if (isAnimating) {
+        stopAnimation();
+      } else {
+        startAnimation();
+      }
+    }
+
+    // ── Setup & init ───────────────────────────────────────────────────────
+
+    function setupEventListeners() {
+      animateButtonElement.addEventListener('click', handleAnimateButtonClick);
+    }
+
+    function init() {
+      buildPyramidRows();
+      highlightZoomLevel(0);
+      setupEventListeners();
+    }
+
+    init();
+  </script>
 </body>
 </html>

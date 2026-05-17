@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Gaming Leaderboard — RESHADED walkthrough covering Redis sorted sets, sharding for 100M users, friend leaderboards, and real-time rank updates for MAANG interviews.">
+  <meta name="description" content="Design Gaming Leaderboard — RESHADED walkthrough covering Redis Sorted Set internals, skiplist structure, sharding for 100M users, friends leaderboards, and real-time rank updates for L6/Staff engineer interviews.">
   <title>Design Gaming Leaderboard — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/leaderboard/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -14,7 +15,10 @@
   <a href="#main" class="skip-link">Skip to main content</a>
   <nav class="site-nav" aria-label="Main navigation">
     <div class="site-nav__inner">
-      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
       <ul class="site-nav__links" role="list">
         <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
         <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
@@ -26,9 +30,11 @@
       <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
     </div>
   </nav>
+
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
-      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
           <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
           <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
@@ -48,250 +54,1166 @@
         <a href="../../mock-interview/index.html?problem=leaderboard" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
+
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
-          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
           <span>Tier 2</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Redis data structures</span>
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Redis data structures</span>
         </div>
         <h1 class="module-header__title">Design Gaming Leaderboard</h1>
-        <p class="module-header__desc">Redis Sorted Set is the perfect data structure for leaderboards: O(log N) insert, O(log N) rank lookup, O(log N + M) range query. Know the operations cold. The challenge: a single sorted set can't hold 100M entries in one Redis node — sharding is required.</p>
+        <p class="module-header__desc">Redis Sorted Set is the canonical leaderboard data structure: O(log N) insert, O(log N) rank lookup, O(log N + M) range query. The interview tests whether you understand <em>why</em> — it's a skiplist with augmented node sizes, not a B-tree. The real challenge: 100M players, 10B score updates per day, friends leaderboards, and sub-100ms rank reads at any scale.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Riot Games, Activision, Epic</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Riot Games, Activision, Epic, EA</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> 100M players</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏆</span> 100M concurrent players</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           R — REQUIREMENTS
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Update player score after each game</li>
-            <li>View global top-N leaderboard (e.g., top 100)</li>
-            <li>Look up a specific player's rank and score</li>
-            <li>Friend leaderboard — ranking among friends only</li>
-            <li>Weekly/monthly/all-time leaderboard windows</li>
+            <li><strong>Score update:</strong> Record a player's new score after each game match (overwrite or accumulate)</li>
+            <li><strong>Global top-N:</strong> Return the top 100 (or top K) players globally with rank + score + username</li>
+            <li><strong>Player rank lookup:</strong> Return a specific player's current rank, score, and percentile ("you're in the top 3%")</li>
+            <li><strong>Friends leaderboard:</strong> Among a player's friends only — ranked list with their scores</li>
+            <li><strong>Time-windowed leaderboards:</strong> All-time, monthly, weekly — each is an independent leaderboard</li>
+            <li><strong>Score history:</strong> View a player's score progression over time (audit trail, not real-time)</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 100M players, 10M score updates/day, 50M leaderboard reads/day</li>
-            <li><strong>Latency:</strong> Score update &lt;50ms; rank lookup &lt;100ms; top-N &lt;200ms</li>
-            <li><strong>Read/write ratio:</strong> 5:1 (more reads than score updates)</li>
+            <li><strong>Scale:</strong> 100M registered players; 10M daily active players; 10B score updates per day (~115K/sec average, 500K/sec burst at end-of-match)</li>
+            <li><strong>Read latency:</strong> Top-100 query &lt;50ms; single player rank lookup &lt;20ms; friends leaderboard &lt;100ms</li>
+            <li><strong>Write latency:</strong> Score update acknowledged &lt;50ms (async propagation to leaderboard acceptable, &lt;500ms)</li>
+            <li><strong>Consistency:</strong> Eventual consistency acceptable — a rank can be slightly stale by up to 1 second</li>
+            <li><strong>Availability:</strong> 99.99% for reads; writes can tolerate brief degradation at end-of-match burst</li>
+            <li><strong>Durability:</strong> Score history must be durable (RDBMS). The Redis leaderboard is a derived cache — rebuildable from the database.</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>Critical clarification to ask the interviewer:</strong> Are scores cumulative (total XP earned over all games) or "best score" (highest single match score)? This changes the ZADD semantics — cumulative needs ZINCRBY; best-score needs conditional ZADD with NX/GT flags. For most gaming leaderboards: cumulative all-time, reset-per-period for weekly/monthly.
+          </div>
+
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Anti-cheat enforcement (flag only; not gameplay-level validation)</li>
+            <li>Matchmaking (not related to leaderboard)</li>
+            <li>Player authentication and session management</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — ESTIMATION
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Redis Sorted Set Memory Footprint</h3>
           <ul>
-            <li>100M players × (8 bytes score + 8 bytes player_id + 40 bytes overhead) = ~5.6GB for the sorted set — fits in one Redis node RAM but is large</li>
-            <li>10M score updates/day = ~115 updates/sec average; peak 10K/sec during game completion spike</li>
-            <li>Redis ZADD: 500K ops/sec single-threaded → can handle peak comfortably on one node</li>
-            <li>Sharded across 10 nodes: 10M players/node → 560MB/node → very manageable</li>
+            <li><strong>Per-entry cost:</strong> score (8 bytes, IEEE-754 double) + member pointer (8 bytes) + skiplist node metadata (~24 bytes) + hash table entry (~16 bytes) ≈ <strong>56 bytes per player</strong></li>
+            <li><strong>100M players global ZSET:</strong> 100M × 56 bytes = <strong>~5.6GB</strong> — fits in a single Redis node (64GB RAM typical), but leaves little headroom</li>
+            <li><strong>10 shards of 10M players each:</strong> 10M × 56 bytes = <strong>560MB per shard</strong> — very comfortable, leaves room for other keys and OS overhead</li>
+            <li><strong>Weekly + monthly leaderboards (active players only ~10M):</strong> 10M × 56 bytes = 560MB each — negligible</li>
           </ul>
+
+          <h3>Throughput</h3>
+          <ul>
+            <li><strong>Score updates:</strong> 10B/day = 115,700/sec average; burst to 500K/sec at end-of-match windows</li>
+            <li><strong>Single Redis node ZADD capacity:</strong> ~500K ops/sec (single-threaded, CPU-bound)</li>
+            <li><strong>Kafka ingestion rate needed:</strong> 500K msgs/sec at burst — 50 partitions × 10K msgs/sec each</li>
+            <li><strong>Read QPS:</strong> Top-100 cached, so ~1K cache misses/sec; player rank lookups ~50K/sec (ZREVRANK is O(log N))</li>
+            <li><strong>Network bandwidth for score updates:</strong> 500K/sec × 64 bytes per message ≈ 32MB/sec — trivial</li>
+          </ul>
+
+          <h3>Latency Budget for Rank Lookup</h3>
+          <ul>
+            <li>API server → Redis ZREVRANK: ~0.5ms (local datacenter)</li>
+            <li>Redis ZREVRANK for 100M ZSET: O(log 100M) = ~27 comparisons → &lt;0.1ms CPU</li>
+            <li>Player metadata enrichment (Redis hash lookup): ~0.3ms</li>
+            <li>Total: ~1ms p50, &lt;5ms p99 — well within 20ms budget</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <strong>L6 signal:</strong> The interviewer wants to see you do the 5.6GB calculation unprompted. It's the pivotal number — small enough for one node (so why shard?), but large enough to cause ops pain (single point of failure, 5GB RDB snapshot takes time, no horizontal write scaling). Sharding is about <em>resilience and write throughput</em>, not just memory.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           S — SCHEMA
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Redis Sorted Set (primary leaderboard)
-// Key: leaderboard:{gameId}:{period}  e.g., leaderboard:fortnite:weekly:2024-W52
-// Score: player score (double)
-// Member: player_id
 
-// Redis key operations:
-// ZADD leaderboard:fortnite:global {score} {playerId}      -- O(log N)
-// ZRANK leaderboard:fortnite:global {playerId}             -- O(log N), 0-indexed
-// ZSCORE leaderboard:fortnite:global {playerId}            -- O(1)
-// ZREVRANGE leaderboard:fortnite:global 0 99 WITHSCORES   -- O(log N + M) top 100
+          <h3>Redis Data Model (Hot Tier — Leaderboard Engine)</h3>
+          <pre><code class="language-java">// ── Global all-time leaderboard (one ZSET per game) ──────────────────
+// Key:    leaderboard:{gameId}:global
+// Score:  cumulative player score (double)
+// Member: player_id (string)
+// Size:   100M entries ≈ 5.6GB
+//
+// Key operations:
+//   ZADD leaderboard:fortnite:global GT {score} {playerId}   // GT: only update if new > current; O(log N)
+//   ZREVRANK leaderboard:fortnite:global {playerId}          // 0-indexed rank (0 = #1); O(log N)
+//   ZSCORE leaderboard:fortnite:global {playerId}            // current score; O(1)
+//   ZREVRANGE leaderboard:fortnite:global 0 99 WITHSCORES    // top 100; O(log N + 100)
+//   ZCARD leaderboard:fortnite:global                        // total players; O(1)
+//   ZREVRANGEBYSCORE leaderboard:fortnite:global +inf {min}  // players above score threshold
 
-// Player profile (PostgreSQL — source of truth for scores)
-players: player_id, username, all_time_score, weekly_score, monthly_score, last_updated
+// ── Time-windowed leaderboards (active players only) ─────────────────
+// Key:    leaderboard:{gameId}:weekly:{YYYY-Www}   e.g., leaderboard:fortnite:weekly:2024-W52
+// Key:    leaderboard:{gameId}:monthly:{YYYY-MM}   e.g., leaderboard:fortnite:monthly:2024-12
+// TTL:    SET leaderboard:...:weekly:... EX 2592000 (30 days after period ends)
+// Score:  score earned WITHIN that time window (not cumulative all-time)
+// Note:   ZINCRBY for incremental — adds delta to existing score
 
-// Redis populated from DB on startup; DB is the durable source of truth</code></pre>
+// ── Player metadata cache (lookup after ZRANGE enrichment) ────────────
+// Key:    player:{playerId}:meta
+// Type:   Redis Hash
+// Fields: username, avatar_url, country
+// TTL:    3600 (1 hour — profile changes are rare)
+
+// ── Friend graph (for friends leaderboard) ───────────────────────────
+// Key:    friends:{playerId}
+// Type:   Redis Set (or Bloom filter for large friend lists)
+// Members: friend player IDs
+// TTL:    600 (10 minutes — friend list changes infrequently)
+// Size:   avg 200 friends × 8 bytes = 1.6KB per player
+
+// ── Top-100 global cache (99% of homepage requests) ──────────────────
+// Key:    leaderboard:{gameId}:top100:cache
+// Type:   Redis String (serialized JSON of top-100 list)
+// TTL:    5 seconds (near-real-time freshness)
+// Refresh: background worker updates every 5 seconds via ZREVRANGE</code></pre>
+
+          <h3>PostgreSQL Schema (Cold/Durable Tier — Source of Truth)</h3>
+          <pre><code class="language-java">-- Player scores (durable record — Redis is derived from this)
+CREATE TABLE player_scores (
+    player_id       BIGINT          NOT NULL,
+    game_id         VARCHAR(64)     NOT NULL,
+    all_time_score  BIGINT          NOT NULL DEFAULT 0,
+    weekly_score    BIGINT          NOT NULL DEFAULT 0,
+    monthly_score   BIGINT          NOT NULL DEFAULT 0,
+    week_key        VARCHAR(8)      NOT NULL,   -- e.g., '2024-W52'
+    month_key       VARCHAR(7)      NOT NULL,   -- e.g., '2024-12'
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    PRIMARY KEY (player_id, game_id)
+);
+CREATE INDEX idx_player_scores_game_alltime ON player_scores(game_id, all_time_score DESC);
+
+-- Score event log (immutable audit trail for cheat detection + Redis rebuild)
+CREATE TABLE score_events (
+    event_id        UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    player_id       BIGINT          NOT NULL,
+    game_id         VARCHAR(64)     NOT NULL,
+    match_id        UUID            NOT NULL,
+    score_delta     INT             NOT NULL,         -- points earned this match
+    score_after     BIGINT          NOT NULL,         -- cumulative score after event
+    validated_at    TIMESTAMPTZ,                      -- NULL if pending anti-cheat
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_score_events_player ON score_events(player_id, created_at DESC);
+CREATE INDEX idx_score_events_match  ON score_events(match_id);
+
+-- Players (profile — enriches leaderboard display)
+CREATE TABLE players (
+    player_id       BIGINT          PRIMARY KEY,
+    username        VARCHAR(64)     NOT NULL UNIQUE,
+    avatar_url      VARCHAR(512),
+    country_code    CHAR(2),
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT now()
+);</code></pre>
+
+          <div class="callout callout--info">
+            <strong>Why PostgreSQL for the source of truth?</strong> Redis is an in-memory cache. If a Redis node fails without RDB/AOF persistence, scores are lost. The PostgreSQL <code>score_events</code> table lets us rebuild the Redis ZSET by replaying events. Writes go to both — Redis for low-latency reads, PostgreSQL for durability. This is the standard "write-through cache" pattern.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           H — HIGH-LEVEL DESIGN
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Architecture Diagram</h3>
+          <!-- Architecture SVG diagram -->
+          <svg viewBox="0 0 860 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Gaming leaderboard architecture: score events flow through Kafka to Score Processor which writes to Redis ZSET and PostgreSQL; Leaderboard API reads from Redis; CDN caches top-100" style="width:100%;max-width:860px;display:block;margin:var(--space-4) auto;border:1px solid var(--color-border);border-radius:var(--radius-md);background:#1a1a2e;padding:var(--space-4)">
+
+            <!-- Title -->
+            <text x="430" y="28" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="13" font-weight="600">Gaming Leaderboard — Architecture</text>
+
+            <!-- Game Servers cluster -->
+            <rect x="20" y="55" width="120" height="70" rx="8" fill="#2d3748" stroke="#4a5568" stroke-width="1.5"/>
+            <text x="80" y="78" text-anchor="middle" fill="#e2e8f0" font-family="Inter, sans-serif" font-size="11" font-weight="600">Game Servers</text>
+            <text x="80" y="95" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Match End Events</text>
+            <text x="80" y="111" text-anchor="middle" fill="#68d391" font-family="Inter, sans-serif" font-size="10">500K events/sec</text>
+
+            <!-- Arrow: Game Servers → Kafka -->
+            <line x1="140" y1="90" x2="190" y2="90" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- Kafka -->
+            <rect x="190" y="55" width="110" height="70" rx="8" fill="#2d3748" stroke="#f6e05e" stroke-width="1.5"/>
+            <text x="245" y="78" text-anchor="middle" fill="#f6e05e" font-family="Inter, sans-serif" font-size="11" font-weight="600">Kafka</text>
+            <text x="245" y="95" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">score-events topic</text>
+            <text x="245" y="111" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">50 partitions</text>
+
+            <!-- Arrow: Kafka → Score Processor -->
+            <line x1="300" y1="90" x2="350" y2="90" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- Score Processor -->
+            <rect x="350" y="55" width="130" height="70" rx="8" fill="#2d3748" stroke="#76e4f7" stroke-width="1.5"/>
+            <text x="415" y="78" text-anchor="middle" fill="#76e4f7" font-family="Inter, sans-serif" font-size="11" font-weight="600">Score Processor</text>
+            <text x="415" y="95" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">ZADD / ZINCRBY</text>
+            <text x="415" y="111" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Validates + writes</text>
+
+            <!-- Arrow: Score Processor → Redis Cluster (down-right) -->
+            <line x1="480" y1="90" x2="555" y2="90" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- Redis Sorted Set cluster -->
+            <rect x="555" y="55" width="130" height="70" rx="8" fill="#2d3748" stroke="#fc8181" stroke-width="1.5"/>
+            <text x="620" y="75" text-anchor="middle" fill="#fc8181" font-family="Inter, sans-serif" font-size="11" font-weight="600">Redis Cluster</text>
+            <text x="620" y="91" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">10× Sorted Sets</text>
+            <text x="620" y="107" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">10M players/shard</text>
+            <text x="620" y="119" text-anchor="middle" fill="#68d391" font-family="Inter, sans-serif" font-size="9">ZREVRANK O(log N)</text>
+
+            <!-- Score Processor → PostgreSQL (down) -->
+            <line x1="415" y1="125" x2="415" y2="185" stroke="#4a5568" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGray)"/>
+
+            <!-- PostgreSQL -->
+            <rect x="350" y="185" width="130" height="60" rx="8" fill="#2d3748" stroke="#b794f4" stroke-width="1.5"/>
+            <text x="415" y="207" text-anchor="middle" fill="#b794f4" font-family="Inter, sans-serif" font-size="11" font-weight="600">PostgreSQL</text>
+            <text x="415" y="223" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">score_events (durable)</text>
+            <text x="415" y="237" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Source of truth</text>
+
+            <!-- Redis → Leaderboard API -->
+            <line x1="620" y1="125" x2="620" y2="195" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- Leaderboard API -->
+            <rect x="555" y="195" width="130" height="60" rx="8" fill="#2d3748" stroke="#76e4f7" stroke-width="1.5"/>
+            <text x="620" y="217" text-anchor="middle" fill="#76e4f7" font-family="Inter, sans-serif" font-size="11" font-weight="600">Leaderboard API</text>
+            <text x="620" y="233" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">GET /rank, /top-100</text>
+            <text x="620" y="249" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">/friends</text>
+
+            <!-- Leaderboard API → CDN Cache -->
+            <line x1="685" y1="225" x2="735" y2="225" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- CDN Cache -->
+            <rect x="735" y="195" width="105" height="60" rx="8" fill="#2d3748" stroke="#68d391" stroke-width="1.5"/>
+            <text x="787" y="217" text-anchor="middle" fill="#68d391" font-family="Inter, sans-serif" font-size="11" font-weight="600">CDN Cache</text>
+            <text x="787" y="233" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Top-100 only</text>
+            <text x="787" y="249" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">TTL: 5 seconds</text>
+
+            <!-- CDN → Client -->
+            <line x1="787" y1="255" x2="787" y2="305" stroke="#4a5568" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+            <!-- Client -->
+            <rect x="735" y="305" width="105" height="50" rx="8" fill="#2d3748" stroke="#a0aec0" stroke-width="1.5"/>
+            <text x="787" y="327" text-anchor="middle" fill="#e2e8f0" font-family="Inter, sans-serif" font-size="11" font-weight="600">Game Client</text>
+            <text x="787" y="343" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">&lt;50ms p99</text>
+
+            <!-- Anti-Cheat Service (below Score Processor) -->
+            <rect x="190" y="185" width="120" height="55" rx="8" fill="#2d3748" stroke="#f6ad55" stroke-width="1.5"/>
+            <text x="250" y="207" text-anchor="middle" fill="#f6ad55" font-family="Inter, sans-serif" font-size="11" font-weight="600">Anti-Cheat</text>
+            <text x="250" y="223" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Score spike detection</text>
+            <text x="250" y="237" text-anchor="middle" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Rate limiting</text>
+            <!-- Kafka → Anti-Cheat (separate consumer) -->
+            <line x1="245" y1="125" x2="245" y2="185" stroke="#4a5568" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGray)"/>
+
+            <!-- Legend -->
+            <line x1="30" y1="370" x2="60" y2="370" stroke="#4a5568" stroke-width="1.5"/>
+            <text x="65" y="374" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Sync write</text>
+            <line x1="130" y1="370" x2="160" y2="370" stroke="#4a5568" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="165" y="374" fill="#a0aec0" font-family="Inter, sans-serif" font-size="10">Async / fire-and-forget</text>
+
+            <!-- Arrowhead marker -->
+            <defs>
+              <marker id="arrowGray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="#4a5568"/>
+              </marker>
+            </defs>
+          </svg>
+
+          <h3>Write Path: Score Update</h3>
+          <ol>
+            <li><strong>Game server publishes match result</strong> to Kafka topic <code>score-events</code> (key = player_id for sticky partition routing)</li>
+            <li><strong>Score Processor consumers</strong> (one consumer group per game) read events, validate them against anti-cheat rules, then:
+              <ul>
+                <li>Execute <code>ZADD leaderboard:{gameId}:global GT {newScore} {playerId}</code> in Redis — "GT" flag means only update if the new score is greater than current (for best-score semantics) or <code>ZINCRBY</code> for cumulative</li>
+                <li>Write <code>INSERT INTO score_events ...</code> to PostgreSQL (async, batched every 100ms)</li>
+              </ul>
+            </li>
+            <li><strong>Top-100 background job</strong> runs every 5 seconds: <code>ZREVRANGE leaderboard:{gameId}:global 0 99 WITHSCORES</code>, enriches with usernames, writes JSON to <code>leaderboard:{gameId}:top100:cache</code></li>
+          </ol>
+
+          <h3>Read Path: Top-100 Query (99% of traffic)</h3>
+          <ol>
+            <li>Client requests <code>GET /v1/leaderboard/fortnite/top?limit=100</code></li>
+            <li>CDN checks for cached response (TTL: 5s) → cache hit returns in &lt;10ms</li>
+            <li>On cache miss: API server reads <code>leaderboard:fortnite:top100:cache</code> from Redis → still &lt;5ms</li>
+            <li>On Redis key miss: re-execute ZREVRANGE + username enrichment → &lt;20ms</li>
+          </ol>
+
+          <h3>Read Path: Single Player Rank Lookup</h3>
+          <ol>
+            <li>Client requests <code>GET /v1/leaderboard/fortnite/rank?playerId=abc123</code></li>
+            <li>Execute <code>ZREVRANK leaderboard:fortnite:global abc123</code> → returns 0-based rank → O(log N) ≈ 27 ops for 100M entries</li>
+            <li>Execute <code>ZSCORE leaderboard:fortnite:global abc123</code> → score in O(1)</li>
+            <li>Percentile: <code>rank / ZCARD * 100</code> — ZCARD is O(1), rank from step 2</li>
+            <li>Enrich: HGETALL <code>player:abc123:meta</code> for display name</li>
+            <li>Total: 3 Redis commands, ~1ms round-trip</li>
+          </ol>
+
+          <h3>Friends Leaderboard</h3>
+          <p>This is the graph intersection problem: given player P's friend list F, find each friend's score and rank them. Two approaches:</p>
           <ul>
-            <li><strong>Score Update Flow:</strong> Game server → Score Update Service → atomically update PostgreSQL + ZADD to Redis sorted set.</li>
-            <li><strong>Top-N Query:</strong> ZREVRANGE leaderboard:game:global 0 99 from Redis. Enrich with player usernames from Redis hash (cached) or PostgreSQL.</li>
-            <li><strong>Rank Lookup:</strong> ZREVRANK leaderboard:game:global {playerId} → returns 0-based rank. Add 1 for display rank.</li>
-            <li><strong>Friend Leaderboard:</strong> Fetch friend list from social graph. For each friend, ZSCORE to get score. Sort in application layer. (For large friend counts: create a temporary sorted set with ZUNIONSTORE.)</li>
-            <li><strong>Weekly reset:</strong> Weekly leaderboard keys have week suffix. New key each week. Old key expires after 1 month (Redis TTL).</li>
+            <li><strong>Per-friend ZSCORE (recommended for ≤500 friends):</strong> Fetch friend list from Redis Set (<code>friends:{playerId}</code>), pipeline 200 ZSCORE calls (single round-trip via Redis pipeline), sort result in application layer. O(F log F) where F = friend count. Always fresh.</li>
+            <li><strong>ZINTERSTORE (for ad-hoc):</strong> Create a temp ZSET <code>friends-lb:{playerId}:{timestamp}</code> by intersecting the global ZSET with the friends set via <code>ZINTERSTORE</code>. This operation is O(N × log M) where N=friends, M=global ZSET size. For 200 friends in a 100M ZSET: O(200 × 27) = O(5400) — fine. Then ZREVRANGE the temp key. But creating temp keys per-request at scale is wasteful; pipelined ZSCORE is cleaner.</li>
           </ul>
+
+          <div class="callout callout--warning">
+            <strong>L6 trap question:</strong> "Why not maintain a dedicated sorted set per user for friends?" Because with 100M players averaging 200 friends each, every score update would require updating up to 200 friend-leaderboard ZSETs. 115K score updates/sec × 200 = 23M Redis writes/sec — crushes the cluster. Per-request ZSCORE pipeline is the right call.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           A — APIs
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">POST /v1/scores                         // update player score
-  Body: { gameId, playerId, newScore, period: "global|weekly|monthly" }
+          <pre><code class="language-java">// ── Score Update (called by game servers, not clients) ────────────────
+POST /internal/v1/scores
+Authorization: Service-Token {internal-token}
+Content-Type: application/json
 
-GET  /v1/leaderboard/{gameId}/top?limit=100&period=weekly
-  Returns: [{ rank, playerId, username, score }]
+Body: {
+  "gameId":     "fortnite",
+  "playerId":   "player_abc123",
+  "matchId":    "match_xyz789",        // for deduplication + audit
+  "scoreDelta": 450,                   // points earned this match
+  "period":     ["global", "weekly", "monthly"]  // which leaderboards to update
+}
 
-GET  /v1/leaderboard/{gameId}/rank?playerId={}&period=global
-  Returns: { rank, score, percentile }
+Response 202 Accepted:
+{
+  "eventId":    "evt_uvw456",          // idempotency key — re-sending same matchId is a no-op
+  "queued":     true                   // processed asynchronously via Kafka
+}
 
-GET  /v1/leaderboard/{gameId}/friends?playerId={}&period=weekly
-  Returns: [{ rank, playerId, username, score }]</code></pre>
+// ── Global Top-N Leaderboard ──────────────────────────────────────────
+GET /v1/leaderboard/{gameId}/top
+  ?limit=100          // default 100, max 1000
+  &period=weekly      // global | weekly | monthly  (default: global)
+  &offset=0           // pagination
+
+Response 200 OK:
+Cache-Control: public, max-age=5
+{
+  "gameId":   "fortnite",
+  "period":   "weekly",
+  "weekKey":  "2024-W52",
+  "total":    10000000,              // total players in this leaderboard
+  "players": [
+    { "rank": 1, "playerId": "player_abc", "username": "ProGamer99", "score": 98500, "country": "US" },
+    { "rank": 2, "playerId": "player_def", "username": "SnipeKing",  "score": 97200, "country": "KR" },
+    ...
+  ]
+}
+
+// ── Single Player Rank Lookup ─────────────────────────────────────────
+GET /v1/leaderboard/{gameId}/rank/{playerId}
+  ?period=global
+
+Response 200 OK:
+{
+  "playerId":   "player_abc123",
+  "username":   "ProGamer99",
+  "rank":       1042,              // 1-indexed
+  "score":      45200,
+  "percentile": 98.96,             // top 1.04% → "You're in the top 2%"
+  "totalPlayers": 100000000
+}
+
+// ── Friends Leaderboard ───────────────────────────────────────────────
+GET /v1/leaderboard/{gameId}/friends/{playerId}
+  ?period=weekly
+  &limit=50
+
+Response 200 OK:
+{
+  "viewerRank": 3,                 // rank among friends (not global)
+  "friends": [
+    { "friendRank": 1, "playerId": "friend_001", "username": "BestFriend", "score": 72000, "globalRank": 89 },
+    { "friendRank": 2, "playerId": "friend_002", "username": "CoopGamer",  "score": 65000, "globalRank": 210 },
+    { "friendRank": 3, "playerId": "player_abc123", "username": "ProGamer99", "score": 45200, "globalRank": 1042 },
+    ...
+  ]
+}
+
+// ── Score History (async, uses PostgreSQL) ────────────────────────────
+GET /v1/players/{playerId}/score-history
+  ?gameId=fortnite
+  &from=2024-12-01
+  &to=2024-12-31
+
+Response 200 OK:
+{
+  "events": [
+    { "matchId": "match_xyz", "scoreDelta": 450, "scoreAfter": 45200, "timestamp": "2024-12-28T14:32:00Z" },
+    ...
+  ]
+}</code></pre>
+
+          <div class="callout callout--tip">
+            <strong>Design note — idempotency on score updates:</strong> Game servers can crash and retry. The <code>matchId</code> field is the idempotency key. The Score Processor checks if <code>matchId</code> exists in PostgreSQL before processing. If yes, ack the Kafka message and skip. This prevents double-counting a score from a retried message.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DEEP DIVE
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Sharded Leaderboard for 100M Players<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive
+          <span class="reshaded-step__letter">10–15 min</span>
+        </h2>
         <div class="content-section__body">
-          <p><strong>Problem:</strong> Single Redis sorted set with 100M members = 5.6GB. While it fits in memory, a single Redis node has throughput limits (~500K ops/sec). For games with burst score updates (e.g., 10K/sec at end-of-match), sharding helps.</p>
-          <p><strong>Shard by score range:</strong></p>
+
+          <h3>1. Redis Sorted Set Internals: Why Skiplist + Hash Table?</h3>
+
+          <div class="callout callout--info">
+            <strong>L6 insight — Skiplist vs B-tree:</strong> Redis ZSET uses a <em>skiplist</em>, not a B-tree. The reason: a skiplist can be augmented with per-node subtree sizes. Each skiplist node stores the number of nodes "below" it in its tower. ZRANK then becomes O(log N) by accumulating these counts as it traverses down — no full scan needed. A B-tree cannot give you a rank this efficiently without additional bookkeeping. This "order statistics tree" property is the entire reason ZRANK is O(log N) rather than O(N).
+          </div>
+
+          <p>Redis Sorted Set maintains <strong>two parallel data structures</strong>:</p>
           <ul>
-            <li>Shard 0: scores 0–999 (leaderboard:game:shard:0)</li>
-            <li>Shard 1: scores 1000–9999</li>
-            <li>Shard 2: scores 10000–99999</li>
-            <li>Shard 3: scores 100000+ (top players)</li>
+            <li><strong>Hash table</strong> (<code>member → score</code>): O(1) lookup for ZSCORE. Allows "what is player X's score?" to be answered without touching the skiplist at all.</li>
+            <li><strong>Skiplist</strong> (ordered by score, then member): O(log N) for ZADD, ZRANK, ZRANGE, ZREVRANGE. The skiplist supports efficient range queries that a hash table cannot.</li>
           </ul>
-          <p><strong>Score update:</strong> Determine shard from score, ZADD to that shard.</p>
-          <p><strong>Top-N query:</strong> Query top shard (Shard 3) for top N. If shard has fewer than N players, also query Shard 2, etc. Merge results in application layer.</p>
-          <p><strong>Rank lookup:</strong> Sum of (ZCARD of all higher shards) + ZREVRANK within own shard = global rank.</p>
-          <p><strong>Alternative: hash sharding:</strong> Shard by hash(player_id) % N. Top-N requires querying all shards and merging — O(shards × top_N) comparisons.</p>
+
+          <h4>Skiplist Memory Layout (simplified):</h4>
+          <pre><code class="language-java">// Skiplist node structure (from Redis source: t_zset.c)
+// Each node has a variable-height "tower" of forward pointers
+// Each forward pointer stores: (1) the next node at that level, (2) span — number of nodes skipped
+
+Level 3:  [HEAD] ─────────────────────────────────────► [score:10000] → NIL
+Level 2:  [HEAD] ───────────────► [score:5000] ────────► [score:10000] → NIL
+Level 1:  [HEAD] ──► [score:100] → [score:5000] → [score:8000] → [score:10000] → NIL
+Level 0:  [HEAD] → [s:10] → [s:100] → [s:500] → [s:5000] → [s:8000] → [s:10000] → NIL
+                    span=1    span=1    span=1    span=1    span=1     span=1
+
+// ZRANK("player_with_score_5000"):
+// Start at HEAD, level 3: span to score:10000 is 5 nodes → too far, drop to level 2
+// Level 2: span to score:5000 is 3 nodes → accumulated rank = 3
+// Return rank = 3 (0-indexed)
+// Total: O(log N) hops, each hop skips 2× more nodes on average</code></pre>
+
+          <p><strong>Memory per node:</strong></p>
+          <ul>
+            <li>Score: 8 bytes (IEEE-754 double)</li>
+            <li>Member string pointer + length: 8 + 8 bytes</li>
+            <li>Skiplist forward pointers: average 1.33 levels × (8 + 8 bytes per pointer+span) ≈ 21 bytes</li>
+            <li>Hash table entry: ~16 bytes</li>
+            <li>Allocator overhead: ~8 bytes</li>
+            <li><strong>Total ≈ 69 bytes per entry</strong> (vs the theoretical 56 bytes — allocator fragmentation adds ~20%)</li>
+          </ul>
+
+          <h3>2. Why ZRANGE is O(log N + M), Not O(M)</h3>
+          <p>The <code>log N</code> term is the cost to find the starting position in the skiplist (like a binary search). The <code>M</code> term is the cost to traverse the next M elements from that position. For <code>ZREVRANGE 0 99</code> (top 100): the start is always the head of the reversed list, so the O(log N) seek is effectively O(1) here — it just returns the last node and walks back 100 steps. Real cost: O(100) = O(M). This is why top-N queries are fast regardless of total set size.</p>
+
+          <h3>3. Sharding: When One Redis Instance Isn't Enough</h3>
+          <p>A single 100M-entry ZSET has three problems despite fitting in RAM:</p>
+          <ol>
+            <li><strong>Single point of failure:</strong> One Redis node goes down → leaderboard is unavailable</li>
+            <li><strong>RDB snapshot latency:</strong> 5.6GB snapshot takes 15–30 seconds during which writes can stall (copy-on-write overhead)</li>
+            <li><strong>Write throughput ceiling:</strong> Redis is single-threaded per core. 500K ZADD/sec is the hard limit. Burst at end-of-match can exceed this.</li>
+          </ol>
+
+          <h4>Strategy A: Score-Range Sharding (Recommended)</h4>
+          <pre><code class="language-java">// Shard assignment by score range:
+// Shard 0: scores 0–999         (casual players, ~60% of 100M = 60M players)
+// Shard 1: scores 1000–9999     (regular players, ~30% = 30M players)
+// Shard 2: scores 10000–99999   (competitive players, ~9% = 9M players)
+// Shard 3: scores 100000+        (elite players, ~1% = 1M players)
+
+// Keys:
+// lb:fortnite:global:shard:0   → 60M entries
+// lb:fortnite:global:shard:1   → 30M entries
+// lb:fortnite:global:shard:2   →  9M entries
+// lb:fortnite:global:shard:3   →  1M entries
+
+// WRITE: score event comes in → determine shard, ZADD to that shard
+// If score crosses threshold (e.g., 999→1000): ZREM from old shard, ZADD to new shard (atomic via Lua)
+
+// TOP-N READ: query shard 3 first (top 1M players)
+// For top-100: shard 3 always has enough → single Redis call. Done.
+// For top-1M: shard 3 + shard 2 → merge 1M + 9M, take top 1M
+
+// RANK LOOKUP for player with score 5000 (shard 1):
+// globalRank = ZCARD(shard3) + ZCARD(shard2) + ZREVRANK(shard1, playerId) + 1
+// = 1M + 9M + rank_within_shard + 1 → 3 Redis calls</code></pre>
+
+          <div class="callout callout--tip">
+            <strong>Why score-range beats hash sharding here:</strong> With hash sharding, every top-100 query fans out to all 10 shards. With score-range sharding, the top-100 query almost always hits only shard 3 (elite players). Given that 99% of leaderboard traffic is "show me the top 100," score-range sharding eliminates scatter-gather for the hottest query path.
+          </div>
+
+          <h4>Strategy B: Hash Sharding (Better for Write Balance)</h4>
+          <pre><code class="language-java">// Shard by hash(player_id) % 10
+// Each shard has ~10M players regardless of score distribution
+// Pros: perfectly balanced write load
+// Cons: top-N requires querying all 10 shards, merging 10 sorted lists (10-way merge)
+
+// Top-100 query with hash sharding:
+// For each shard i: ZREVRANGE lb:shard:{i} 0 99 WITHSCORES  → 10 parallel calls
+// In application: 10-way merge sort of 10 lists of 100 entries → take top 100
+// Cost: 10 Redis calls (parallel) + O(10 × 100 × log 10) merge ≈ trivial CPU
+// Latency: max(10 parallel Redis calls) ≈ same as 1 call since they're parallel</code></pre>
+
+          <h3>4. Near-Real-Time Updates: Per-Event vs Batched</h3>
+          <table style="width:100%;border-collapse:collapse;margin-top:var(--space-3)">
+            <thead><tr style="background:var(--color-surface-2)"><th style="padding:var(--space-2);text-align:left;border:1px solid var(--color-border)">Approach</th><th style="padding:var(--space-2);text-align:left;border:1px solid var(--color-border)">Latency</th><th style="padding:var(--space-2);text-align:left;border:1px solid var(--color-border)">Throughput</th><th style="padding:var(--space-2);text-align:left;border:1px solid var(--color-border)">Tradeoff</th></tr></thead>
+            <tbody>
+              <tr><td style="padding:var(--space-2);border:1px solid var(--color-border)">Per-event ZADD</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">&lt;500ms end-to-end</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">500K ops/sec per node</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">Real-time rank; higher write pressure on Redis</td></tr>
+              <tr><td style="padding:var(--space-2);border:1px solid var(--color-border)">Batch every 1 second</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">1–2 seconds stale</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">1M batched ZADDs/sec possible (pipeline)</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">Rank can lag by ~1s; pipelined writes are 10× more efficient</td></tr>
+              <tr><td style="padding:var(--space-2);border:1px solid var(--color-border)">Batch every 10 seconds</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">10 seconds stale</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">Burst handling; Redis load very smooth</td><td style="padding:var(--space-2);border:1px solid var(--color-border)">Acceptable for weekly leaderboard; unacceptable for in-game real-time</td></tr>
+            </tbody>
+          </table>
+          <p style="margin-top:var(--space-3)"><strong>Recommended:</strong> Per-event updates via Kafka → Score Processor. The Kafka buffer absorbs burst traffic (500K/sec end-of-match spike) and Score Processor consumers pace the writes to Redis at a sustainable rate. If all 50K players finish a match simultaneously, Kafka queues the events and Redis sees a smooth stream at its 500K/sec capacity.</p>
+
+          <h3>5. Percentile Rank: "You're in the Top 3%"</h3>
+          <p>This is a common product requirement. Implementation:</p>
+          <pre><code class="language-java">// percentile = (1 - rank / total) × 100
+// Where rank = ZREVRANK (0-indexed, so rank 0 = best player = 100th percentile)
+
+// Example: rank=2,999,999 out of 100,000,000
+// percentile = (1 - 2999999/100000000) × 100 = (1 - 0.03) × 100 = 97%
+// Display: "You're in the top 3%"  (100 - percentile = 3)
+
+// Edge case: ZREVRANK returns null if player not in leaderboard → treat as unranked
+// Both ZREVRANK and ZCARD are O(1) in Redis — no scan needed</code></pre>
+
+          <h3>6. Time-Windowed Leaderboards: Weekly Reset Strategy</h3>
+          <pre><code class="language-java">// Key naming encodes the time window:
+// leaderboard:fortnite:weekly:2024-W52   (ISO week number)
+// leaderboard:fortnite:monthly:2024-12
+
+// Score updates:
+// Score processor writes to BOTH the all-time ZSET and the current period ZSET.
+// Use ZINCRBY for weekly/monthly (incremental score since period start)
+// Use ZADD GT for all-time (best-ever score, never decrease)
+
+// Weekly reset:
+// DO NOT: ZREMRANGEBYRANK the existing key (blocks Redis while clearing 10M entries)
+// DO: Simply start writing to the new key (leaderboard:fortnite:weekly:2025-W01)
+//     Set TTL on old key: EXPIRE leaderboard:fortnite:weekly:2024-W52 2592000 (30 days)
+//     Old key auto-expires, no manual cleanup needed
+
+// Determining current week key (in Score Processor):
+String weekKey = "leaderboard:fortnite:weekly:" +
+    LocalDate.now().format(DateTimeFormatter.ofPattern("YYYY-'W'ww"));
+
+// New week → new key → all players start at score 0 implicitly
+// First ZINCRBY of the new week creates the entry automatically</code></pre>
+
+          <h3>7. Cheat Detection and Score Validation</h3>
+          <p>The leaderboard is only as trustworthy as the score update pipeline. L6 candidates are expected to address this proactively:</p>
+          <ul>
+            <li><strong>Server-side score calculation:</strong> Game servers compute final scores — client never sends its own score. Clients report match actions (kills, objectives), server validates and computes score. Never trust client input for score values.</li>
+            <li><strong>Rate limiting score updates:</strong> A player can only submit one score per completed match. The Score Processor checks: "has this player submitted a score for this matchId?" (idempotency key in Redis with TTL). Duplicate submissions are rejected.</li>
+            <li><strong>Spike detection:</strong> Anti-Cheat consumer group reads the same Kafka topic. For each event: if <code>scoreDelta &gt; MAX_SCORE_PER_MATCH</code> or <code>scoreAfter &gt; player's historical_max × SPIKE_FACTOR</code>, flag for review and hold the update. Score is not applied to the leaderboard until the event is either cleared or rejected.</li>
+            <li><strong>Retroactive invalidation:</strong> If a cheat is confirmed post-facto, Score Processor replays the player's event log minus the cheated events, recomputes their true score, and ZADD GT with the corrected score.</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <strong>The score-update race condition:</strong> Two game servers submit score events for the same player simultaneously (different matches). Redis ZADD is atomic per command, but the "remove from old shard + add to new shard" operation for score-range sharding is two commands. Use a Lua script for atomic cross-shard moves:
+          </div>
+
+          <pre><code class="language-java">// Lua script for atomic shard-boundary score update
+// Runs on the Redis node holding the leaderboard key
+-- KEYS[1] = old shard key, KEYS[2] = new shard key
+-- ARGV[1] = player_id, ARGV[2] = new_score
+local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+if removed == 1 then
+    redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
+end
+return removed
+
+// In Java (Jedis):
+String luaScript = "...";
+jedis.eval(luaScript, Arrays.asList(oldShardKey, newShardKey),
+           Arrays.asList(playerId, String.valueOf(newScore)));</code></pre>
+
+          <h3>8. Cache Strategy for Top-100</h3>
+          <p>The top-100 global leaderboard is the highest-traffic, lowest-selectivity query. It's the same for all users requesting it. This is the perfect CDN cache candidate:</p>
+          <ul>
+            <li><strong>Cache key:</strong> <code>/v1/leaderboard/{gameId}/top?period=global</code> — no user-specific component</li>
+            <li><strong>TTL:</strong> 5 seconds — top rank changes are exciting but players tolerate ~5s staleness</li>
+            <li><strong>Cache warming:</strong> A background cron job (runs every 5s) pre-computes the top-100, enriches with usernames, serializes to JSON, and pushes to both Redis cache and CDN. No request ever needs to do a cold ZREVRANGE.</li>
+            <li><strong>Invalidation:</strong> If a player in the top 100 achieves a new rank, the background job will catch it within 5 seconds. No event-driven invalidation needed — polling is sufficient given the 5s TTL matches the polling interval.</li>
+          </ul>
+          <p><strong>Cache hit rate math:</strong> 50M daily reads / 86,400 seconds = 578 reads/sec. With 5s TTL, cache is refreshed 17,280 times/day. Each cache entry serves 578 × 5 ≈ 2,890 requests. Cache hit rate: (2890 - 1) / 2890 ≈ <strong>99.97% cache hit rate</strong> for top-100 queries.</p>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — EVALUATE
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">✅</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Does it meet requirements?</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Requirement</th><th>Solution</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Score update &lt;50ms acknowledged</td>
+                <td>Kafka accepts in &lt;5ms; async processing to Redis within 500ms</td>
+                <td>✅ 202 Accepted pattern</td>
+              </tr>
+              <tr>
+                <td>Rank lookup &lt;20ms</td>
+                <td>ZREVRANK O(log N) ≈ &lt;1ms; with enrichment ~5ms p99</td>
+                <td>✅ Comfortably within budget</td>
+              </tr>
+              <tr>
+                <td>Top-100 &lt;50ms</td>
+                <td>CDN cache: ~5ms; Redis cache: ~3ms; cold: ~20ms</td>
+                <td>✅ 99.97% served from cache</td>
+              </tr>
+              <tr>
+                <td>Friends leaderboard &lt;100ms</td>
+                <td>200 pipelined ZSCORE calls: ~5ms; sort: &lt;1ms</td>
+                <td>✅ Pipeline collapses N round-trips to 1</td>
+              </tr>
+              <tr>
+                <td>100M players, 500K writes/sec burst</td>
+                <td>Kafka absorbs burst; Score Processor fans out to 10 Redis shards at 50K/sec each</td>
+                <td>✅ Horizontally scalable</td>
+              </tr>
+              <tr>
+                <td>Weekly/monthly windows</td>
+                <td>Separate ZSET per time window; ZINCRBY for incremental; key expiry for cleanup</td>
+                <td>✅ No manual reset needed</td>
+              </tr>
+            </tbody>
+          </table></div>
+
+          <h3>Edge Cases and Failure Modes</h3>
           <ul>
-            <li><strong>Score tie-breaking:</strong> Two players with the same score: ZADD uses lexicographic ordering of member names. For fair tie-breaking, encode time-of-achievement in score (e.g., score × 10000 + (MAX_TIME - time_achieved)).</li>
-            <li><strong>Weekly reset:</strong> At week boundary, create a new sorted set key. Don't clear the old key — use expiry. Use Redis keyspace notifications to trigger reset logic.</li>
+            <li><strong>Tie-breaking:</strong> Redis ZSET with equal scores orders members lexicographically by member name. For gaming fairness, encode time-of-achievement in the score: <code>effectiveScore = score * 1_000_000L + (Long.MAX_VALUE - achievedAtUnixMs)</code>. Players who achieved the score earlier rank higher. The precision factor (1M) means scores up to 9,223 trillion are safe — no overflow for realistic game scores.</li>
+            <li><strong>Redis node failure:</strong> Redis Sentinel or Cluster handles failover in ~30 seconds. During failover, rank queries fail-open (return HTTP 503 with cached last-known top-100). Score updates queue in Kafka — consumed after Redis recovers. No data loss because PostgreSQL is the source of truth.</li>
+            <li><strong>Score crossing a shard boundary:</strong> Handled atomically via Lua script (see Deep Dive §7). Without atomicity, a player could briefly appear in both shards or neither — causing incorrect global rank calculation.</li>
+            <li><strong>Player never played (no entry in ZSET):</strong> ZREVRANK returns nil → API returns 404 for rank lookup → frontend shows "Unranked." ZSCORE returns nil → don't include in friends leaderboard.</li>
+            <li><strong>Extremely large friend lists (celebrities, influencers with 10K+ friends):</strong> 10K ZSCORE calls pipelined is still a single Redis round-trip returning 10K values. O(10K) application sort is ~0.1ms. Still acceptable. Cap at 500 friends shown in friends leaderboard for UI reasons.</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DELIVER
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
         <div class="content-section__body">
-          <p>We designed a leaderboard handling 100M players with sub-100ms rank lookups. Key decisions: Redis Sorted Set for O(log N) all operations, score-range sharding for large datasets, application-layer merge for top-N queries, PostgreSQL as durable source of truth, and Redis TTL for time-windowed leaderboards.</p>
+          <p>We designed a gaming leaderboard handling <strong>100M players</strong> with <strong>sub-20ms rank lookups</strong> and <strong>500K score updates/sec</strong> burst capacity. The key architectural decisions:</p>
+          <ul>
+            <li><strong>Redis Sorted Set (ZSET)</strong> as the leaderboard engine — its skiplist structure gives O(log N) rank operations, which is fundamental to the design. ZRANK is not O(N) — this is the insight that separates senior candidates.</li>
+            <li><strong>Score-range sharding across 10 Redis nodes</strong> — distributes write load and eliminates the single point of failure, while keeping top-N queries to a single shard (the elite shard).</li>
+            <li><strong>Kafka as the write buffer</strong> — decouples game servers from the leaderboard pipeline, absorbs end-of-match bursts (500K/sec), and enables exactly-once score processing via idempotent matchId keys.</li>
+            <li><strong>PostgreSQL as the durable source of truth</strong> — Redis is a derived cache. Score events are immutable append-only records enabling Redis rebuild after failure, cheat investigation, and score history.</li>
+            <li><strong>5-second CDN cache for top-100</strong> — eliminates 99.97% of leaderboard read load from Redis with an RPC that only staleness is 5 seconds, which is the right product-engineering tradeoff for a live leaderboard.</li>
+            <li><strong>Pipelined ZSCORE for friends leaderboard</strong> — avoids the combinatorial explosion of maintaining per-user friend ZSETs (would require 23M Redis writes/sec).</li>
+          </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           TRADE-OFFS
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-offs
+        </h2>
         <div class="content-section__body">
           <div class="table-wrapper"><table>
-            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Decision</th>
+                <th>Chosen Approach</th>
+                <th>Alternative</th>
+                <th>Why Chosen / When to Switch</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td>Primary data structure</td><td>Redis Sorted Set</td><td>PostgreSQL with ORDER BY</td><td>Redis ZRANK is O(log N) vs PostgreSQL COUNT(*) which is O(N) without pre-computed rank column. Redis handles 500K ops/sec.</td></tr>
-              <tr><td>Sharding strategy</td><td>Score-range sharding</td><td>Hash sharding</td><td>Score-range: top-N query hits only the top shard (fast). Hash sharding: top-N requires querying all shards and merging.</td></tr>
-              <tr><td>Friend leaderboard</td><td>Per-request ZSCORE for each friend</td><td>Dedicated friend leaderboard sorted set</td><td>Friend lists are dynamic (constantly changing). Per-request ZSCORE is accurate. Dedicated sorted set requires maintenance on every friend add/remove.</td></tr>
+              <tr>
+                <td><strong>Rank data structure</strong></td>
+                <td>Redis Sorted Set (skiplist)</td>
+                <td>PostgreSQL <code>RANK() OVER (ORDER BY score DESC)</code> window function</td>
+                <td>Redis ZREVRANK is O(log N) ≈ 0.1ms. PostgreSQL window function re-ranks entire table at query time — O(N log N) without pre-computed rank column. For 100M rows: tens of seconds. Even with an index on score, COUNT(*) to find rank is O(N) without rank materialization. Redis wins by 3–4 orders of magnitude for rank lookup latency.</td>
+              </tr>
+              <tr>
+                <td><strong>Score update path</strong></td>
+                <td>Async via Kafka → Score Processor → Redis</td>
+                <td>Synchronous: game server directly calls ZADD on Redis</td>
+                <td>Async path: absorbs 500K/sec burst via Kafka queue; game server gets fast 202 ACK. Sync path: simpler but game server must wait for Redis; burst can overwhelm Redis directly. For a real-time game, the 500ms eventual consistency is acceptable — rank precision during the match isn't critical.</td>
+              </tr>
+              <tr>
+                <td><strong>Sharding strategy</strong></td>
+                <td>Score-range sharding (shard by score bucket)</td>
+                <td>Hash sharding (shard by hash(player_id) % N)</td>
+                <td>Score-range: top-N query hits only the highest shard (O(1) shards for top-100). Downside: uneven write distribution (casual players are in shard 0, which gets 60% of writes). Hash sharding: perfectly balanced writes; top-N requires all-shard fanout. Given 5:1 read:write ratio and top-100 being 90% of reads, score-range wins. Switch to hash if write throughput imbalance becomes a bottleneck.</td>
+              </tr>
+              <tr>
+                <td><strong>Friends leaderboard implementation</strong></td>
+                <td>Per-request pipelined ZSCORE for each friend</td>
+                <td>ZINTERSTORE to create a temporary per-user ZSET</td>
+                <td>Pipelined ZSCORE: O(F) Redis calls in one round-trip; always fresh; no cleanup needed. ZINTERSTORE: cleaner code but O(N × log M) where N=friends, M=global ZSET size; creates temporary keys at request time — memory pressure at scale. Pipelined ZSCORE wins for &lt;500 friends. ZINTERSTORE makes more sense if friend lists are stable and you can cache the intersected ZSET (TTL: 60s).</td>
+              </tr>
+              <tr>
+                <td><strong>Top-100 freshness</strong></td>
+                <td>5-second CDN/Redis cache with background refresh</td>
+                <td>Per-request ZREVRANGE (real-time)</td>
+                <td>Cache: 99.97% hit rate, &lt;10ms latency, protects Redis from thundering herd. Real-time: always accurate, but 578 uncacheable ZREVRANGE calls/sec hits Redis directly. For most games, 5-second stale top-100 is fine. Exception: esports live tournament finals where real-time rank matters — use WebSocket push with server-side subscription instead.</td>
+              </tr>
+              <tr>
+                <td><strong>Per-event vs batch score updates</strong></td>
+                <td>Per-event updates (Kafka consumer, one ZADD per event)</td>
+                <td>Batch every 1–10 seconds (accumulate deltas, one ZADD per batch)</td>
+                <td>Per-event: rank reflects last match result within 500ms. Batch: 10× more write-efficient via pipelined multi-ZADD; rank can lag by batch interval. For weekly/monthly leaderboards: batch is fine (rank doesn't need to update in seconds). For real-time in-game leaderboards: per-event is required. Our architecture supports both by changing the consumer commit interval.</td>
+              </tr>
+              <tr>
+                <td><strong>Redis durability</strong></td>
+                <td>AOF persistence + PostgreSQL source of truth</td>
+                <td>Redis RDB snapshots only (or no persistence)</td>
+                <td>AOF: every write is appended to disk; data loss window is at most 1 second (appendfsync everysec). RDB: full snapshot every N minutes; can lose minutes of updates. No persistence: Redis is pure cache, rebuild from PostgreSQL on failure (takes ~5 minutes for 100M entries). The right choice depends on rebuild tolerance. If Redis rebuild from Postgres takes &lt;5 min and 5-min stale leaderboard is acceptable: skip AOF, save ~30% write throughput.</td>
+              </tr>
             </tbody>
           </table></div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           JAVA IMPLEMENTATION
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">/**
- * ShardedLeaderboard — distributes a global leaderboard across multiple Redis
- * sorted sets using score-range sharding for efficient top-N queries.
- */
-public class ShardedLeaderboard {
 
-    private static final String SHARD_KEY_PREFIX = "leaderboard:shard:";
-    private static final int[] SHARD_THRESHOLDS = {1_000, 10_000, 100_000, Integer.MAX_VALUE};
+          <h3>LeaderboardService — Core ZSET Operations</h3>
+          <pre><code class="language-java">/**
+ * LeaderboardService — wraps Redis Sorted Set operations for a single leaderboard.
+ *
+ * All operations assume the Redis key format:
+ *   leaderboard:{gameId}:{period}  e.g., leaderboard:fortnite:global
+ *
+ * ZADD GT semantics: score only increases (best-score leaderboard).
+ * Use ZINCRBY variant for cumulative (total XP) leaderboards.
+ */
+public class LeaderboardService {
+
+    private static final String KEY_PREFIX = "leaderboard:";
+    private static final String PLAYER_META_PREFIX = "player:";
+    private static final String TOP100_CACHE_SUFFIX = ":top100:cache";
+    private static final int TOP100_CACHE_TTL_SECONDS = 5;
+    private static final int PLAYER_META_TTL_SECONDS = 3600;
 
     private final JedisPool jedisPool;
-    private final String leaderboardName;
 
-    public ShardedLeaderboard(JedisPool jedisPool, String leaderboardName) {
+    public LeaderboardService(JedisPool jedisPool) {
         this.jedisPool = jedisPool;
-        this.leaderboardName = leaderboardName;
     }
 
     /**
-     * Updates a player's score in the appropriate shard.
-     * If the score crosses a shard boundary, the player is moved between shards.
+     * Updates a player's score. Uses ZADD with GT flag — score only moves upward.
+     * For cumulative leaderboards, use updateScoreIncremental() instead.
+     *
+     * @param gameId   game identifier
+     * @param period   leaderboard period key (e.g., "global", "weekly:2024-W52")
+     * @param playerId player identifier
+     * @param newScore the player's new absolute score
+     * @return true if the score was updated (new score was higher than previous)
+     */
+    public boolean updateScore(String gameId, String period, String playerId, double newScore) {
+        String leaderboardKey = buildLeaderboardKey(gameId, period);
+        try (Jedis jedis = jedisPool.getResource()) {
+            // GT flag: only update if newScore > current stored score
+            // NX flag would mean "only add if not present" — don't use that here
+            Map&lt;String, Double&gt; scoreMap = Map.of(playerId, newScore);
+            long updatedCount = jedis.zadd(leaderboardKey, scoreMap,
+                ZAddParams.zAddParams().gt());
+            return updatedCount > 0;
+        }
+    }
+
+    /**
+     * Increments a player's score by delta (for cumulative / XP-based leaderboards).
+     *
+     * @param gameId     game identifier
+     * @param period     leaderboard period key
+     * @param playerId   player identifier
+     * @param scoreDelta points to add (must be positive)
+     * @return the new cumulative score after increment
+     */
+    public double incrementScore(String gameId, String period, String playerId, double scoreDelta) {
+        String leaderboardKey = buildLeaderboardKey(gameId, period);
+        try (Jedis jedis = jedisPool.getResource()) {
+            return jedis.zincrby(leaderboardKey, scoreDelta, playerId);
+        }
+    }
+
+    /**
+     * Returns the top-N players with their scores, enriched with display names.
+     * Reads from cache first; falls back to live ZREVRANGE on cache miss.
+     *
+     * @param gameId game identifier
+     * @param period leaderboard period key
+     * @param topN   number of players to return (1–1000)
+     * @return ordered list of PlayerRankEntry, rank 1 = best
+     */
+    public List&lt;PlayerRankEntry&gt; getTopPlayers(String gameId, String period, int topN) {
+        String leaderboardKey = buildLeaderboardKey(gameId, period);
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // ZREVRANGE returns members ordered highest score first
+            // 0-indexed: index 0 = rank 1, index (topN-1) = rank topN
+            List&lt;Tuple&gt; topEntries = jedis.zrevrangeWithScores(leaderboardKey, 0, topN - 1);
+
+            List&lt;PlayerRankEntry&gt; result = new ArrayList&lt;&gt;(topEntries.size());
+            int rank = 1;
+            for (Tuple entry : topEntries) {
+                String username = getPlayerUsername(jedis, entry.getElement());
+                result.add(new PlayerRankEntry(rank++, entry.getElement(), username, entry.getScore()));
+            }
+            return result;
+        }
+    }
+
+    /**
+     * Returns a single player's rank, score, and percentile.
+     * ZREVRANK is O(log N) — safe for 100M entries.
+     *
+     * @param gameId   game identifier
+     * @param period   leaderboard period key
+     * @param playerId player identifier
+     * @return PlayerRankInfo or empty if player has no score in this leaderboard
+     */
+    public Optional&lt;PlayerRankInfo&gt; getPlayerRank(String gameId, String period, String playerId) {
+        String leaderboardKey = buildLeaderboardKey(gameId, period);
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // ZREVRANK: 0-indexed rank where 0 = highest score (rank #1)
+            Long zeroIndexedRank = jedis.zrevrank(leaderboardKey, playerId);
+            if (zeroIndexedRank == null) {
+                return Optional.empty(); // player not in this leaderboard
+            }
+
+            Double score = jedis.zscore(leaderboardKey, playerId);
+            long totalPlayers = jedis.zcard(leaderboardKey);
+            long oneIndexedRank = zeroIndexedRank + 1;
+
+            // percentile: 99 = top 1%, 50 = top 50%, etc.
+            double percentile = (1.0 - (double) zeroIndexedRank / totalPlayers) * 100.0;
+
+            return Optional.of(new PlayerRankInfo(
+                playerId,
+                getPlayerUsername(jedis, playerId),
+                oneIndexedRank,
+                score != null ? score : 0.0,
+                percentile,
+                totalPlayers
+            ));
+        }
+    }
+
+    /**
+     * Returns the friends leaderboard by pipelining ZSCORE calls for each friend.
+     * Single Redis round-trip regardless of friend count (up to ~500 friends).
+     *
+     * @param gameId    game identifier
+     * @param period    leaderboard period key
+     * @param playerId  the player whose friends list to use
+     * @param friendIds list of friend player IDs
+     * @return friends ranked by score, viewer included in the list
+     */
+    public List&lt;PlayerRankEntry&gt; getFriendsLeaderboard(
+            String gameId, String period, String playerId, List&lt;String&gt; friendIds) {
+
+        String leaderboardKey = buildLeaderboardKey(gameId, period);
+        // Include the requesting player in the friends leaderboard
+        List&lt;String&gt; allParticipants = new ArrayList&lt;&gt;(friendIds);
+        if (!allParticipants.contains(playerId)) {
+            allParticipants.add(playerId);
+        }
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Pipeline all ZSCORE calls into a single round-trip
+            Pipeline pipeline = jedis.pipelined();
+            List&lt;Response&lt;Double&gt;&gt; scoreResponses = new ArrayList&lt;&gt;(allParticipants.size());
+            for (String participantId : allParticipants) {
+                scoreResponses.add(pipeline.zscore(leaderboardKey, participantId));
+            }
+            pipeline.sync(); // single round-trip to Redis
+
+            // Build (participantId, score) pairs, filtering unranked players
+            List&lt;double[]&gt; scoredParticipants = new ArrayList&lt;&gt;();
+            for (int index = 0; index &lt; allParticipants.size(); index++) {
+                Double participantScore = scoreResponses.get(index).get();
+                if (participantScore != null) {
+                    // store as [encodedScore, originalIndex] for sort-then-lookup
+                    scoredParticipants.add(new double[]{participantScore, index});
+                }
+            }
+
+            // Sort descending by score in application layer
+            scoredParticipants.sort((entryA, entryB) -> Double.compare(entryB[0], entryA[0]));
+
+            List&lt;PlayerRankEntry&gt; result = new ArrayList&lt;&gt;(scoredParticipants.size());
+            int friendRank = 1;
+            for (double[] participantEntry : scoredParticipants) {
+                int originalIndex = (int) participantEntry[1];
+                String participantId = allParticipants.get(originalIndex);
+                String username = getPlayerUsername(jedis, participantId);
+                result.add(new PlayerRankEntry(friendRank++, participantId, username, participantEntry[0]));
+            }
+            return result;
+        }
+    }
+
+    private String buildLeaderboardKey(String gameId, String period) {
+        return KEY_PREFIX + gameId + ":" + period;
+    }
+
+    private String getPlayerUsername(Jedis jedis, String playerId) {
+        String metaKey = PLAYER_META_PREFIX + playerId + ":meta";
+        String username = jedis.hget(metaKey, "username");
+        return username != null ? username : playerId; // fallback to ID if not cached
+    }
+
+    public record PlayerRankEntry(int rank, String playerId, String username, double score) {}
+
+    public record PlayerRankInfo(
+        String playerId, String username, long rank,
+        double score, double percentile, long totalPlayers
+    ) {}
+}</code></pre>
+
+          <h3>ShardedLeaderboardService — Score-Range Sharding for 100M Players</h3>
+          <pre><code class="language-java">/**
+ * ShardedLeaderboardService — distributes a global leaderboard across multiple Redis
+ * sorted sets using score-range sharding for efficient top-N queries and global rank.
+ *
+ * Shard topology (static thresholds — tune based on score distribution analysis):
+ *   Shard 0: score &lt; 1,000        (casual players, ~60% of population)
+ *   Shard 1: score &lt; 10,000       (regular players, ~30%)
+ *   Shard 2: score &lt; 100,000      (competitive players, ~9%)
+ *   Shard 3: score &gt;= 100,000     (elite players, ~1%)
+ *
+ * Why static thresholds? Dynamic thresholds require knowing the score distribution
+ * in advance (percentile-based sharding). Static thresholds are predictable and
+ * operationally simpler. Re-balance by adjusting thresholds and reloading.
+ */
+public class ShardedLeaderboardService {
+
+    private static final String SHARD_KEY_TEMPLATE = "leaderboard:%s:global:shard:%d";
+    private static final double[] SHARD_THRESHOLDS = {1_000.0, 10_000.0, 100_000.0, Double.MAX_VALUE};
+
+    // Lua script for atomic shard boundary crossing (ZREM + ZADD as one operation)
+    private static final String SHARD_CROSS_LUA_SCRIPT = """
+        local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+        if removed == 1 then
+            redis.call('ZADD', KEYS[2], tonumber(ARGV[2]), ARGV[1])
+        end
+        return removed
+        """;
+
+    private final JedisPool jedisPool;
+    private final String gameId;
+
+    public ShardedLeaderboardService(JedisPool jedisPool, String gameId) {
+        this.jedisPool = jedisPool;
+        this.gameId = gameId;
+    }
+
+    /**
+     * Updates a player's score, handling shard boundary crossings atomically.
+     * If the player moves from one score tier to another, the Lua script ensures
+     * they are removed from the old shard and added to the new shard atomically.
+     *
+     * @param playerId player identifier
+     * @param newScore the player's updated score
      */
     public void updateScore(String playerId, double newScore) {
         int newShardIndex = resolveShardIndex(newScore);
         String newShardKey = buildShardKey(newShardIndex);
 
         try (Jedis jedis = jedisPool.getResource()) {
-            // Remove from all other shards (player may have been in a different shard before)
-            for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
-                if (shardIndex != newShardIndex) {
-                    jedis.zrem(buildShardKey(shardIndex), playerId);
-                }
+            // Find current shard for this player (needed to handle cross-shard moves)
+            Integer currentShardIndex = findPlayerCurrentShard(jedis, playerId);
+
+            if (currentShardIndex == null) {
+                // New player — simply add to the correct shard
+                jedis.zadd(newShardKey, newScore, playerId);
+                return;
             }
-            jedis.zadd(newShardKey, newScore, playerId);
+
+            if (currentShardIndex == newShardIndex) {
+                // Same shard — simple ZADD with GT (only update if higher)
+                jedis.zadd(newShardKey, Map.of(playerId, newScore), ZAddParams.zAddParams().gt());
+                return;
+            }
+
+            // Cross-shard boundary — must be atomic to avoid double-counting or gaps in rank
+            String oldShardKey = buildShardKey(currentShardIndex);
+            jedis.eval(SHARD_CROSS_LUA_SCRIPT,
+                Arrays.asList(oldShardKey, newShardKey),
+                Arrays.asList(playerId, String.valueOf(newScore)));
         }
     }
 
     /**
-     * Returns the top-N players globally by merging results from shards top-down.
-     * Starts from the highest shard (top players) and works down until N players found.
+     * Returns the top-N players globally by reading from the highest shard down.
+     * For top-100: almost always returns from shard 3 only (elite players).
+     *
+     * @param topN number of top players to return
+     * @return ordered list of PlayerEntry, rank 1 = best
      */
-    public List&lt;PlayerRank&gt; getTopPlayers(int topN) {
-        List&lt;PlayerRank&gt; results = new ArrayList&lt;&gt;();
+    public List&lt;PlayerEntry&gt; getTopPlayers(int topN) {
+        List&lt;PlayerEntry&gt; collectedResults = new ArrayList&lt;&gt;(topN);
 
         try (Jedis jedis = jedisPool.getResource()) {
-            // Iterate shards from highest score to lowest
+            // Iterate from highest-scoring shard (index 3) down to lowest (index 0)
             for (int shardIndex = SHARD_THRESHOLDS.length - 1; shardIndex &gt;= 0; shardIndex--) {
-                if (results.size() &gt;= topN) break;
+                if (collectedResults.size() &gt;= topN) break;
 
-                int remaining = topN - results.size();
+                int remainingNeeded = topN - collectedResults.size();
                 String shardKey = buildShardKey(shardIndex);
-                Set&lt;Tuple&gt; shardTopPlayers = jedis.zrevrangeWithScores(shardKey, 0, remaining - 1);
 
-                for (Tuple playerTuple : shardTopPlayers) {
-                    results.add(new PlayerRank(playerTuple.getElement(), playerTuple.getScore(),
-                                               results.size() + 1));
+                // ZREVRANGE: highest scores first within this shard
+                List&lt;Tuple&gt; shardEntries = jedis.zrevrangeWithScores(shardKey, 0, remainingNeeded - 1);
+                for (Tuple shardEntry : shardEntries) {
+                    int globalRank = collectedResults.size() + 1;
+                    collectedResults.add(new PlayerEntry(shardEntry.getElement(), shardEntry.getScore(), globalRank));
                 }
             }
         }
-        return results;
+        return collectedResults;
     }
 
     /**
-     * Computes a player's global rank by summing the cardinality of higher shards
-     * plus their rank within their own shard.
+     * Computes a player's global rank across all shards.
+     * Global rank = (total players in higher shards) + (rank within own shard) + 1.
+     *
+     * Three Redis calls:
+     *   1. Find player's shard via ZSCORE (up to 4 attempts)
+     *   2. ZCARD for each higher-scoring shard (1–3 calls)
+     *   3. ZREVRANK within the player's own shard (1 call)
+     *
+     * @param playerId player identifier
+     * @return 1-indexed global rank, or -1 if player not found
      */
     public long getGlobalRank(String playerId) {
         try (Jedis jedis = jedisPool.getResource()) {
-            Double score = null;
-            int playerShardIndex = -1;
-
-            // Find which shard this player is in
-            for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
-                score = jedis.zscore(buildShardKey(shardIndex), playerId);
-                if (score != null) {
-                    playerShardIndex = shardIndex;
-                    break;
-                }
-            }
-            if (score == null) return -1; // player not found
-
-            // Count players in higher-scoring shards (they all rank ahead of this player)
-            long playersAhead = 0;
-            for (int higherShard = playerShardIndex + 1; higherShard &lt; SHARD_THRESHOLDS.length; higherShard++) {
-                playersAhead += jedis.zcard(buildShardKey(higherShard));
+            Integer playerShardIndex = findPlayerCurrentShard(jedis, playerId);
+            if (playerShardIndex == null) {
+                return -1; // player has no score entry
             }
 
-            // Rank within this player's shard (0-indexed)
-            long rankWithinShard = jedis.zrevrank(buildShardKey(playerShardIndex), playerId);
-            return playersAhead + rankWithinShard + 1; // 1-indexed global rank
+            // Count all players in shards with higher score thresholds
+            long playersInHigherShards = 0;
+            for (int higherShardIndex = playerShardIndex + 1;
+                 higherShardIndex &lt; SHARD_THRESHOLDS.length;
+                 higherShardIndex++) {
+                playersInHigherShards += jedis.zcard(buildShardKey(higherShardIndex));
+            }
+
+            // Rank within own shard (0-indexed; 0 = highest in shard)
+            Long rankWithinShard = jedis.zrevrank(buildShardKey(playerShardIndex), playerId);
+            if (rankWithinShard == null) {
+                return -1; // shouldn't happen if findPlayerCurrentShard succeeded
+            }
+
+            // Global rank: all players in higher shards rank ahead of this player
+            return playersInHigherShards + rankWithinShard + 1; // convert to 1-indexed
         }
+    }
+
+    /**
+     * Returns total number of players across all shards.
+     * Used for percentile calculation: percentile = (1 - rank/total) * 100
+     */
+    public long getTotalPlayerCount() {
+        try (Jedis jedis = jedisPool.getResource()) {
+            long totalCount = 0;
+            for (int shardIndex = 0; shardIndex &lt; SHARD_THRESHOLDS.length; shardIndex++) {
+                totalCount += jedis.zcard(buildShardKey(shardIndex));
+            }
+            return totalCount;
+        }
+    }
+
+    private Integer findPlayerCurrentShard(Jedis jedis, String playerId) {
+        // Check each shard from highest to lowest (elite players found faster)
+        for (int shardIndex = SHARD_THRESHOLDS.length - 1; shardIndex &gt;= 0; shardIndex--) {
+            Double scoreInShard = jedis.zscore(buildShardKey(shardIndex), playerId);
+            if (scoreInShard != null) {
+                return shardIndex;
+            }
+        }
+        return null; // player not in any shard
     }
 
     private int resolveShardIndex(double score) {
@@ -300,36 +1222,217 @@ public class ShardedLeaderboard {
                 return shardIndex;
             }
         }
-        return SHARD_THRESHOLDS.length - 1;
+        return SHARD_THRESHOLDS.length - 1; // score exceeds all thresholds → top shard
     }
 
     private String buildShardKey(int shardIndex) {
-        return SHARD_KEY_PREFIX + leaderboardName + ":" + shardIndex;
+        return String.format(SHARD_KEY_TEMPLATE, gameId, shardIndex);
     }
 
-    public record PlayerRank(String playerId, double score, int rank) {}
+    public record PlayerEntry(String playerId, double score, int globalRank) {}
+}</code></pre>
+
+          <h3>ScoreProcessor — Kafka Consumer with Idempotent Write Logic</h3>
+          <pre><code class="language-java">/**
+ * ScoreProcessor — Kafka consumer that processes score events from game servers
+ * and applies them to the sharded Redis leaderboard + PostgreSQL durable store.
+ *
+ * Idempotency: each event has a matchId. Duplicate events (game server retries)
+ * are detected via a Redis bloom filter keyed on matchId before processing.
+ */
+public class ScoreProcessor {
+
+    private static final String PROCESSED_MATCHES_BLOOM_KEY = "bloom:processed-matches";
+    private static final double MAX_SCORE_PER_MATCH = 10_000.0;  // anti-cheat threshold
+    private static final String KAFKA_TOPIC = "score-events";
+
+    private final ShardedLeaderboardService shardedLeaderboard;
+    private final ScoreEventRepository scoreEventRepository; // PostgreSQL
+    private final JedisPool jedisPool;
+    private final KafkaConsumer&lt;String, ScoreEvent&gt; kafkaConsumer;
+
+    public ScoreProcessor(
+            ShardedLeaderboardService shardedLeaderboard,
+            ScoreEventRepository scoreEventRepository,
+            JedisPool jedisPool,
+            KafkaConsumer&lt;String, ScoreEvent&gt; kafkaConsumer) {
+        this.shardedLeaderboard = shardedLeaderboard;
+        this.scoreEventRepository = scoreEventRepository;
+        this.jedisPool = jedisPool;
+        this.kafkaConsumer = kafkaConsumer;
+    }
+
+    /**
+     * Main processing loop — consumes score events from Kafka and applies them.
+     * Runs in a dedicated thread per Kafka partition consumer.
+     */
+    public void run() {
+        kafkaConsumer.subscribe(List.of(KAFKA_TOPIC));
+        while (!Thread.currentThread().isInterrupted()) {
+            ConsumerRecords&lt;String, ScoreEvent&gt; kafkaRecords = kafkaConsumer.poll(Duration.ofMillis(100));
+            for (ConsumerRecord&lt;String, ScoreEvent&gt; kafkaRecord : kafkaRecords) {
+                processScoreEvent(kafkaRecord.value());
+            }
+            // Manual offset commit after batch is fully processed (at-least-once delivery)
+            kafkaConsumer.commitSync();
+        }
+    }
+
+    /**
+     * Processes a single score event with idempotency and anti-cheat validation.
+     * Steps:
+     *   1. Idempotency check (bloom filter + PostgreSQL fallback)
+     *   2. Anti-cheat validation (score delta within acceptable range)
+     *   3. Write to Redis sharded leaderboard
+     *   4. Write to PostgreSQL (async batch — separate thread pool)
+     */
+    private void processScoreEvent(ScoreEvent scoreEvent) {
+        // Step 1: Idempotency — skip if this matchId was already processed
+        if (isMatchAlreadyProcessed(scoreEvent.matchId())) {
+            return; // silently skip duplicate — already applied
+        }
+
+        // Step 2: Anti-cheat validation
+        if (!isScoreEventValid(scoreEvent)) {
+            flagForAntiCheatReview(scoreEvent);
+            return; // hold the score — don't apply until reviewed
+        }
+
+        // Step 3: Update Redis leaderboard (all active periods)
+        shardedLeaderboard.updateScore(scoreEvent.playerId(), scoreEvent.scoreAfter());
+
+        // Update weekly and monthly period ZSETs (incremental)
+        String weekKey = "weekly:" + getCurrentWeekKey();
+        String monthKey = "monthly:" + getCurrentMonthKey();
+        // Use a non-sharded LeaderboardService for time-windowed (smaller ZSETs)
+        // leaderboardService.incrementScore(scoreEvent.gameId(), weekKey, scoreEvent.playerId(), scoreEvent.scoreDelta());
+        // leaderboardService.incrementScore(scoreEvent.gameId(), monthKey, scoreEvent.playerId(), scoreEvent.scoreDelta());
+
+        // Step 4: Mark as processed (bloom filter for fast path, PostgreSQL for truth)
+        markMatchAsProcessed(scoreEvent.matchId());
+        scoreEventRepository.saveAsync(scoreEvent); // fire-and-forget to PostgreSQL
+    }
+
+    private boolean isMatchAlreadyProcessed(String matchId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            // BF.EXISTS: O(1) probabilistic check — false positives possible, no false negatives
+            // If bloom says "exists": double-check PostgreSQL (rare case)
+            // If bloom says "not exists": definitely not processed (skip PostgreSQL)
+            Object bloomResult = jedis.sendCommand(
+                SafeEncoder.encode("BF.EXISTS"),
+                SafeEncoder.encode(PROCESSED_MATCHES_BLOOM_KEY),
+                SafeEncoder.encode(matchId)
+            );
+            if ((long) bloomResult == 1L) {
+                // Bloom filter says "seen" — verify with PostgreSQL to avoid false positive
+                return scoreEventRepository.existsByMatchId(matchId);
+            }
+            return false;
+        }
+    }
+
+    private void markMatchAsProcessed(String matchId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.sendCommand(
+                SafeEncoder.encode("BF.ADD"),
+                SafeEncoder.encode(PROCESSED_MATCHES_BLOOM_KEY),
+                SafeEncoder.encode(matchId)
+            );
+        }
+    }
+
+    private boolean isScoreEventValid(ScoreEvent scoreEvent) {
+        // Score delta must be positive and within the maximum achievable per match
+        return scoreEvent.scoreDelta() &gt; 0
+            &amp;&amp; scoreEvent.scoreDelta() &lt;= MAX_SCORE_PER_MATCH
+            &amp;&amp; scoreEvent.scoreAfter() &gt;= scoreEvent.scoreDelta(); // no underflow
+    }
+
+    private void flagForAntiCheatReview(ScoreEvent scoreEvent) {
+        // Publish to separate Kafka topic for anti-cheat service to process
+        // Anti-cheat service will either clear the event (re-publish to score-events)
+        // or reject it (write rejection record to PostgreSQL)
+    }
+
+    private String getCurrentWeekKey() {
+        return LocalDate.now().format(DateTimeFormatter.ofPattern("YYYY-'W'ww"));
+    }
+
+    private String getCurrentMonthKey() {
+        return LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM"));
+    }
+
+    public record ScoreEvent(
+        String eventId,
+        String playerId,
+        String gameId,
+        String matchId,
+        double scoreDelta,
+        double scoreAfter,
+        long timestampMs
+    ) {}
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           QUIZ
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-leaderboard-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="What is the time complexity of ZRANK (find a player's rank) in Redis Sorted Set?" data-options='["O(1) — Redis hashes all members","O(log N) — Redis sorted sets use a skip list internally for O(log N) rank operations","O(N) — Redis must scan all members to count those with higher scores","O(N log N) — requires a sort operation"]' data-correct="1" data-explanation="Redis sorted sets use a combination of skip list + hash table. The skip list provides O(log N) ordered access. ZRANK counts elements less than the given score using the skip list structure — O(log N). ZADD is also O(log N). This is why Redis sorted sets are the standard leaderboard data structure." style="display:none"></div>
-          <div data-question="For a leaderboard with 100M players, why is score-range sharding better than hash sharding?" data-options='["Hash sharding uses more memory","With score-range sharding, the top-100 query only hits the top shard (top players are concentrated there). With hash sharding, top players are distributed across all shards — a top-100 query must query all shards and merge, doing N_shards times more work.","Score-range sharding provides better load balancing","Hash sharding doesn't support sorted operations"]' data-correct="1" data-explanation="This is the key insight. Score-range sharding creates a natural hierarchy: top shard has ~1% of players but serves all top-N queries with one Redis call. Hash sharding distributes evenly — great for writes but requires all-shard fanout for every read. Given that leaderboards are read-heavy (5:1), score-range sharding wins." style="display:none"></div>
-          <div data-question="How is a friend leaderboard implemented efficiently without maintaining a dedicated per-user sorted set?" data-options='["Query the global leaderboard and filter for friends","For each friend, call ZSCORE on the global leaderboard to get their score — O(1) per friend. Collect (friend, score) pairs in application layer and sort. Accurate, always up-to-date, and requires no maintenance on friend graph changes.","Use ZINTERSTORE to intersect the global leaderboard with a friends set","Friend leaderboards always require a separate Redis sorted set per user"]' data-correct="1" data-explanation="ZSCORE is O(1) per call. For 200 friends: 200 ZSCORE calls, then sort in application layer. This is O(F log F) where F=friends. Maintaining a dedicated sorted set per user would require updating it on every friend's score change — with 10M score updates/day and 500 avg friends, that's 5B sorted set updates/day." style="display:none"></div>
-          <div data-question="When two players have the same score in a Redis Sorted Set, how does Redis determine their relative ordering?" data-options='["Redis returns an error for duplicate scores","Redis orders members with equal scores lexicographically by member name. ZADD with the same score means they share the same rank unless tie-breaking is encoded in the score itself (e.g., score * 10000 + (MAX_TIME - time_achieved)).","Redis assigns random ordering to tied scores","The last-inserted member always wins in a tie"]' data-correct="1" data-explanation="Redis spec: when scores are equal, members are sorted by lexicographic order. 'alice' would rank before 'zach' at the same score. For fair game leaderboards where earlier achievers should rank higher, encode the time in the score: effectiveScore = score * LARGE_FACTOR + (EPOCH_MAX - achievedAt). This makes earlier achievers fractionally higher." style="display:none"></div>
+
+          <div data-question="Redis Sorted Set uses a skiplist rather than a B-tree. What specific property of the skiplist makes ZRANK O(log N) rather than O(N)?"
+               data-options='["Skiplists are sorted, so binary search can be applied","Each skiplist node stores a span value — the count of nodes it skips over at each level. ZRANK accumulates these span values as it traverses down the levels, computing the rank without scanning every element.","Skiplists have O(1) access to the first and last elements","Skiplists use hashing internally to provide O(1) rank lookup"]'
+               data-correct="1"
+               data-explanation="This is the core L6 insight. Redis augments each skiplist node with a 'span' — the number of nodes skipped by that forward pointer. When ZRANK traverses the skiplist to find a member, it sums up the spans of all pointers it traverses. This transforms rank computation from O(N) linear counting into O(log N) skiplist traversal. A B-tree with the same data would need an 'order statistics' augmentation (node count in each subtree) to achieve this, which is what an augmented B-tree or red-black tree does. Redis chose skiplist because it's simpler to implement with augmentation and handles concurrent access patterns well."
+               style="display:none"></div>
+
+          <div data-question="You have a leaderboard with 100M players in a single Redis Sorted Set. A client calls ZREVRANGE leaderboard:global 0 99 WITHSCORES to get the top 100. What is the actual time complexity of this call, and why?"
+               data-options='["O(N) — Redis must scan all 100M entries to sort them","O(N log N) — Redis re-sorts the entire set on each query","O(log N + 100) — O(log N) to find the starting position in the skiplist, then O(100) to walk the next 100 nodes. For top-100 specifically, the start is the tail of the skiplist, so it is effectively O(100) = O(M) regardless of N.","O(1) — Redis caches the top-100 automatically"]'
+               data-correct="2"
+               data-explanation="The skiplist is maintained in sorted order at all times (ZADD keeps it sorted). ZREVRANGE does not sort — it traverses. The O(log N) term is the cost to find the start position. For ZREVRANGE 0 99 (top-100), the start position is the highest-scored element — the tail of the skiplist — which is tracked with an O(1) pointer. So the actual cost is O(100) = O(M). This is why ZREVRANGE for top-100 is fast regardless of whether the ZSET has 1M or 100M entries. The 100M size only matters for ZADD and ZRANK, not for top-N queries."
+               style="display:none"></div>
+
+          <div data-question="You're designing the friends leaderboard. A player has 500 friends. Option A: pipeline 500 ZSCORE calls in a single Redis round-trip. Option B: use ZINTERSTORE to create a temporary per-user sorted set. Which is better and why?"
+               data-options='["Option B: ZINTERSTORE is a single Redis command and therefore faster","Option A: Pipelined ZSCORE is one Redis round-trip returning 500 scores; O(500) total. ZINTERSTORE is O(N × log M) where N=500 friends and M=100M global set size — ~13,500 operations. Pipeline also requires no temporary key cleanup and reflects current scores.","Option B: ZINTERSTORE creates a reusable sorted set that can be cached","Both are equivalent in performance"]'
+               data-correct="1"
+               data-explanation="ZINTERSTORE computes the intersection by iterating through the smaller set (N=500 friends) and performing a lookup in the larger set (M=100M) for each — O(N × log M) = O(500 × 27) ≈ O(13,500) operations per request. Pipelined ZSCORE sends 500 independent O(1) lookups in one TCP packet, receiving 500 scores in one response — O(500) total. Pipeline wins on both latency and Redis CPU. The only advantage of ZINTERSTORE is if you cache the result (TTL: 60s) and the friend list is stable — then ZINTERSTORE cost is amortized. For fresh per-request friends leaderboards: pipeline is the right choice."
+               style="display:none"></div>
+
+          <div data-question="A player's score increases from 9,500 to 10,500, crossing a shard boundary (shard 1: 0-9,999 → shard 2: 10,000+). Why must this cross-shard move be atomic, and how do you achieve it in Redis?"
+               data-options='["Atomicity isn't needed — the player can briefly appear in both shards without affecting correctness","Without atomicity: ZREM from shard 1 succeeds but ZADD to shard 2 fails → player disappears from the leaderboard (rank -1). Or: ZADD to shard 2 succeeds but ZREM from shard 1 fails → player is in both shards, causing inflated global rank counts. A Lua script executes both operations atomically on the Redis server.","Use a distributed transaction across two Redis nodes","Redis transactions (MULTI/EXEC) provide atomicity across the two commands"]'
+               data-correct="1"
+               data-explanation="Non-atomic cross-shard move creates two failure modes: (1) ZREM succeeds, ZADD fails → player has no entry anywhere → getGlobalRank returns -1 and they vanish from the leaderboard. (2) ZADD succeeds, ZREM fails → player is in two shards → globalRank calculation sums them incorrectly (ZCARD of both shards counts the player twice). Lua scripts in Redis are atomic because Redis is single-threaded — no other command can execute between the ZREM and ZADD. MULTI/EXEC is not a valid alternative here because the two shard keys may be on different Redis Cluster nodes. The Lua script must run on the node owning both keys, which requires score-range shards to be co-located (same node or separate single-node Redis instances)."
+               style="display:none"></div>
+
+          <div data-question="Your gaming leaderboard serves 50M top-100 reads per day. You implement a 5-second TTL CDN cache for the top-100 response. What is the approximate cache hit rate, and how many uncached ZREVRANGE calls reach Redis per day?"
+               data-options='["50% hit rate — caching only helps if reads are perfectly distributed","99.97% hit rate. The cache is refreshed 86,400/5 = 17,280 times per day. Each refresh serves 50,000,000/17,280 ≈ 2,894 requests. Cache hit rate = (2894-1)/2894 = 99.97%. Redis sees only 17,280 ZREVRANGE calls per day instead of 50M — a 2,894× reduction in Redis load.","80% hit rate — the first request after each TTL expiry is a cache miss","Cache hit rate cannot be calculated without knowing request distribution"]'
+               data-correct="1"
+               data-explanation="The math: 50M reads/day ÷ 86,400 seconds/day = 578 reads/second average. Cache TTL = 5 seconds → cache refreshes every 5 seconds → 17,280 refreshes/day. Each cache entry serves 578 req/sec × 5 sec = 2,890 requests on average. Cache hit rate = (2890-1)/2890 = 99.97%. Redis only sees the 17,280 miss-triggered ZREVRANGE calls. This is why the CDN/Redis cache for global top-100 is the single highest-leverage optimization in the entire leaderboard design. It reduces the hottest query from 50M/day to 17K/day on Redis."
+               style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
               <a href="../tier3/distributed-db.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Distributed DB →</a>
@@ -337,13 +1440,20 @@ public class ShardedLeaderboard {
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
         <a href="metrics-dashboard.html" class="btn btn--outline">← Metrics Dashboard</a>
         <a href="../tier3/distributed-db.html" class="btn btn--primary">Next: Distributed DB →</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>

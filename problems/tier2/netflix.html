@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Netflix — RESHADED walkthrough covering adaptive bitrate streaming, transcoding pipeline, CDN Open Connect, and recommendation engine for MAANG interviews.">
+  <meta name="description" content="Design Netflix at L6 depth — adaptive bitrate streaming, Open Connect CDN, transcoding pipeline, DRM, chaos engineering, microservices, and personalization for MAANG system design interviews.">
   <title>Design Netflix — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/netflix/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -63,251 +64,1077 @@
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
           <span class="tag tag--blue">Tier 2 — Should Know</span>
           <span class="tag">45 min</span>
-          <span class="tag">Video streaming</span>
+          <span class="tag">Video Streaming</span>
         </div>
         <h1 class="module-header__title">Design Netflix</h1>
-        <p class="module-header__desc">Netflix's core technical challenge is delivering high-quality video to 200M users across wildly different network conditions. Adaptive Bitrate Streaming (ABR) is the key — the client constantly measures bandwidth and switches quality seamlessly.</p>
+        <p class="module-header__desc">Netflix's core technical challenge is delivering cinematic-quality video to 250 million subscribers across wildly different network conditions — from 5G to congested hotel Wi-Fi — with zero buffering. Adaptive Bitrate Streaming (ABR) solves the client side; Open Connect CDN solves the network side; a massively parallel encoding farm solves the content side. This is a masterclass in building systems that handle 15% of global internet traffic.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Netflix, YouTube, Amazon</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Netflix, YouTube, Disney+</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">🎬</span> 15% of internet traffic</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🎬</span> 15% of global internet traffic</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- R — REQUIREMENTS                                            -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+          <div class="callout callout--tip">
+            <strong>Interview signal:</strong> Interviewers at Netflix/FAANG expect you to distinguish ingestion (studio upload path) from playback (consumer streaming path). Nail both in requirements — many candidates only cover playback.
+          </div>
+
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Upload and stream video content (movies, TV shows)</li>
-            <li>Adaptive quality streaming — auto-adjust to network conditions</li>
-            <li>Resume watching from last position across devices</li>
-            <li>Browse catalog, search titles, personalized recommendations</li>
-            <li>Multiple user profiles per account</li>
+            <li><strong>Content ingestion:</strong> Studios upload multi-terabyte source files (ProRes, RAW, DPX). System encodes to multiple quality profiles and packages for streaming.</li>
+            <li><strong>Adaptive streaming:</strong> Client auto-adjusts quality (240p → 4K HDR) based on network conditions without interrupting playback.</li>
+            <li><strong>Resume from last position:</strong> Seamless cross-device continuity — pause on phone, resume on TV at the same second.</li>
+            <li><strong>Browse &amp; search:</strong> Catalog browsing, search by title/genre/year, personalized rows per user profile.</li>
+            <li><strong>Multiple profiles:</strong> Up to 5 profiles per account with separate watch histories and recommendations.</li>
+            <li><strong>Downloads for offline:</strong> DRM-protected downloads for mobile, synced to cloud after re-connection.</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 200M subscribers, 200M streaming hours/day</li>
-            <li><strong>Latency:</strong> Video starts in &lt;2s (buffering before first frame)</li>
-            <li><strong>Availability:</strong> 99.99% — buffering is revenue loss</li>
-            <li><strong>Bandwidth:</strong> Netflix uses ~15% of global internet traffic at peak</li>
+            <li><strong>Scale:</strong> 250M subscribers; ~100M concurrent streams at peak (8–10 PM local time); 200 TB new content ingested per day.</li>
+            <li><strong>Startup latency:</strong> First video frame in &lt;2 seconds from play button press (P99 target across global users).</li>
+            <li><strong>Rebuffering ratio:</strong> &lt;0.1% of playback time spent buffering — industry-leading KPI.</li>
+            <li><strong>Availability:</strong> 99.99% for streaming path (~52 minutes downtime/year). Buffering is directly correlated to churn.</li>
+            <li><strong>Durability:</strong> Encoded content must never be lost — it is the company's entire asset base.</li>
+            <li><strong>DRM compliance:</strong> Every stream must be protected; content licensing requires encryption and key management.</li>
+          </ul>
+
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Live streaming / sports events (different latency requirements)</li>
+            <li>Billing and subscription management</li>
+            <li>Content moderation (Netflix content is pre-approved via licensing)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- E — ESTIMATION                                              -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Concurrent Streaming Bandwidth</h3>
           <ul>
-            <li>200M hours/day streaming; avg 1.5 hrs/session → ~133M concurrent sessions at peak</li>
-            <li>1080p stream = ~5 Mbps; 133M streams × 5 Mbps = 665 Tbps of egress bandwidth</li>
-            <li>Transcoding: 1 hr of 4K source → encode to 10 quality levels × 2 codecs (H.264, HEVC) → 20 files, each ~5–50GB. Total library ~10 PB.</li>
-            <li>CDN servers worldwide; Netflix places Open Connect Appliances (OCA) in ISP data centers to serve 95% of traffic locally.</li>
+            <li>250M subscribers × 40% daily active = 100M active users/day</li>
+            <li>Peak concurrent streams = ~100M (8–10 PM local — global spread softens peak vs US-only)</li>
+            <li>Average bitrate per stream ≈ 5 Mbps (mix of 1080p and 4K across devices)</li>
+            <li><strong>Peak egress = 100M × 5 Mbps = 500 Tbps</strong> — roughly 15% of all internet traffic</li>
           </ul>
+
+          <h3>Storage — Encoded Content Library</h3>
+          <ul>
+            <li>Netflix catalog: ~17,000 titles. 1 movie ≈ 2 hrs. 1 TV season ≈ 10 hrs.</li>
+            <li>Per title encoding ladder: 10 quality profiles × 2 codecs (H.264 + HEVC) × avg 50 GB/profile = ~1 TB/title</li>
+            <li>Total library ≈ 17,000 × 1 TB = <strong>17 PB of encoded content</strong></li>
+            <li>New content ingest: 200 TB/day of source material → ~100 TB/day encoded output after compression</li>
+          </ul>
+
+          <h3>Transcoding Compute</h3>
+          <ul>
+            <li>1 hour of 4K source → 10 quality profiles × 2 codecs = 20 encoding jobs</li>
+            <li>Each 4K encoding job (HEVC): ~4× real-time on a 32-vCPU instance → 4 CPU-hours per profile</li>
+            <li>Total for one 2-hour movie: 20 jobs × 8 CPU-hours = <strong>160 CPU-hours per movie</strong></li>
+            <li>Netflix runs 10,000+ encoding workers concurrently on AWS EC2 spot instances</li>
+          </ul>
+
+          <h3>CDN &amp; Cache Hit Rate</h3>
+          <ul>
+            <li>~15,000 OCA appliances deployed globally in ISP data centers</li>
+            <li>OCAs proactively pre-position top-5,000 titles → ~95% of all streams served from OCA cache</li>
+            <li>Remaining 5% (long-tail/new) fetches from AWS S3 origin via CDN pull</li>
+          </ul>
+
+          <div class="callout callout--info">
+            <strong>What the interviewer wants to hear:</strong> "The bottleneck is CDN egress and encoding compute, not metadata storage. My design decisions — private CDN, parallel encoding workers, HEVC adoption — should all reduce one or both of these costs."
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- S — SCHEMA                                                  -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Content catalog (PostgreSQL / DynamoDB)
-titles: title_id, name, description, release_year, genre[], rating, duration_seconds
-title_media: title_id, quality_tier (240p/480p/720p/1080p/4K), codec, s3_key, bitrate_kbps
+          <h3>Content Catalog (MySQL / CockroachDB — strong consistency needed for catalog updates)</h3>
+          <pre><code class="language-java">CREATE TABLE titles (
+    title_id        BIGINT PRIMARY KEY,           -- Snowflake ID
+    title_type      ENUM('MOVIE','SERIES'),
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT,
+    release_year    SMALLINT,
+    maturity_rating VARCHAR(8),                    -- PG-13, TV-MA, etc.
+    genres          JSON,                          -- ["Drama","Thriller"]
+    duration_secs   INT,                           -- for movies; NULL for series
+    studio_id       BIGINT,
+    status          ENUM('INGESTING','ENCODING','AVAILABLE','RETIRED'),
+    created_at      TIMESTAMP NOT NULL
+);
 
-// User watch history (Cassandra — per-user time series)
-// partition: user_id, clustering: watched_at DESC
-watch_history: (user_id, title_id, profile_id, watched_at, position_seconds, completed)
+-- One row per encoded rendition of a title
+CREATE TABLE title_renditions (
+    rendition_id    BIGINT PRIMARY KEY,
+    title_id        BIGINT NOT NULL REFERENCES titles(title_id),
+    resolution      VARCHAR(8)  NOT NULL,          -- "480p","720p","1080p","2160p"
+    codec           ENUM('H264','HEVC','AV1'),
+    hdr_type        ENUM('SDR','HDR10','DOLBY_VISION') DEFAULT 'SDR',
+    bitrate_kbps    INT,
+    s3_manifest_key TEXT NOT NULL,                 -- path to .m3u8 or .mpd on S3
+    segment_prefix  TEXT NOT NULL,                 -- CDN base URL for segments
+    file_size_bytes BIGINT,
+    vmaf_score      DECIMAL(5,2),                  -- perceptual quality score 0-100
+    encoded_at      TIMESTAMP
+);</code></pre>
 
-// User resume position (Redis — low latency, frequent updates)
-// Key: resume:{user_id}:{title_id}  Value: {position_seconds, updated_at}
+          <h3>Watch History &amp; Resume (Cassandra — per-user time series, high write volume)</h3>
+          <pre><code class="language-java">-- Partition by user_id for co-location; clustering by watched_at for recency queries
+CREATE TABLE watch_history (
+    user_id         BIGINT,
+    profile_id      BIGINT,
+    title_id        BIGINT,
+    watched_at      TIMESTAMP,
+    position_secs   INT,           -- last watched position
+    completed       BOOLEAN,       -- true if watched >90% of runtime
+    device_type     VARCHAR(32),   -- 'ios','android','smart_tv','web'
+    PRIMARY KEY ((user_id, profile_id), watched_at DESC, title_id)
+) WITH CLUSTERING ORDER BY (watched_at DESC);
 
-// Manifest per title (generated at transcoding time, cached on CDN)
-// m3u8 playlist: references all quality tiers and segment URLs</code></pre>
+-- Dedicated resume table — hot path, needs sub-ms reads
+-- Key pattern: "resume:{user_id}:{profile_id}:{title_id}"
+-- Stored in Redis with 30-day TTL; async persisted to Cassandra for durability
+-- Redis value: { "position_secs": 3847, "updated_at": "2024-01-15T22:14:03Z" }</code></pre>
+
+          <h3>Recommendations (DynamoDB — low-latency reads, pre-computed per profile)</h3>
+          <pre><code class="language-java">-- Pre-computed recommendation rows, refreshed every few hours by ML pipeline
+CREATE TABLE profile_recommendations (
+    profile_id      BIGINT         NOT NULL,
+    row_name        VARCHAR(64)    NOT NULL,   -- "Continue Watching", "Top Picks"
+    rank_position   SMALLINT       NOT NULL,   -- 1..N
+    title_id        BIGINT         NOT NULL,
+    score           FLOAT,                     -- model confidence score
+    thumbnail_ab_variant VARCHAR(8),           -- which artwork variant to show
+    computed_at     TIMESTAMP,
+    PRIMARY KEY ((profile_id, row_name), rank_position)
+);
+
+-- S3 structure for packaged content:
+-- s3://netflix-content/
+--   raw/{title_id}/                          (original studio upload, temporary)
+--   encoded/{title_id}/{codec}/{resolution}/
+--     manifest.m3u8  (or manifest.mpd for DASH)
+--     seg_000.ts, seg_001.ts, ...           (2-second HLS segments)
+--   thumbnails/{title_id}/variant_a.jpg, variant_b.jpg</code></pre>
+
+          <div class="callout callout--tip">
+            <strong>Schema insight:</strong> Separate <code>titles</code> from <code>title_renditions</code>. A title is immutable business data; renditions change as Netflix re-encodes with new codecs (they re-encoded the entire library to HEVC and are currently doing it again for AV1).
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- H — HIGH-LEVEL DESIGN                                       -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
-          <ul>
-            <li><strong>Content upload:</strong> Studio uploads raw 4K source → S3 → Transcoding Service (distributed encoding cluster) → multiple quality tiers → stored in S3 → pushed to Open Connect CDN nodes.</li>
-            <li><strong>Streaming flow:</strong> Client → API → Manifest Service (returns .m3u8 playlist URL) → Client fetches manifest from CDN → Client downloads 2–4 second segments from CDN based on ABR algorithm.</li>
-            <li><strong>Open Connect (OCA):</strong> Netflix's private CDN. Servers placed inside ISP facilities worldwide. ISP benefits from reduced peering cost; Netflix benefits from speed. Proactively pre-positions popular content overnight.</li>
-            <li><strong>Recommendation Service:</strong> Offline training on watch history → user/item embeddings. Online: ANN lookup for similar titles → re-rank by recency, diversity, A/B test bucket.</li>
-            <li><strong>Resume Service:</strong> Client posts position update every 60s to Redis. On app open, fetch position → seek to byte offset in video stream.</li>
-          </ul>
-        </div>
-      </section>
 
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body">
-          <pre><code class="language-java">GET  /v1/titles/{titleId}/manifest    // returns CDN URL of .m3u8 playlist
-GET  /v1/recommendations?profileId={id}&limit=20
-POST /v1/watch-history                // { titleId, profileId, positionSeconds }
-GET  /v1/resume/{titleId}?profileId={id}   // returns { positionSeconds }
-GET  /v1/search?q={query}&genre={}&limit=20</code></pre>
-        </div>
-      </section>
+          <h3>System Architecture Overview</h3>
+          <p>Netflix's architecture splits cleanly into two planes: the <strong>Content Ingestion Plane</strong> (studio → encoded content → CDN) and the <strong>Streaming Plane</strong> (user device → CDN → first byte of video). These are operationally independent — encoding failures don't affect ongoing streams of already-encoded content.</p>
 
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Adaptive Bitrate Streaming (ABR)<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body">
-          <p>ABR is how Netflix delivers smooth video on everything from a 4G phone to a 10 Gbps fiber connection.</p>
+          <!-- SVG Pipeline Diagram -->
+          <figure aria-label="Netflix video pipeline diagram" style="margin:var(--space-6) 0">
+            <svg viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="pipeline-title" style="width:100%;max-width:900px;font-family:Inter,sans-serif;background:#0f172a;border-radius:12px;padding:16px">
+              <title id="pipeline-title">Netflix video pipeline: Source to Client</title>
+
+              <!-- Stage boxes -->
+              <!-- Studio Source -->
+              <rect x="20" y="120" width="120" height="60" rx="8" fill="#1e40af" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="80" y="143" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="600">STUDIO</text>
+              <text x="80" y="157" text-anchor="middle" fill="#bfdbfe" font-size="9">ProRes / DPX</text>
+              <text x="80" y="169" text-anchor="middle" fill="#bfdbfe" font-size="9">4K RAW source</text>
+
+              <!-- Arrow 1 -->
+              <line x1="140" y1="150" x2="175" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+              <text x="157" y="142" text-anchor="middle" fill="#64748b" font-size="8">S3 presigned</text>
+
+              <!-- Encoding Farm -->
+              <rect x="175" y="100" width="140" height="100" rx="8" fill="#7c2d12" stroke="#ea580c" stroke-width="1.5"/>
+              <text x="245" y="123" text-anchor="middle" fill="#fed7aa" font-size="10" font-weight="600">ENCODING FARM</text>
+              <text x="245" y="139" text-anchor="middle" fill="#fdba74" font-size="9">10,000+ EC2 workers</text>
+              <text x="245" y="153" text-anchor="middle" fill="#fdba74" font-size="9">H.264 / HEVC / AV1</text>
+              <text x="245" y="167" text-anchor="middle" fill="#fdba74" font-size="9">480p → 4K HDR</text>
+              <text x="245" y="181" text-anchor="middle" fill="#fdba74" font-size="9">VMAF quality check</text>
+
+              <!-- Arrow 2 -->
+              <line x1="315" y1="150" x2="355" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+              <text x="335" y="142" text-anchor="middle" fill="#64748b" font-size="8">.ts segments</text>
+              <text x="335" y="158" text-anchor="middle" fill="#64748b" font-size="8">+ manifests</text>
+
+              <!-- S3 Object Storage -->
+              <rect x="355" y="110" width="120" height="80" rx="8" fill="#14532d" stroke="#16a34a" stroke-width="1.5"/>
+              <text x="415" y="133" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">S3 ORIGIN</text>
+              <text x="415" y="149" text-anchor="middle" fill="#bbf7d0" font-size="9">HLS .m3u8 manifests</text>
+              <text x="415" y="163" text-anchor="middle" fill="#bbf7d0" font-size="9">DASH .mpd manifests</text>
+              <text x="415" y="177" text-anchor="middle" fill="#bbf7d0" font-size="9">17 PB total library</text>
+
+              <!-- Arrow 3 - pre-position -->
+              <line x1="475" y1="140" x2="515" y2="140" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+              <text x="495" y="128" text-anchor="middle" fill="#64748b" font-size="8">pre-position</text>
+              <text x="495" y="155" text-anchor="middle" fill="#64748b" font-size="8">nightly</text>
+
+              <!-- OCA CDN -->
+              <rect x="515" y="90" width="150" height="120" rx="8" fill="#4a1d96" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="590" y="113" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">OPEN CONNECT</text>
+              <text x="590" y="127" text-anchor="middle" fill="#ddd6fe" font-size="9">15,000 OCA appliances</text>
+              <text x="590" y="141" text-anchor="middle" fill="#ddd6fe" font-size="9">Inside ISP data centers</text>
+              <text x="590" y="155" text-anchor="middle" fill="#ddd6fe" font-size="9">100 TB cache per OCA</text>
+              <text x="590" y="169" text-anchor="middle" fill="#ddd6fe" font-size="9">95% cache hit rate</text>
+              <text x="590" y="183" text-anchor="middle" fill="#ddd6fe" font-size="9">BGP anycast routing</text>
+              <text x="590" y="197" text-anchor="middle" fill="#ddd6fe" font-size="9">10 Gbps uplinks</text>
+
+              <!-- Arrow 4 -->
+              <line x1="665" y1="150" x2="700" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+              <text x="682" y="142" text-anchor="middle" fill="#64748b" font-size="8">HTTPS</text>
+
+              <!-- Client + ABR -->
+              <rect x="700" y="100" width="170" height="100" rx="8" fill="#0f766e" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="785" y="123" text-anchor="middle" fill="#99f6e4" font-size="10" font-weight="600">CLIENT PLAYER</text>
+              <text x="785" y="139" text-anchor="middle" fill="#ccfbf1" font-size="9">Fetch master manifest</text>
+              <text x="785" y="153" text-anchor="middle" fill="#ccfbf1" font-size="9">ABR: BOLA algorithm</text>
+              <text x="785" y="167" text-anchor="middle" fill="#ccfbf1" font-size="9">EWMA bandwidth est.</text>
+              <text x="785" y="181" text-anchor="middle" fill="#ccfbf1" font-size="9">DRM decryption</text>
+
+              <!-- Bottom label: control path -->
+              <text x="450" y="265" text-anchor="middle" fill="#475569" font-size="10" font-weight="600">CONTROL PLANE (REST / gRPC via Zuul API Gateway)</text>
+              <line x1="80" y1="255" x2="870" y2="255" stroke="#334155" stroke-width="1" stroke-dasharray="5,4"/>
+              <text x="450" y="285" text-anchor="middle" fill="#334155" font-size="9">Auth → API Gateway (Zuul) → Microservices (700+) → Cassandra / DynamoDB / Redis</text>
+
+              <!-- Arrowhead marker -->
+              <defs>
+                <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#475569"/>
+                </marker>
+              </defs>
+            </svg>
+            <figcaption style="text-align:center;font-size:0.8rem;color:var(--color-text-muted);margin-top:var(--space-2)">Figure 1 — Netflix end-to-end video pipeline. Data plane (top) is fully decoupled from control plane (bottom).</figcaption>
+          </figure>
+
+          <h3>Content Ingestion Path (Studio → CDN)</h3>
           <ol>
-            <li><strong>Manifest (.m3u8):</strong> An HLS playlist listing available quality tiers with their segment URLs. The client downloads this first.</li>
-            <li><strong>Segments:</strong> Each tier is cut into 2–4 second MPEG-TS or fMP4 segments. Segments are independently decodable.</li>
-            <li><strong>Buffer level:</strong> Client maintains a playback buffer (target: 30 seconds ahead). Buffer level drives quality decisions.</li>
-            <li><strong>Bandwidth estimation:</strong> Client measures download speed of the last N segments (EWMA). If estimated bandwidth &gt; next tier bitrate, step up. If buffer &lt; 10s, step down.</li>
-            <li><strong>VMAF (Video Multi-method Assessment Fusion):</strong> Netflix's perceptual quality metric. Used during encoding to optimize quality-per-bitrate, not just PSNR.</li>
+            <li><strong>Studio upload:</strong> Content partners upload source files (often 50–200 GB ProRes/RAW) via pre-signed S3 URLs directly to AWS S3, bypassing Netflix's application servers entirely.</li>
+            <li><strong>Kafka trigger:</strong> S3 ObjectCreated event publishes to Kafka topic <code>raw-content-available</code>. The Encoding Orchestrator consumes this and creates a transcoding job plan.</li>
+            <li><strong>Encoding Farm:</strong> 10,000+ EC2 spot instances run FFmpeg-based transcoding workers. Each job encodes one (title, codec, quality-profile) tuple. Jobs are independent — a failed 4K HEVC job doesn't block 1080p H.264.</li>
+            <li><strong>VMAF quality gate:</strong> Each encoded output is scored by a VMAF model. If VMAF score falls below threshold (typically 90/100), the encoder retries at a higher bitrate. This is how Netflix achieves per-title optimized bitrate ladders — not one-size-fits-all.</li>
+            <li><strong>Packaging &amp; manifests:</strong> Encoded segments are wrapped into HLS (master + variant .m3u8 playlists) and DASH (.mpd manifests). Segments are AES-128 encrypted with per-title keys for DRM. Packaged output lands in S3.</li>
+            <li><strong>OCA pre-positioning:</strong> At ~2 AM UTC, the Content Steering Service pushes popular titles to OCAs at every major ISP globally. By the time users hit peak hour, the content is already 5 ms away.</li>
           </ol>
-          <p><strong>Why ABR beats fixed quality:</strong> A 1080p stream at 8 Mbps on a 3 Mbps connection causes buffering. ABR automatically drops to 720p at 2.5 Mbps — the user keeps watching without interruption.</p>
-        </div>
-      </section>
 
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body">
+          <h3>Streaming Path (User Device → First Frame)</h3>
+          <ol>
+            <li><strong>Play button press:</strong> Client calls <code>GET /v1/titles/{titleId}/manifest</code>. The Manifest Service determines the best OCA cluster based on user location and ISP (via BGP anycast), then returns a CDN URL to the master manifest.</li>
+            <li><strong>Manifest fetch:</strong> Client fetches the 1–2 KB master .m3u8 from the CDN OCA. The manifest lists all available quality tiers with URLs to their segment playlists.</li>
+            <li><strong>DRM license:</strong> Client simultaneously requests a license from the DRM License Server. The server validates the user's entitlement, then returns a decryption key. This happens in parallel with manifest fetch to avoid adding latency.</li>
+            <li><strong>Initial quality selection:</strong> ABR algorithm picks a conservative quality (not the highest) for the first segment to minimize startup latency. It will ramp up as bandwidth is measured.</li>
+            <li><strong>Segment fetching loop:</strong> Client downloads 2–6 second segments, measures download speed, updates its EWMA bandwidth estimate, and selects quality for the next segment via BOLA or similar algorithm.</li>
+            <li><strong>Resume:</strong> Client fetches the last-watched position from <code>GET /v1/resume/{titleId}</code> (Redis, &lt;1 ms) and seeks to that byte offset before starting playback.</li>
+          </ol>
+
+          <div class="callout callout--tip">
+            <strong>L6 Insight — Open Connect Economics:</strong> Netflix pre-positions content during off-peak hours. By 9 AM, popular movies are already on OCAs at every major ISP. The user's first byte comes from 5 ms away, not 150 ms from a distant AWS region. More importantly: ISPs love this arrangement. Without OCA, Netflix traffic traverses expensive peering links between ISPs — the ISP pays. With OCA, that traffic never leaves the ISP's network. Netflix gets free co-location; the ISP gets bandwidth relief. Both win.
+          </div>
+
+          <h3>Microservices Architecture</h3>
+          <p>Netflix runs 700+ microservices, all on AWS. Key services in the streaming path:</p>
           <ul>
-            <li><strong>Transcoding cost:</strong> A 2-hour 4K movie generates ~200GB of encoded files. Netflix encodes per-title at optimal bitrate ladders using VMAF, not a fixed ladder — this reduces storage ~40%.</li>
-            <li><strong>CDN cache misses:</strong> Long-tail titles (rare requests) miss the OCA cache and hit S3. Acceptable since rare titles have fewer concurrent viewers.</li>
-            <li><strong>DRM:</strong> Widevine/FairPlay/PlayReady. Segments are encrypted; client fetches license key from DRM server before decryption. Key not shown in design because it's a legal/integration concern, not a systems problem.</li>
+            <li><strong>Zuul API Gateway:</strong> Edge proxy handling authentication, rate limiting, A/B test routing, and request logging. Handles 100,000+ RPS at peak.</li>
+            <li><strong>Eureka Service Registry:</strong> Services register themselves; Zuul routes to healthy instances. Netflix open-sourced both.</li>
+            <li><strong>Hystrix Circuit Breaker (now Resilience4j):</strong> Every service call is wrapped in a circuit breaker. If the Recommendation Service starts failing at &gt;50% error rate, the circuit opens — callers get a fallback (e.g., popular titles) rather than waiting for timeouts that cascade.</li>
+            <li><strong>Manifest Service:</strong> Stateless service returning CDN URLs. Scales horizontally; each instance serves thousands of concurrent manifest requests.</li>
+            <li><strong>DRM License Service:</strong> Issues content decryption keys after validating user entitlement. Backed by a hardware security module (HSM) for key storage.</li>
+            <li><strong>Recommendation Service:</strong> Pre-computed offline; real-time re-ranking layer adjusts for context (time of day, device, recently watched).</li>
           </ul>
         </div>
       </section>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- A — APIs                                                    -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <p>We designed Netflix handling 200M users and 665 Tbps of egress. Key decisions: HLS + ABR for adaptive quality, Open Connect CDN inside ISPs for 95% of traffic, distributed transcoding pipeline producing 10+ quality tiers per title, and Redis for sub-100ms resume position lookups.</p>
+          <h3>Streaming APIs (Client-facing, served via Zuul)</h3>
+          <pre><code class="language-java">// Fetch streaming manifest — the entry point for every stream
+// Returns CDN-based manifest URL, DRM metadata, and resume position
+GET /v1/titles/{titleId}/stream-info?profileId={id}&deviceType={ios|web|tv}
+Response 200:
+{
+  "titleId": "tt0133093",
+  "manifestUrl": "https://oca-sjc.netflix.com/v2/manifests/tt0133093/master.m3u8",
+  "drmType": "WIDEVINE",                     // FAIRPLAY for iOS, PLAYREADY for Windows
+  "licenseUrl": "https://widevine.netflix.com/license",
+  "resumePositionSecs": 3847,
+  "availableProfiles": ["480p","720p","1080p","1080p_HDR10","2160p_DV"],
+  "contentAdvisory": "TV-MA"
+}
+
+// Update watch position — called every 60 seconds during playback
+POST /v1/watch-events
+Body: {
+  "titleId": "tt0133093",
+  "profileId": 9182736,
+  "positionSecs": 3907,
+  "qualityTier": "1080p",
+  "bufferLevelSecs": 28,                     // used for QoE analytics
+  "bandwidthKbps": 7240                      // used for ABR diagnostics
+}
+Response: 204 No Content
+
+// Fetch resume position (low-latency path, served from Redis)
+GET /v1/resume/{titleId}?profileId={id}
+Response 200: { "positionSecs": 3847, "updatedAt": "2024-01-15T22:14:03Z" }
+
+// Personalized home feed
+GET /v1/home-feed?profileId={id}&maxRowsPerSection=20
+Response 200:
+{
+  "rows": [
+    { "rowName": "Continue Watching", "titles": [...] },
+    { "rowName": "Because you watched Ozark", "titles": [...] },
+    { "rowName": "Top 10 in the US Today", "titles": [...] }
+  ]
+}</code></pre>
+
+          <h3>Content Ingestion APIs (Studio-facing, internal)</h3>
+          <pre><code class="language-java">// Studio requests upload URL for a source file
+POST /v1/ingest/upload-url
+Body: { "titleId": "tt0133093", "fileType": "PRORES_4K", "fileSizeBytes": 187456000000 }
+Response 200: {
+  "uploadId": "upload_abc123",
+  "presignedUrl": "https://s3.amazonaws.com/netflix-ingest/...",
+  "expiresAt": "2024-01-16T02:00:00Z"
+}
+
+// Poll encoding job status
+GET /v1/ingest/jobs/{uploadId}
+Response 200: {
+  "uploadId": "upload_abc123",
+  "status": "ENCODING",                 // QUEUED | ENCODING | PACKAGING | DONE | FAILED
+  "progressPct": 65,
+  "completedProfiles": ["480p_h264","720p_h264"],
+  "pendingProfiles":   ["1080p_h264","1080p_hevc","2160p_hevc","2160p_dv"],
+  "estimatedCompleteAt": "2024-01-16T01:30:00Z"
+}</code></pre>
+
+          <h3>HLS Manifest Structure (what the client actually fetches)</h3>
+          <pre><code class="language-java">// master.m3u8 — the "table of contents" for a title (~1 KB)
+#EXTM3U
+#EXT-X-VERSION:6
+
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=854x480,CODECS="avc1.4d401f"
+https://oca-sjc.netflix.com/seg/tt0133093/h264/480p/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS="avc1.640028"
+https://oca-sjc.netflix.com/seg/tt0133093/h264/720p/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028"
+https://oca-sjc.netflix.com/seg/tt0133093/h264/1080p/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS="hvc1.2.4.L150.90"
+https://oca-sjc.netflix.com/seg/tt0133093/hevc/1080p_hdr/playlist.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=16000000,RESOLUTION=3840x2160,CODECS="dvh1.05.01"
+https://oca-sjc.netflix.com/seg/tt0133093/dv/4k/playlist.m3u8
+
+// 720p variant playlist — the segment list the ABR client actually downloads
+// Each segment is 2–6 seconds; independently decodable (fMP4 or MPEG-TS)
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-VERSION:6
+#EXT-X-KEY:METHOD=AES-128,URI="https://drm.netflix.com/key?titleId=tt0133093&kid=abc"
+
+#EXTINF:6.000,
+https://oca-sjc.netflix.com/seg/tt0133093/h264/720p/seg_000.ts
+#EXTINF:6.000,
+https://oca-sjc.netflix.com/seg/tt0133093/h264/720p/seg_001.ts
+#EXTINF:5.984,
+https://oca-sjc.netflix.com/seg/tt0133093/h264/720p/seg_002.ts
+... (thousands more segments for a 2-hour film)</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- D — DEEP DIVE                                               -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <!-- DEEP DIVE 1: VIDEO INGESTION PIPELINE -->
+          <h3>1. Video Ingestion Pipeline</h3>
+          <p>The ingestion pipeline is the most operationally complex part of Netflix's infrastructure. A single movie generates hundreds of encoding jobs, all of which must complete before the title is visible to subscribers.</p>
+
+          <h4>Source File Characteristics</h4>
+          <ul>
+            <li>Studios deliver in ProRes 4444, ProRes RAW, or DPX (Digital Picture eXchange) format</li>
+            <li>A 2-hour movie in ProRes 4444 4K = ~500 GB – 2 TB of source data</li>
+            <li>Audio: typically multi-channel (7.1 Dolby Atmos) as separate WAV files</li>
+            <li>Subtitles: per-language TTML files, separately processed</li>
+          </ul>
+
+          <h4>Encoding Ladder (per-title optimization)</h4>
+          <p>Netflix does not use a fixed bitrate ladder. Instead, they run a "per-title encoding" algorithm:</p>
+          <ol>
+            <li>Sample 20 "complex" scenes and 20 "simple" scenes from the film</li>
+            <li>For each candidate bitrate, encode the samples and compute VMAF score</li>
+            <li>Find the minimum bitrate at which each quality tier achieves VMAF ≥ 90</li>
+            <li>Use those per-title bitrates rather than the fixed ladder</li>
+          </ol>
+          <p>Result: an action film (complex motion) might need 8 Mbps for 1080p while an animated film might achieve the same quality at 4 Mbps. This saves 20–40% bandwidth and storage.</p>
+
+          <h4>Codec Strategy</h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Codec</th><th>Compression vs H.264</th><th>Encoding Cost</th><th>Device Support</th><th>Use Case</th></tr></thead>
+              <tbody>
+                <tr><td>H.264 (AVC)</td><td>Baseline</td><td>1×</td><td>Universal (every device since 2010)</td><td>Fallback for all devices</td></tr>
+                <tr><td>HEVC (H.265)</td><td>~40% better</td><td>5–10×</td><td>Modern devices (iOS 11+, 2018+ TVs)</td><td>Primary for 1080p+ on supported devices</td></tr>
+                <tr><td>VP9</td><td>~30% better</td><td>3×</td><td>Chrome, Android, some Smart TVs</td><td>Web browser fallback to HEVC</td></tr>
+                <tr><td>AV1</td><td>~50% better</td><td>20–50×</td><td>Modern devices only (2022+)</td><td>Mobile data-saving mode, future primary</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout callout--info">
+            <strong>L6 Insight — Why two codecs?</strong> Netflix encodes every title in both H.264 and HEVC (and increasingly AV1). The client advertises its codec support in the manifest request; the Manifest Service returns the highest-efficiency codec the device can hardware-decode. Hardware decoding is critical — software decoding H.265 4K on a phone drains battery in minutes and causes thermal throttling.
+          </div>
+
+          <h4>Segment Packaging</h4>
+          <ul>
+            <li><strong>Segment duration:</strong> 2–6 seconds. Shorter segments = finer quality switching granularity but more HTTP requests. Netflix uses 6-second segments for most titles, 2-second segments for live events.</li>
+            <li><strong>Container format:</strong> fMP4 (fragmented MPEG-4) for both HLS and DASH — more efficient than legacy MPEG-TS (.ts files). Every segment is independently decodable — no dependencies on prior segments.</li>
+            <li><strong>Encryption:</strong> AES-128-CTR (CBCS mode). Each segment's decryption key is fetched from the DRM License Server before the segment is decrypted. The key ID is embedded in the manifest.</li>
+          </ul>
+
+          <!-- DEEP DIVE 2: ABR -->
+          <h3>2. Adaptive Bitrate Streaming (ABR) — BOLA Algorithm</h3>
+          <p>Netflix's ABR algorithm has evolved from simple bandwidth-matching to BOLA (Buffer Occupancy based Lyapunov Algorithm), a mathematically optimal buffer-based approach published by Netflix Research.</p>
+
+          <h4>Why Buffer-Based ABR (not pure bandwidth-based)</h4>
+          <p>Pure bandwidth estimation has a flaw: the internet is bursty. A single packet loss event can cause the EWMA estimate to crater, making the client drop from 1080p to 480p unnecessarily. Buffer-based ABR uses the playback buffer depth as the true signal of whether the client is downloading fast enough:</p>
+          <ul>
+            <li><strong>Buffer &gt; 30s:</strong> Downloading faster than playing. Have room to step up quality.</li>
+            <li><strong>Buffer 10–30s:</strong> Healthy. Hold current quality or make conservative upgrades.</li>
+            <li><strong>Buffer &lt; 10s:</strong> Panic zone. Drop to a quality tier that can be downloaded at least 1.5× playback speed.</li>
+            <li><strong>Buffer &lt; 2s:</strong> Emergency. Drop to lowest quality (240p at 300 Kbps) to prevent rebuffering. This is the spinner.</li>
+          </ul>
+
+          <h4>Bandwidth Estimation (EWMA)</h4>
+          <p>The client maintains two EWMA estimates: a "fast" estimate (α=0.5, responds quickly to drops) and a "slow" estimate (α=0.1, tracks long-term throughput). Quality decisions use the minimum of the two — biasing toward caution:</p>
+          <pre><code class="language-java">// EWMA update formula
+slowEstimateKbps = 0.1 * measuredKbps + 0.9 * slowEstimateKbps;
+fastEstimateKbps = 0.5 * measuredKbps + 0.5 * fastEstimateKbps;
+conservativeEstimateKbps = Math.min(slowEstimateKbps, fastEstimateKbps);</code></pre>
+
+          <h4>Quality Switching Hysteresis</h4>
+          <p>Rapid up-down switching (oscillation) is jarring. Netflix's ABR prevents it by:</p>
+          <ul>
+            <li>Only stepping up one quality tier at a time</li>
+            <li>Requiring the higher tier's bitrate to be ≤ 80% of estimated bandwidth (safety margin)</li>
+            <li>Not stepping up during the first 10 seconds of playback (startup stability)</li>
+          </ul>
+
+          <!-- DEEP DIVE 3: OPEN CONNECT CDN -->
+          <h3>3. Netflix Open Connect CDN</h3>
+
+          <h4>Why Build a Private CDN?</h4>
+          <p>In 2012, Netflix was the largest customer of Akamai and Level 3 CDN. At its traffic scale (15% of internet), per-GB CDN fees were enormous. More importantly, Netflix had a unique advantage: <em>it could predict what content subscribers would watch</em>. At 9 PM, 30% of traffic is the top 100 titles. A private CDN with pre-positioning turns this predictability into a latency advantage that no public CDN can match.</p>
+
+          <h4>OCA Architecture</h4>
+          <ul>
+            <li><strong>Hardware:</strong> Custom-built 1U servers with 100–400 TB of SSD storage per appliance, 10–40 Gbps uplinks</li>
+            <li><strong>Placement:</strong> Inside ISP data centers (not Netflix data centers). Netflix provides the hardware and pays for rack space + power. The ISP provides the physical environment and network peering.</li>
+            <li><strong>Routing:</strong> BGP anycast — when a user's DNS resolver queries for <code>oca.netflix.com</code>, it returns the IP of the geographically closest (in BGP hops) OCA cluster</li>
+            <li><strong>Cache fill:</strong> OCAs pull uncached content from S3 origin on first request, then serve from local SSD for all subsequent requests. Popular content is also proactively pushed nightly.</li>
+          </ul>
+
+          <h4>Content Steering</h4>
+          <p>Netflix's Content Steering protocol (part of HLS spec they contributed) allows the manifest to specify multiple CDN origins ranked by preference. If the first OCA is overloaded or slow, the client can transparently switch to the next one — no user-visible interruption.</p>
+
+          <div class="callout callout--tip">
+            <strong>L6 Insight — ISP Peering Economics:</strong> Without Open Connect, Netflix video traverses expensive public internet peering points between ISPs. These inter-ISP links have limited capacity — Netflix peak traffic was literally saturating them circa 2012, causing ISPs like Comcast and Verizon to demand peering fees. By placing content inside the ISP, Netflix eliminates this traffic entirely. The ISP saves bandwidth costs; Netflix gets better latency and avoids peering fees. This is why Netflix paid ~$100M to build Open Connect — it saved billions over a decade.
+          </div>
+
+          <!-- DEEP DIVE 4: DRM -->
+          <h3>4. Digital Rights Management (DRM)</h3>
+          <p>DRM is a legal requirement for all licensed content. Netflix must prove to studios that content is protected — otherwise they cannot license Marvel, Disney, or HBO content.</p>
+
+          <h4>Three DRM Systems (because three OS ecosystems)</h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>DRM System</th><th>Owner</th><th>Platform</th><th>How It Works</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Widevine</strong></td>
+                  <td>Google</td>
+                  <td>Android, Chrome, Chromecast</td>
+                  <td>Three security levels: L1 (hardware TEE decryption, required for 4K), L2, L3 (software, SD only). Netflix 4K on Android requires L1 device.</td>
+                </tr>
+                <tr>
+                  <td><strong>FairPlay</strong></td>
+                  <td>Apple</td>
+                  <td>iOS, macOS, Apple TV, Safari</td>
+                  <td>Proprietary to Apple. License server must be Apple-approved. Key exchange via Apple's KSM protocol. Hardware decryption in Apple Secure Enclave.</td>
+                </tr>
+                <tr>
+                  <td><strong>PlayReady</strong></td>
+                  <td>Microsoft</td>
+                  <td>Windows, Edge, Xbox</td>
+                  <td>Required for Netflix UWP app on Windows. Supports SL3000 (hardware) required for 4K HDR on Windows 10+.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>DRM License Flow</h4>
+          <ol>
+            <li>Client requests manifest → Manifest Service returns <code>licenseUrl</code> and <code>drmType</code></li>
+            <li>Client generates a DRM challenge (opaque blob containing device credentials)</li>
+            <li>Client POSTs challenge to Netflix DRM License Service</li>
+            <li>License Service validates: Is user subscribed? Is the device registered? Is this content licensed in user's country?</li>
+            <li>License Service calls the appropriate DRM vendor's key system (Widevine STS, Apple KSM) to generate an encrypted license</li>
+            <li>License (containing content decryption key, usage rules, and expiry) is returned to client</li>
+            <li>Client's DRM module (in hardware TEE) decrypts segments — the key never leaves the secure enclave</li>
+          </ol>
+
+          <h4>Key Rotation</h4>
+          <p>Netflix rotates content encryption keys periodically. The new key ID is referenced in the updated segment manifest. Clients automatically fetch a new license for the new key ID — transparent to the user. This limits the damage if a key is ever compromised.</p>
+
+          <!-- DEEP DIVE 5: PERSONALIZATION -->
+          <h3>5. Personalization &amp; Recommendation Engine</h3>
+
+          <h4>Two-Stage Architecture</h4>
+          <ol>
+            <li><strong>Candidate Generation (offline, runs every 4 hours):</strong> Collaborative filtering (matrix factorization on watch-history) produces ~1000 candidate titles per user. These are stored in DynamoDB pre-computed per profile.</li>
+            <li><strong>Re-ranking (online, &lt;100 ms):</strong> The 1000 candidates are re-ranked by a real-time model considering: current time of day, device type, what the user just finished watching, trending titles, and A/B test assignment.</li>
+          </ol>
+
+          <h4>Collaborative Filtering</h4>
+          <p>Netflix's core algorithm: if User A and User B have similar viewing histories, titles User B watched that User A hasn't are good recommendations for User A. Implemented as matrix factorization — decompose the (user × title) viewing matrix into two lower-rank matrices (user embeddings and title embeddings). Dot-product similarity retrieves nearest titles.</p>
+
+          <h4>A/B Testing Thumbnails (Contextual Bandits)</h4>
+          <p>Netflix A/B tests every artwork variant for every title. The same movie might show a different thumbnail depending on whether you watch mostly action, romance, or drama. This is not a standard A/B test — it uses a contextual bandit algorithm (Thompson Sampling) that:</p>
+          <ul>
+            <li>Explores new thumbnail variants for a fraction of impressions</li>
+            <li>Exploits the current best variant for the majority</li>
+            <li>Personalizes per user based on their genre preferences</li>
+          </ul>
+          <p>A/B test on thumbnail artwork increased click-through rates by ~20–30% for some titles — equivalent to a massive marketing spend, at zero marginal cost.</p>
+
+          <!-- DEEP DIVE 6: CHAOS ENGINEERING -->
+          <h3>6. Chaos Engineering — Netflix's Most Famous Contribution</h3>
+          <p>Netflix invented Chaos Engineering and open-sourced Chaos Monkey in 2012. The core insight: a system that has never experienced failure in production will fail unpredictably in production. A system that fails regularly, in controlled ways, becomes robust.</p>
+
+          <h4>The Simian Army</h4>
+          <ul>
+            <li><strong>Chaos Monkey:</strong> Randomly kills production EC2 instances during business hours. Forces services to be stateless and auto-healing. If your service panics when an instance dies, you find out on a Tuesday afternoon — not during a Friday night traffic peak.</li>
+            <li><strong>Chaos Gorilla:</strong> Simulates an entire AWS Availability Zone going offline. Verifies that traffic reroutes to other AZs within seconds.</li>
+            <li><strong>Chaos Kong:</strong> Simulates an entire AWS Region failing. Verifies cross-region failover. Netflix can shift all traffic from us-east-1 to us-west-2 in minutes.</li>
+            <li><strong>Latency Monkey:</strong> Introduces artificial latency between services. Forces all service clients to implement timeouts and fallbacks — services that hang indefinitely rather than failing fast are found and fixed.</li>
+            <li><strong>Conformity Monkey:</strong> Finds instances that don't comply with best practices (e.g., no auto-scaling group) and terminates them.</li>
+          </ul>
+
+          <div class="callout callout--info">
+            <strong>L6 Insight — Hystrix Circuit Breaker Pattern:</strong> Chaos Engineering only works if services are designed with circuit breakers. Netflix's Hystrix (now Resilience4j) wraps every inter-service call: if the downstream service returns errors or times out in &gt;50% of calls over a 10-second window, the circuit "opens" — all subsequent calls immediately return a fallback response without attempting the network call. The circuit tries a single "probe" call every 5 seconds; if it succeeds, the circuit "closes" again. This prevents cascade failures where one slow service takes down every service that calls it.
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- E — EVALUATE                                                -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">✅</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Failure Scenarios &amp; Mitigations</h3>
+
+          <h4>OCA Appliance Failure</h4>
+          <p><strong>What happens:</strong> An OCA in a specific ISP loses power or has a disk failure.<br>
+          <strong>Mitigation:</strong> Multiple OCA clusters serve each region (typically 3–5 per major ISP). BGP routing automatically redirects clients to the next closest cluster within seconds. If all OCAs for an ISP fail, clients fall back to the regional CDN PoP, then to S3 origin. Degraded latency but no outage.</p>
+
+          <h4>Encoding Worker Crash Mid-Job</h4>
+          <p><strong>What happens:</strong> A spot instance encoding a title is reclaimed by AWS mid-job.<br>
+          <strong>Mitigation:</strong> Each encoding job is tracked in the job state table. Workers heartbeat every 30 seconds; jobs without heartbeats for 2 minutes are marked STALE and re-queued. Jobs write output to S3 with a checksum; the orchestrator validates on completion. Re-runs are idempotent — they overwrite the same S3 keys.</p>
+
+          <h4>DRM License Service Unavailable</h4>
+          <p><strong>What happens:</strong> The DRM License Service goes down during peak hours.<br>
+          <strong>Mitigation:</strong> Licenses have a validity period (typically 24 hours). Clients cache their license locally. Ongoing streams continue uninterrupted. New streams requiring a license will fail to start — but this affects &lt;5% of users at any moment (most have a valid cached license). License Service has 3-region active-active deployment.</p>
+
+          <h4>AWS Region Outage</h4>
+          <p><strong>What happens:</strong> us-east-1 (Netflix's primary region) goes down.<br>
+          <strong>Mitigation:</strong> Netflix runs active-active in 3 AWS regions (us-east-1, us-west-2, eu-west-1). The control plane (API services) fails over via Route 53 health checks within 60 seconds. The data plane (OCA CDN) is region-independent — OCAs don't route through AWS, they peer directly at ISPs. Video streaming continues uninterrupted for active sessions even if the entire AWS control plane is down.</p>
+
+          <h4>Recommendation Service Degradation</h4>
+          <p><strong>What happens:</strong> The real-time re-ranking service starts returning errors at &gt;50% rate.<br>
+          <strong>Mitigation:</strong> Hystrix circuit breaker opens. The fallback response returns the pre-computed top-1000 candidates without re-ranking. Users see slightly less personalized recommendations (editorial picks rather than ML-personalized) — but the app works normally. The degradation is invisible to users.</p>
+
+          <h3>Quality of Service (QoE) Metrics</h3>
+          <ul>
+            <li><strong>Rebuffering Ratio:</strong> Time spent buffering / total stream time. Target &lt;0.1%. Directly correlates with subscriber churn.</li>
+            <li><strong>Video Start Failure (VSF):</strong> % of play attempts that fail before first frame. Every 1% VSF increase = 2% increase in next-day cancellation rate.</li>
+            <li><strong>Average Bitrate:</strong> Higher = better perceived quality. Tracked per ISP to identify network peering issues.</li>
+            <li><strong>VMAF Score:</strong> Perceptual quality of delivered video, computed from segment bitrate + title profile. Used to trigger re-encoding if quality degrades.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- D — DELIVER                                                 -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>We designed Netflix handling 250M subscribers and 500 Tbps of peak egress. The five architectural pillars:</p>
+          <ol>
+            <li><strong>Per-title adaptive encoding</strong> using VMAF-guided per-title bitrate ladders in both H.264 and HEVC, saving 20–40% bandwidth vs fixed ladders. Jobs are parallelized across 10,000+ EC2 spot workers, stored durably on S3.</li>
+            <li><strong>HLS + ABR with BOLA algorithm</strong> for client-side quality selection. The client monitors buffer depth (not just bandwidth) to avoid unnecessary quality switches. Manifests are tiny; all video bytes come from CDN edge.</li>
+            <li><strong>Open Connect CDN</strong> with 15,000 OCA appliances co-located inside ISPs globally. Proactive pre-positioning ensures 95% cache hit rate. Video bytes never traverse expensive peering links.</li>
+            <li><strong>Multi-DRM</strong> (Widevine/FairPlay/PlayReady) with hardware TEE decryption on client devices. Key rotation limits blast radius of any key compromise.</li>
+            <li><strong>Chaos Engineering + Hystrix circuit breakers</strong> ensure every service degrades gracefully. The system is hardened by deliberate, daily failure injection in production.</li>
+          </ol>
+          <p>The key insight Netflix's architecture embeds: <em>video bytes are 99.9% of the data volume</em>. Every design decision — private CDN, per-title encoding, buffer-based ABR — is about getting those bytes to users as cheaply and reliably as possible. The remaining 0.1% (metadata, recommendations, auth) is standard microservices architecture.</p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- TRADE-OFFS                                                  -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-offs
+        </h2>
         <div class="content-section__body">
           <div class="table-wrapper">
             <table>
-              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <thead>
+                <tr><th>Decision</th><th>Option A (Chosen)</th><th>Option B (Not Chosen)</th><th>Why Option A Wins at Netflix's Scale</th></tr>
+              </thead>
               <tbody>
-                <tr><td>Streaming protocol</td><td>HLS (HTTP-based)</td><td>RTMP, RTSP</td><td>HLS uses standard HTTP — works through firewalls, leverages CDN caching naturally, widely supported</td></tr>
-                <tr><td>CDN</td><td>Open Connect (private ISP-embedded)</td><td>AWS CloudFront</td><td>Lower cost at Netflix's scale; direct peering with ISPs eliminates transit costs; faster last-mile delivery</td></tr>
-                <tr><td>Quality metric</td><td>VMAF (perceptual)</td><td>PSNR (pixel-level)</td><td>VMAF correlates with human perception — allows lower bitrates at same perceived quality, reducing storage/bandwidth</td></tr>
-                <tr><td>Resume position storage</td><td>Redis (fast) + Cassandra (durable)</td><td>PostgreSQL only</td><td>Redis serves &lt;1ms reads; position written to Kafka, async persisted to Cassandra for durability</td></tr>
+                <tr>
+                  <td><strong>Streaming protocol</strong></td>
+                  <td>HLS (HTTP-based, CDN-friendly)</td>
+                  <td>DASH (MPEG-DASH)</td>
+                  <td>HLS has native support on all Apple devices (iOS + Safari). Netflix uses both — DASH for non-Apple, HLS for Apple. HLS caches perfectly on HTTP CDNs; DASH requires slightly more manifest negotiation.</td>
+                </tr>
+                <tr>
+                  <td><strong>CDN strategy</strong></td>
+                  <td>Private OCA (embedded in ISPs)</td>
+                  <td>Public CDN (CloudFront, Akamai)</td>
+                  <td>At Netflix's volume (500 Tbps peak), public CDN per-GB fees are prohibitive. OCA co-location eliminates inter-ISP transit entirely. Break-even was reached at ~1 Tbps — Netflix is 500× that. Public CDN remains the right choice for smaller streaming platforms.</td>
+                </tr>
+                <tr>
+                  <td><strong>ABR algorithm</strong></td>
+                  <td>Buffer-based (BOLA)</td>
+                  <td>Bandwidth-based only</td>
+                  <td>Pure bandwidth estimation is brittle on bursty networks. Buffer depth is the ground truth — if the buffer is growing, downloading is outpacing playback. BOLA is mathematically optimal: maximizes average quality while minimizing rebuffering as a constrained optimization problem.</td>
+                </tr>
+                <tr>
+                  <td><strong>Client vs server-driven ABR</strong></td>
+                  <td>Client-side ABR</td>
+                  <td>Server-driven (server tells client which quality to request)</td>
+                  <td>Client-side ABR has accurate, real-time knowledge of local network conditions. Server-driven requires round-trips and requires the server to model millions of diverse client contexts. Client-side scales to hundreds of millions of concurrent streams with zero server cost per quality decision.</td>
+                </tr>
+                <tr>
+                  <td><strong>Encoding codec</strong></td>
+                  <td>HEVC + H.264 (dual encode)</td>
+                  <td>H.264 only</td>
+                  <td>HEVC saves ~40% bandwidth on modern devices. With 100M+ streams, 40% bandwidth reduction = ~$100M/year in CDN and bandwidth cost savings. The dual-encoding cost (higher compute, more storage) is easily justified. AV1 is the next transition in progress.</td>
+                </tr>
+                <tr>
+                  <td><strong>Resume position storage</strong></td>
+                  <td>Redis (fast) + Cassandra (durable)</td>
+                  <td>PostgreSQL only</td>
+                  <td>Resume position is read on every app open — needs &lt;1 ms. PostgreSQL with 250M users would require massive sharding. Redis is sub-ms with horizontal scaling. Cassandra provides durable backup. Position changes are written to Kafka and async-persisted, accepting the minor risk of losing the last 60 seconds of position on a Redis crash.</td>
+                </tr>
+                <tr>
+                  <td><strong>Recommendation freshness</strong></td>
+                  <td>Pre-computed offline + online re-ranking</td>
+                  <td>Fully real-time recommendation computation</td>
+                  <td>Running a full matrix factorization at request time for 100M+ users is computationally infeasible at &lt;100 ms SLA. Pre-computing every 4 hours captures 99% of the value — viewing history doesn't change fast enough to need sub-second freshness. The online re-ranking layer captures real-time signals (just finished a title, trending now) within milliseconds.</td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- JAVA IMPLEMENTATION                                         -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation — ABR Quality Selector
+        </h2>
         <div class="content-section__body">
+          <p>This implementation models the client-side ABR algorithm used by Netflix players. It tracks bandwidth using dual EWMA (fast + slow), maps bandwidth to quality profiles, and implements buffer-based switching with hysteresis to prevent oscillation.</p>
           <pre><code class="language-java">/**
- * ABRController — selects the optimal video quality tier based on
- * current bandwidth estimate and playback buffer level.
- * Runs client-side; included here to illustrate the algorithm.
+ * @file AbrQualitySelector.java
+ * @description Client-side Adaptive Bitrate quality selector for HLS/DASH streaming.
+ *              Implements dual-EWMA bandwidth estimation and buffer-occupancy based
+ *              quality switching (inspired by Netflix's BOLA algorithm).
+ *
+ * @requires none (standalone implementation)
+ *
+ * Public API:
+ *   selectNextQuality(downloadedBytes, downloadDurationMs, bufferLevelSeconds)
+ *     — returns the quality tier name to request for the next segment
+ *   getCurrentQualityName() — returns the currently selected quality tier name
+ *   getEstimatedBandwidthKbps() — returns the current bandwidth estimate
  */
-public class ABRController {
 
-    // Quality tiers: name → required bandwidth in kbps
-    private static final List&lt;QualityTier&gt; QUALITY_TIERS = List.of(
-        new QualityTier("240p",  400),
-        new QualityTier("480p",  1000),
-        new QualityTier("720p",  2500),
-        new QualityTier("1080p", 5000),
-        new QualityTier("4K",    15000)
+import java.util.List;
+
+public class AbrQualitySelector {
+
+    // ── Constants ─────────────────────────────────────────────────────
+
+    /**
+     * Quality tiers in ascending order of required bandwidth.
+     * Bitrates match Netflix's actual per-title ladder for a typical drama.
+     */
+    private static final List&lt;QualityProfile&gt; QUALITY_PROFILES = List.of(
+        new QualityProfile("240p",       300,  "h264"),
+        new QualityProfile("480p",       800,  "h264"),
+        new QualityProfile("720p",      2500,  "h264"),
+        new QualityProfile("1080p",     5000,  "h264"),
+        new QualityProfile("1080p_HDR", 8000,  "hevc"),
+        new QualityProfile("4K_HDR",   16000,  "hevc")
     );
 
     // Buffer thresholds in seconds
-    private static final int BUFFER_PANIC_THRESHOLD_SECONDS = 10;  // drop quality immediately
-    private static final int BUFFER_TARGET_SECONDS          = 30;  // ideal buffer level
+    private static final int BUFFER_EMERGENCY_SECONDS  = 2;   // spinner imminent: go to floor quality
+    private static final int BUFFER_PANIC_SECONDS      = 10;  // drop one tier immediately
+    private static final int BUFFER_HEALTHY_SECONDS    = 30;  // safe to step up quality
+    private static final int STARTUP_STABILITY_SECONDS = 10;  // don't step up during cold start
 
-    // Bandwidth estimate: exponential weighted moving average
-    private static final double EWMA_ALPHA = 0.3; // weight of latest measurement
-    private double estimatedBandwidthKbps = 1000; // initial conservative estimate
+    // Dual EWMA alpha values — fast reacts to drops, slow tracks long-term
+    private static final double EWMA_ALPHA_FAST = 0.5;
+    private static final double EWMA_ALPHA_SLOW = 0.1;
 
-    private int currentTierIndex = 0; // start at lowest quality
+    // Safety margin: only use this fraction of estimated bandwidth
+    // to leave headroom for TCP slow-start and network jitter
+    private static final double BANDWIDTH_SAFETY_MARGIN = 0.8;
+
+    // ── State ─────────────────────────────────────────────────────────
+
+    private double fastBandwidthKbps  = 1000.0; // conservative initial estimate
+    private double slowBandwidthKbps  = 1000.0;
+    private int    currentProfileIndex = 0;      // start at lowest quality
+    private int    segmentsDownloaded  = 0;      // tracks startup period
+
+    // ── Core logic functions ──────────────────────────────────────────
 
     /**
-     * Called after each segment download completes.
-     * Updates bandwidth estimate and selects the tier for the next segment.
+     * Called after each segment download completes. Updates the bandwidth
+     * estimate and selects the quality tier for the next segment.
      *
-     * @param downloadedBytes      size of the segment just downloaded
-     * @param downloadDurationMs   time it took to download
-     * @param bufferLevelSeconds   current playback buffer depth
-     * @return name of quality tier to request for the next segment
+     * This is the main decision loop: it runs once per 2–6 seconds during
+     * active playback and is the only place where quality changes happen.
+     *
+     * @param downloadedBytes     number of bytes in the segment just downloaded
+     * @param downloadDurationMs  wall-clock time in milliseconds to download it
+     * @param bufferLevelSeconds  current playback buffer depth in seconds
+     * @return name of the quality profile to use for the next segment fetch
      */
-    public String selectNextQuality(long downloadedBytes, long downloadDurationMs, int bufferLevelSeconds) {
-        updateBandwidthEstimate(downloadedBytes, downloadDurationMs);
+    public String selectNextQuality(
+            long downloadedBytes,
+            long downloadDurationMs,
+            int  bufferLevelSeconds) {
 
-        if (bufferLevelSeconds &lt; BUFFER_PANIC_THRESHOLD_SECONDS) {
-            // Emergency: buffer critically low — drop to lowest quality immediately
-            currentTierIndex = 0;
-        } else {
-            currentTierIndex = findOptimalTierIndex(bufferLevelSeconds);
-        }
+        updateDualEwmaBandwidth(downloadedBytes, downloadDurationMs);
+        segmentsDownloaded++;
 
-        return QUALITY_TIERS.get(currentTierIndex).getName();
+        final int targetIndex = determineTargetProfileIndex(bufferLevelSeconds);
+        currentProfileIndex   = applyHysteresisConstraints(targetIndex, bufferLevelSeconds);
+
+        return QUALITY_PROFILES.get(currentProfileIndex).name();
     }
 
     /**
-     * Finds the highest quality tier whose bitrate fits within estimated bandwidth,
-     * with a safety margin that tightens when the buffer is low.
+     * Determines the ideal quality profile index given current network and
+     * buffer state, ignoring hysteresis constraints (applied separately).
+     *
+     * Priority order:
+     *   1. Emergency: buffer critically low → drop to floor
+     *   2. Panic: buffer low → drop one tier
+     *   3. Normal: highest tier that fits within safe bandwidth estimate
      */
-    private int findOptimalTierIndex(int bufferLevelSeconds) {
-        // Safety margin: tighter when buffer is low (0.5×), relaxed when buffer is healthy (0.9×)
-        double safetyMargin = (bufferLevelSeconds &gt;= BUFFER_TARGET_SECONDS) ? 0.9 : 0.6;
-        double usableBandwidthKbps = estimatedBandwidthKbps * safetyMargin;
+    private int determineTargetProfileIndex(int bufferLevelSeconds) {
+        if (bufferLevelSeconds &lt;= BUFFER_EMERGENCY_SECONDS) {
+            return 0; // floor quality — prevent spinner at all costs
+        }
 
-        int bestTierIndex = 0;
-        for (int tierIndex = 0; tierIndex &lt; QUALITY_TIERS.size(); tierIndex++) {
-            if (QUALITY_TIERS.get(tierIndex).getRequiredKbps() &lt;= usableBandwidthKbps) {
-                bestTierIndex = tierIndex;
+        if (bufferLevelSeconds &lt;= BUFFER_PANIC_SECONDS) {
+            return Math.max(0, currentProfileIndex - 1);
+        }
+
+        return findHighestAffordableProfileIndex();
+    }
+
+    /**
+     * Finds the highest quality profile whose required bandwidth fits within
+     * the conservative (minimum of fast/slow) bandwidth estimate, with safety margin.
+     *
+     * Using min(fast, slow) biases toward caution: if either estimator detects
+     * a drop, quality decreases. The safety margin prevents downloading segments
+     * faster than they play (which would drain the buffer).
+     */
+    private int findHighestAffordableProfileIndex() {
+        final double conservativeBandwidthKbps =
+                Math.min(fastBandwidthKbps, slowBandwidthKbps) * BANDWIDTH_SAFETY_MARGIN;
+
+        int affordableIndex = 0;
+        for (int profileIndex = 0; profileIndex &lt; QUALITY_PROFILES.size(); profileIndex++) {
+            if (QUALITY_PROFILES.get(profileIndex).requiredKbps() &lt;= conservativeBandwidthKbps) {
+                affordableIndex = profileIndex;
+            }
+        }
+        return affordableIndex;
+    }
+
+    /**
+     * Applies hysteresis to prevent rapid quality oscillation:
+     *   - Never step up more than one tier at a time
+     *   - Don't step up during the startup period (first 10 seconds)
+     *   - Allow instant drops (no hysteresis on drops — latency is real)
+     *
+     * Drops are allowed to jump multiple tiers at once because a buffer
+     * emergency requires immediate action — gradual drops cause rebuffering.
+     */
+    private int applyHysteresisConstraints(int targetIndex, int bufferLevelSeconds) {
+        final boolean isInStartupPeriod =
+                segmentsDownloaded * 4 &lt; STARTUP_STABILITY_SECONDS; // assume ~4s segments
+
+        if (targetIndex &gt; currentProfileIndex) {
+            if (isInStartupPeriod) {
+                return currentProfileIndex; // hold during startup
+            }
+            return currentProfileIndex + 1; // step up at most one tier
+        }
+
+        // Drops: allow any size drop immediately (buffer emergencies are urgent)
+        return targetIndex;
+    }
+
+    /**
+     * Updates both EWMA estimators with the latest measured throughput.
+     *
+     * Dual EWMA rationale: the fast estimator quickly captures bandwidth drops
+     * (to protect against rebuffering), while the slow estimator tracks steady-state
+     * throughput (to avoid over-reacting to transient TCP slow-start dips).
+     * Taking the minimum of both gives us the worst-case estimate — deliberately
+     * conservative to prioritize playback continuity over quality.
+     */
+    private void updateDualEwmaBandwidth(long downloadedBytes, long downloadDurationMs) {
+        if (downloadDurationMs &lt;= 0) {
+            return; // guard against division by zero on cached segments
+        }
+        final double measuredKbps = (downloadedBytes * 8.0) / downloadDurationMs; // bits/ms = kbps
+        fastBandwidthKbps = EWMA_ALPHA_FAST * measuredKbps + (1 - EWMA_ALPHA_FAST) * fastBandwidthKbps;
+        slowBandwidthKbps = EWMA_ALPHA_SLOW * measuredKbps + (1 - EWMA_ALPHA_SLOW) * slowBandwidthKbps;
+    }
+
+    // ── DOM functions (accessors for player UI) ───────────────────────
+
+    /** Returns the name of the quality currently being streamed. */
+    public String getCurrentQualityName() {
+        return QUALITY_PROFILES.get(currentProfileIndex).name();
+    }
+
+    /**
+     * Returns the conservative bandwidth estimate in Kbps.
+     * Useful for QoE analytics — sent to the server in each watch-event POST.
+     */
+    public double getEstimatedBandwidthKbps() {
+        return Math.min(fastBandwidthKbps, slowBandwidthKbps);
+    }
+
+    // ── Data types ────────────────────────────────────────────────────
+
+    /**
+     * Immutable description of one quality tier in the encoding ladder.
+     *
+     * @param name         human-readable name ("1080p_HDR") returned to the caller
+     * @param requiredKbps minimum bandwidth needed to sustain this quality without rebuffering
+     * @param codec        preferred codec for this tier (client checks hardware support before use)
+     */
+    private record QualityProfile(String name, int requiredKbps, String codec) {}
+}</code></pre>
+
+          <h3>Hystrix-Style Circuit Breaker (simplified)</h3>
+          <pre><code class="language-java">/**
+ * @file CircuitBreaker.java
+ * @description Simplified circuit breaker for inter-service calls.
+ *              Mirrors Netflix Hystrix behavior: CLOSED → OPEN → HALF_OPEN → CLOSED.
+ *              Used by every Netflix microservice to prevent cascade failures.
+ */
+public class CircuitBreaker {
+
+    private enum State { CLOSED, OPEN, HALF_OPEN }
+
+    private static final int    FAILURE_THRESHOLD_PCT  = 50;   // open if >50% calls fail
+    private static final int    SAMPLE_WINDOW_SECONDS  = 10;   // rolling window for failure rate
+    private static final long   OPEN_DURATION_MS       = 5_000; // probe after 5 seconds open
+    private static final int    MIN_CALLS_TO_EVALUATE  = 20;   // avoid tripping on 1/2 calls
+
+    private State  currentState       = State.CLOSED;
+    private int    callsInWindow       = 0;
+    private int    failuresInWindow    = 0;
+    private long   openedAtMs          = 0;
+
+    /**
+     * Executes serviceCall if circuit is CLOSED or HALF_OPEN; returns fallback if OPEN.
+     * The fallback is a Supplier so it's only evaluated when needed (lazy).
+     *
+     * @param serviceCall the actual downstream call to attempt
+     * @param fallback    what to return if the circuit is open or the call fails
+     * @param &lt;T&gt;         return type of both the call and fallback
+     * @return result of serviceCall, or fallback if the circuit is open
+     */
+    public &lt;T&gt; T execute(java.util.function.Supplier&lt;T&gt; serviceCall,
+                          java.util.function.Supplier&lt;T&gt; fallback) {
+        if (currentState == State.OPEN) {
+            if (shouldAttemptReset()) {
+                currentState = State.HALF_OPEN;
+            } else {
+                return fallback.get(); // circuit still open: return fallback immediately
             }
         }
 
-        // Limit quality increase to one step at a time (prevents oscillation)
-        return Math.min(bestTierIndex, currentTierIndex + 1);
+        try {
+            final T result = serviceCall.get();
+            onCallSuccess();
+            return result;
+        } catch (Exception callFailure) {
+            onCallFailure();
+            return fallback.get();
+        }
     }
 
-    /**
-     * Updates the EWMA bandwidth estimate with the latest measurement.
-     * EWMA smooths out transient spikes and drops.
-     */
-    private void updateBandwidthEstimate(long downloadedBytes, long downloadDurationMs) {
-        if (downloadDurationMs &lt;= 0) {
+    private void onCallSuccess() {
+        if (currentState == State.HALF_OPEN) {
+            reset(); // probe succeeded: close the circuit
+        }
+        callsInWindow++;
+    }
+
+    private void onCallFailure() {
+        callsInWindow++;
+        failuresInWindow++;
+
+        if (currentState == State.HALF_OPEN) {
+            openCircuit(); // probe failed: stay open
             return;
         }
-        double measuredKbps = (downloadedBytes * 8.0) / downloadDurationMs; // bits/ms = kbps
-        estimatedBandwidthKbps = EWMA_ALPHA * measuredKbps + (1 - EWMA_ALPHA) * estimatedBandwidthKbps;
+
+        if (callsInWindow &gt;= MIN_CALLS_TO_EVALUATE) {
+            final int failureRatePct = (failuresInWindow * 100) / callsInWindow;
+            if (failureRatePct &gt; FAILURE_THRESHOLD_PCT) {
+                openCircuit();
+            }
+        }
     }
 
-    private record QualityTier(String name, int requiredKbps) {
-        public String getName() { return name; }
-        public int getRequiredKbps() { return requiredKbps; }
+    private void openCircuit() {
+        currentState   = State.OPEN;
+        openedAtMs     = System.currentTimeMillis();
+        callsInWindow  = 0;
+        failuresInWindow = 0;
+    }
+
+    private void reset() {
+        currentState     = State.CLOSED;
+        callsInWindow    = 0;
+        failuresInWindow = 0;
+    }
+
+    private boolean shouldAttemptReset() {
+        return System.currentTimeMillis() - openedAtMs &gt; OPEN_DURATION_MS;
     }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- QUIZ                                                        -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-netflix-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header">
             <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="What triggers an ABR client to step DOWN to a lower quality tier?" data-options='["The user manually selects lower quality","The playback buffer drops below a critical threshold (e.g., 10 seconds), indicating download speed can't keep up with playback","The CDN returns a 429 Too Many Requests response","The video file for the current quality is not cached at the CDN edge"]' data-correct="1" data-explanation="ABR monitors buffer depth continuously. When buffer drops below the panic threshold, the client switches to a lower bitrate that can be downloaded faster than it plays, allowing the buffer to rebuild. Quality drops silently — the user sees a blurrier image rather than a spinner." style="display:none"></div>
-          <div data-question="Why does Netflix use a private CDN (Open Connect) embedded inside ISPs rather than a public CDN like CloudFront?" data-options='["Public CDNs don't support video streaming protocols","At Netflix's scale (15% of internet traffic), placing servers inside ISPs eliminates peering/transit costs and reduces last-mile latency — the economics are far better than paying a CDN per-GB fee","Netflix needs DRM hardware that only ISP facilities can host","Public CDNs have a 10 Gbps maximum throughput limit"]' data-correct="1" data-explanation="At Netflix's volume, per-GB CDN costs become enormous. Open Connect lets Netflix pre-position content directly in ISP data centers. The ISP wins (less traffic traversing expensive peering links); Netflix wins (lower latency, lower cost). The break-even vs public CDN is well below Netflix's scale." style="display:none"></div>
-          <div data-question="A 2-hour movie is encoded at 10 quality tiers. What does the HLS .m3u8 manifest file contain?" data-options='["The actual video data encoded in base64","A list of available quality tiers, each with a URL to its segment playlist. The client downloads the master manifest, picks a tier, then downloads that tier's segment URLs","A single URL pointing to the highest quality version","The movie's metadata: title, description, and cast information"]' data-correct="1" data-explanation="The HLS master manifest is a small text file (~1KB) listing each quality variant. Selecting a tier downloads that tier's media playlist — a list of 2–4 second segment URLs. The actual video data is in those segments, served directly from the CDN edge." style="display:none"></div>
-          <div data-question="Why is VMAF preferred over PSNR for Netflix's video quality optimization?" data-options='["VMAF is a simpler calculation that runs faster","VMAF correlates with human visual perception — a video scored 90 VMAF looks good to viewers even at a lower bitrate that PSNR would rate poorly, enabling better quality-per-bit efficiency","VMAF is a Netflix open-source tool so it's free to use","PSNR cannot measure color accuracy in HDR content"]' data-correct="1" data-explanation="PSNR measures pixel-level mathematical difference and doesn't correlate well with perceived quality. VMAF combines motion, temporal distortion, and contrast models trained on human ratings. Using VMAF allows Netflix to find the minimum bitrate at which a specific title looks 'good' — saving 30–40% storage vs fixed bitrate ladders." style="display:none"></div>
+
+          <div data-question="Netflix's ABR algorithm (BOLA) primarily uses which signal to decide whether to increase video quality?" data-options='["The user's stated network type (Wi-Fi vs 4G) from device settings","Buffer occupancy — the depth of pre-downloaded video ahead of the current playback position","The response time of the last DNS lookup for the CDN hostname","The CPU utilization of the client device"]' data-correct="1" data-explanation="BOLA (Buffer Occupancy based Lyapunov Algorithm) uses buffer depth as the primary signal, not raw bandwidth. If the buffer is growing (download rate > playback rate), the client can afford a higher quality tier. Buffer depth is the ground truth — pure bandwidth estimation is brittle on bursty networks where a single packet loss can crater the EWMA estimate and cause unnecessary quality drops." style="display:none"></div>
+
+          <div data-question="Why does Netflix deploy Open Connect Appliances (OCAs) inside ISP data centers rather than using public CDN providers like Akamai or CloudFront?" data-options='["Public CDNs don't support HEVC or Dolby Vision streaming","At Netflix's scale, per-GB public CDN fees are prohibitive. OCA placement inside ISPs eliminates inter-ISP peering transit entirely — the ISP saves bandwidth costs and Netflix gets ~5ms last-mile latency instead of 150ms from a distant PoP","Netflix needs proprietary DRM hardware that only ISP co-location facilities can host","Public CDNs have a maximum of 100 Gbps throughput, insufficient for Netflix's peak demand"]' data-correct="1" data-explanation="This is a pure economics and physics argument. At 500 Tbps peak, per-GB CDN fees would cost billions annually. OCA co-location eliminates inter-ISP transit entirely — Netflix traffic never leaves the ISP's network. The ISP benefits too (reduced transit cost), which is why they agree to host the hardware. The break-even vs public CDN is well below Netflix's actual scale. Netflix also pre-positions popular content during off-peak hours, so by 9 PM the content is already 5 ms from subscribers." style="display:none"></div>
+
+          <div data-question="A Netflix engineer finds that HEVC-encoded streams at 5 Mbps have a VMAF score of 96, while H.264 at 8 Mbps has the same score. What does this mean for the OCA pre-positioning strategy?" data-options='["Nothing — VMAF only affects which thumbnail is shown to users","Netflix can pre-position HEVC content on OCAs and serve it to supported devices, reducing the required OCA storage by ~40% for modern devices while maintaining identical perceptual quality — effectively expanding the catalog that fits on each appliance","Netflix should stop encoding H.264 immediately to save storage","HEVC requires 40% more OCA storage than H.264 at equivalent quality"]' data-correct="1" data-explanation="HEVC delivers the same perceptual quality (same VMAF score) at 40% lower bitrate. This has a direct multiplication effect on OCA capacity: if an OCA holds 100 TB, the same storage holds 40% more title-hours in HEVC vs H.264. More content fits in cache → higher cache hit rate → less traffic to S3 origin → lower latency for users. This is why Netflix spent significant engineering effort migrating to HEVC and is now doing the same for AV1." style="display:none"></div>
+
+          <div data-question="Netflix's Chaos Monkey kills random production EC2 instances during business hours. What design requirement does this enforce on every Netflix service?" data-options='["Services must have at least 3 replicas at all times","All services must be stateless or externalize state — no instance should be the sole owner of any data. If an instance dies, a replacement must boot and serve traffic within seconds without any human intervention","All services must respond within 100ms or they are automatically terminated","Services must log every request to a central audit system before Chaos Monkey can access them"]' data-correct="1" data-explanation="Chaos Monkey enforces statelessness as an architectural requirement, not a guideline. Any service that stores state in memory or local disk (session data, in-flight requests, etc.) will lose that state when the instance is killed. By running Chaos Monkey daily, Netflix ensures all state lives in external stores (Cassandra, Redis, DynamoDB). When an instance dies, the load balancer routes to healthy instances within seconds and a new instance starts from a clean slate. Services that can't survive this are found during business hours, not at 2 AM during a production incident." style="display:none"></div>
+
+          <div data-question="Which of the following correctly describes the DRM flow for a Netflix user playing a 4K Dolby Vision title on an Android device?" data-options='["The entire video file is downloaded first, then decrypted once before playback begins","The client fetches a Widevine L1 license (requiring hardware TEE support) from Netflix's DRM License Service, which validates subscription and country entitlement before returning an encrypted key. Segments are decrypted in the hardware Secure Enclave — the key never exists in application memory","Netflix uses a single DRM key per user account, stored permanently in the app after first login","The CDN server decrypts segments on the fly before sending them to the client, so the client receives unencrypted video bytes over HTTPS"]' data-correct="1" data-explanation="Widevine L1 is required for 4K on Android — it mandates hardware TEE (Trusted Execution Environment) decryption. The content decryption key lives only inside the Secure Enclave and is never accessible to application code. The License Service validates: Is the subscription active? Is 4K enabled on this plan? Is this content licensed in the user's region? Only if all checks pass does it return the encrypted license. The license has a validity period (24 hours); renewal is transparent. Cached licenses mean ongoing streams survive a license service outage." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

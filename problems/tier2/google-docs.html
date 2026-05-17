@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Google Docs collaborative editing — RESHADED walkthrough covering Operational Transformation, conflict resolution, version history, and real-time sync for MAANG interviews.">
+  <meta name="description" content="Design Google Docs collaborative editing — L6-depth RESHADED walkthrough covering Operational Transformation, CRDT, OT diamond problem, WebSocket architecture, presence system, and version history for MAANG interviews.">
   <title>Design Google Docs — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/problems/tier2/google-docs/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../assets/css/main.css">
@@ -14,7 +15,10 @@
   <a href="#main" class="skip-link">Skip to main content</a>
   <nav class="site-nav" aria-label="Main navigation">
     <div class="site-nav__inner">
-      <a href="../../index.html" class="site-nav__logo"><div class="site-nav__logo-icon" aria-hidden="true">SD</div>MAANG System Design</a>
+      <a href="../../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
       <ul class="site-nav__links" role="list">
         <li><a href="../../modules/00-framework/index.html" class="site-nav__link">Framework</a></li>
         <li><a href="../../modules/01-fundamentals/index.html" class="site-nav__link">Modules</a></li>
@@ -26,9 +30,11 @@
       <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
     </div>
   </nav>
+
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
-      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
           <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
           <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
@@ -48,6 +54,7 @@
         <a href="../../mock-interview/index.html?problem=google-docs" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
+
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
@@ -56,252 +63,1290 @@
           <span>Tier 2</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Collaborative editing</span>
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Collaborative editing</span>
         </div>
         <h1 class="module-header__title">Design Google Docs (Collaborative Editing)</h1>
-        <p class="module-header__desc">Google Docs' hardest problem: two users edit the same position simultaneously. Without conflict resolution, one user's change overwrites the other. Operational Transformation (OT) transforms operations to account for concurrent changes — ensuring convergence.</p>
+        <p class="module-header__desc">Google Docs' hardest problem: two users edit the same character position simultaneously. Without conflict resolution, one user's change silently overwrites the other. Operational Transformation (OT) solves this by transforming every incoming operation to account for concurrent changes — guaranteeing all clients converge to identical state regardless of network ordering.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Notion, Figma</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Notion, Figma, Linear</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
           <div class="module-header__meta-item"><span aria-hidden="true">📝</span> Real-time collaboration</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           R — REQUIREMENTS
+           ══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon">❓</span>R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <h3>Functional Requirements</h3>
+          <div class="insight-box insight-box--blue">
+            <strong>Interviewer signal:</strong> Start by locking in the hardest constraint: "Does every user need to see exactly the same document state, or is eventual consistency acceptable?" For collaborative editing, convergence is non-negotiable — this drives the entire architecture toward OT or CRDT.
+          </div>
+
+          <h3>Functional Requirements (Scope these first)</h3>
           <ul>
-            <li>Real-time collaborative text editing — multiple users editing simultaneously</li>
-            <li>Cursor position sharing — see where other users are editing</li>
-            <li>Version history — view and restore previous document states</li>
-            <li>Permission model — owner, editor, commenter, viewer</li>
-            <li>Offline editing — changes sync when reconnected</li>
-            <li>Comments and suggestions</li>
+            <li><strong>Real-time collaborative text editing</strong> — multiple users editing simultaneously, changes propagated within &lt;500ms</li>
+            <li><strong>Cursor presence</strong> — see where other active users are editing, with a colored cursor and username label</li>
+            <li><strong>Version history</strong> — view named revisions, diff between any two revisions, restore to any past state</li>
+            <li><strong>Permission model</strong> — owner, editor, commenter, viewer; link-sharing with access levels</li>
+            <li><strong>Offline editing</strong> — changes buffered locally, merged automatically on reconnect (no manual conflict resolution for the user)</li>
+            <li><strong>Comments and suggestions</strong> — threaded comments anchored to text ranges, suggestion mode that shows tracked changes</li>
           </ul>
-          <h3>Non-Functional Requirements</h3>
+
+          <h3>Non-Functional Requirements (These define the hard constraints)</h3>
           <ul>
-            <li><strong>Convergence:</strong> All users must see the same document state after all operations are applied</li>
-            <li><strong>Latency:</strong> Local edits appear instantly; remote edits appear &lt;500ms</li>
-            <li><strong>Scale:</strong> 1B documents, 10M concurrent editors</li>
+            <li><strong>Convergence (strongest guarantee):</strong> All clients must converge to identical document state after all operations are delivered — this is the core invariant; no user's edit is silently lost</li>
+            <li><strong>Latency:</strong> Local edits appear instantly (optimistic UI, no round-trip); remote edits propagated in &lt;100ms P99 on the same continent</li>
+            <li><strong>Scale:</strong> 1 billion documents, 100 million concurrent editors, peak ~10 million documents with active concurrent editing</li>
+            <li><strong>Durability:</strong> Zero operation loss — every keystroke must be durably committed; RPO = 0</li>
+            <li><strong>Availability:</strong> 99.99% for document reads; brief degradation of live sync is acceptable during partial outages (users continue editing with queued ops)</li>
+          </ul>
+
+          <h3>What to explicitly out-of-scope in the interview</h3>
+          <ul>
+            <li>Rich text formatting details (bold, italic — same OT principles, just more operation types)</li>
+            <li>Spreadsheet formulas (Google Sheets is a separate, more complex problem)</li>
+            <li>Full-text search across all documents</li>
+            <li>Mobile-specific offline sync (same design, different client)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — ESTIMATION
+           ══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon">🔢</span>E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <ul>
-            <li>10M concurrent editors; avg 10 ops/min = 100M ops/min = 1.6M ops/sec</li>
-            <li>Each operation: ~50 bytes → 80MB/sec → Kafka easily handles this</li>
-            <li>Version history: 1B docs × avg 100 versions × 500 bytes = 50TB → S3 for compressed snapshots</li>
-          </ul>
-        </div>
-      </section>
+          <div class="insight-box insight-box--yellow">
+            <strong>L6 move:</strong> Don't just compute QPS. Derive the implications: what component needs to handle this load, what storage tier, what retention policy, what bottleneck emerges. Show you're designing, not calculating.
+          </div>
 
-      <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
-        <div class="content-section__body">
-          <pre><code class="language-java">// Documents (PostgreSQL)
-documents: doc_id, owner_id, title, created_at, last_modified
-
-// Operations (append-only log — Cassandra or PostgreSQL)
-// The document state = apply all ops in order from revision 0
-operations:
-    doc_id      UUID,
-    revision    BIGINT,    -- monotonically increasing per document
-    user_id     UUID,
-    op_type     ENUM(insert, delete),
-    position    INT,
-    content     TEXT,       -- for insert ops
-    length      INT,        -- for delete ops
-    applied_at  TIMESTAMP,
-    PRIMARY KEY (doc_id, revision)
-
-// Document snapshots (S3 — compressed JSON every 1000 ops)
-// Avoids replaying all ops from the beginning on load</code></pre>
-        </div>
-      </section>
-
-      <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body">
-          <ul>
-            <li><strong>Client:</strong> Applies operations locally immediately (optimistic UI). Sends operations to server tagged with client's current revision number.</li>
-            <li><strong>Collaboration Server:</strong> Receives operations. Applies OT to transform against concurrent operations. Assigns global revision number. Broadcasts to all clients editing the document via WebSocket.</li>
-            <li><strong>Operation Log:</strong> All operations stored in Cassandra (partition by doc_id, cluster by revision) — the source of truth.</li>
-            <li><strong>Document Load:</strong> Load latest snapshot from S3, then replay operations since the snapshot.</li>
-            <li><strong>Presence Service:</strong> Tracks cursor positions and user presence in each document. Redis-based with 5s TTL.</li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body">
-          <pre><code class="language-java">// WebSocket events (client ↔ server)
-// Client → Server
-{ type: "op", docId, baseRevision, op: {type: "insert", position: 5, content: "a"} }
-{ type: "cursor", docId, position: 42 }
-
-// Server → Client
-{ type: "op", revision: 102, op: {...}, userId }  // broadcast to all other editors
-{ type: "ack", revision: 102 }                    // confirm client's op was accepted
-
-// REST
-GET  /v1/documents/{docId}              // load doc (latest snapshot + ops since)
-GET  /v1/documents/{docId}/revisions    // version history
-POST /v1/documents/{docId}/restore?revision=50  // restore to specific revision</code></pre>
-        </div>
-      </section>
-
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Operational Transformation<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body">
-          <p><strong>The problem:</strong> User A inserts 'X' at position 5. Simultaneously, User B inserts 'Y' at position 5. If both apply in sequence without transformation, 'X' shifts and 'Y' is at the wrong position.</p>
-          <p><strong>OT transform rules:</strong></p>
-          <ul>
-            <li><strong>insert(pos1, c1) ∘ insert(pos2, c2):</strong> If pos2 ≤ pos1: shift pos1 right by 1. Reason: B's insert at position ≤ pos1 shifts A's content right.</li>
-            <li><strong>delete(pos1) ∘ insert(pos2, c):</strong> If pos2 ≤ pos1: shift pos1 right by 1.</li>
-            <li><strong>insert(pos1, c) ∘ delete(pos2):</strong> If pos2 &lt; pos1: shift pos1 left by 1. If pos2 == pos1: keep pos1 (insert at same position as delete).</li>
-          </ul>
-          <p><strong>Server-side OT:</strong> Server receives op with baseRevision. All server-side ops since baseRevision are transformed against the incoming op. The transformed op is applied and broadcast.</p>
-          <p><strong>CRDT as an alternative:</strong> CRDTs (Conflict-free Replicated Data Types) automatically merge without a central server. Used by Figma, Linear. More complex to implement but enables true peer-to-peer. OT requires a central server; CRDT does not.</p>
-        </div>
-      </section>
-
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body">
-          <ul>
-            <li><strong>OT correctness:</strong> OT with a central server is provably correct for convergence (CP1 and CP2 properties). Without a central server, OT becomes exponentially complex. Google Docs uses server-side OT.</li>
-            <li><strong>Offline editing:</strong> Client buffers ops locally. On reconnect, sends buffered ops with the revision number from when it went offline. Server transforms each buffered op against all ops that happened during offline period.</li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body">
-          <p>We designed Google Docs handling 10M concurrent editors. Key decisions: server-side OT for conflict resolution (proven convergence), append-only operation log in Cassandra (source of truth), periodic S3 snapshots for fast document loading, and WebSocket for real-time operation broadcast.</p>
-        </div>
-      </section>
-
-      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
-        <div class="content-section__body">
+          <h3>Traffic Estimation</h3>
           <div class="table-wrapper"><table>
-            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+            <thead><tr><th>Metric</th><th>Calculation</th><th>Result</th></tr></thead>
             <tbody>
-              <tr><td>Conflict resolution</td><td>OT (Operational Transformation)</td><td>CRDT</td><td>OT: proven, used by Google. Requires central server. CRDT: no central server needed, but larger document footprint and more complex implementation.</td></tr>
-              <tr><td>Operation storage</td><td>Append-only log (Cassandra)</td><td>Mutable document state</td><td>Append-only log = complete history, replay capability, audit trail, version rollback. Mutable state = faster reads but no history.</td></tr>
-              <tr><td>Document sync protocol</td><td>WebSocket</td><td>SSE (Server-Sent Events)</td><td>WebSocket: bidirectional — client sends ops, server sends ops. SSE: server→client only, client needs separate HTTP requests to send. Bidirectional needed for collaborative editing.</td></tr>
+              <tr><td>Concurrent editors (peak)</td><td>100M users × 10% active at peak</td><td>10M concurrent</td></tr>
+              <tr><td>Operations per user per minute</td><td>~10 ops/min (casual typing bursts)</td><td>—</td></tr>
+              <tr><td>Total ops/sec (peak)</td><td>10M × 10 / 60</td><td>~1.67M ops/sec</td></tr>
+              <tr><td>Operation payload size</td><td>50 bytes (op type + position + content + metadata)</td><td>—</td></tr>
+              <tr><td>Inbound bandwidth (server)</td><td>1.67M × 50 bytes</td><td>~83 MB/sec ✓ Kafka handles easily</td></tr>
+              <tr><td>Broadcast fan-out</td><td>Avg 5 co-editors per document</td><td>1.67M × 5 = 8.3M msgs/sec outbound</td></tr>
+              <tr><td>WebSocket connections</td><td>10M concurrent editors</td><td>10M persistent connections — need WS connection pool per server</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>Storage Estimation</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Data</th><th>Calculation</th><th>Tier</th></tr></thead>
+            <tbody>
+              <tr><td>Operation log (hot)</td><td>1.67M ops/sec × 50 bytes × 30 days × 86400 sec</td><td>~215 TB/month → Cassandra (partitioned by doc_id)</td></tr>
+              <tr><td>Document snapshots</td><td>1B docs × avg 50KB snapshot</td><td>50 TB → S3/GCS, compressed</td></tr>
+              <tr><td>Snapshot frequency</td><td>1 snapshot every 1,000 ops per document</td><td>Limits replay to max 1,000 ops on load</td></tr>
+              <tr><td>Presence data (Redis)</td><td>10M editors × 200 bytes per cursor state</td><td>~2 GB — entirely in Redis, 30s TTL</td></tr>
+              <tr><td>Version history metadata</td><td>1B docs × avg 200 named revisions × 100 bytes</td><td>~20 TB → PostgreSQL or Spanner</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>Key Design Implication</h3>
+          <p>The broadcast fan-out (8.3M msgs/sec outbound) is the hardest scaling problem — not the inbound operation rate. A single collaboration server can only hold ~100K WebSocket connections. With 10M concurrent editors, we need ~100 collaboration server instances per region, with a router layer that maps <code>doc_id → server_instance</code> (sticky routing by document).</p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           S — SCHEMA
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="schema" aria-labelledby="schema-title">
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon">🗄️</span>S — Schema
+          <span class="reshaded-step__letter">5–7 min</span>
+        </h2>
+        <div class="content-section__body">
+          <div class="insight-box insight-box--blue">
+            <strong>Key insight:</strong> Google Docs uses a <em>log-structured storage model</em> (Event Sourcing). The operation log is the source of truth. The current document state is a materialized view derived by replaying all operations from the last snapshot. This enables time travel, version history, and crash recovery for free.
+          </div>
+
+          <h3>Document metadata — PostgreSQL (relational, low volume)</h3>
+          <pre><code class="language-sql">CREATE TABLE documents (
+    doc_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id        UUID        NOT NULL REFERENCES users(user_id),
+    title           TEXT        NOT NULL DEFAULT 'Untitled document',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    current_rev     BIGINT      NOT NULL DEFAULT 0,  -- server's latest committed revision
+    snapshot_rev    BIGINT      NOT NULL DEFAULT 0   -- revision of the latest S3 snapshot
+);
+
+CREATE TABLE document_permissions (
+    doc_id      UUID        NOT NULL REFERENCES documents(doc_id),
+    user_id     UUID,                                -- NULL = link-sharing
+    role        TEXT        NOT NULL CHECK (role IN ('owner','editor','commenter','viewer')),
+    share_token TEXT        UNIQUE,                  -- for link-based sharing
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (doc_id, user_id)
+);</code></pre>
+
+          <h3>Operation log — Cassandra (append-only, high write throughput, partition by document)</h3>
+          <pre><code class="language-sql">-- Cassandra table (CQL syntax)
+-- Partition key = doc_id: all ops for one doc on same node = fast range scans
+-- Clustering key = revision: monotonically increasing, server-assigned
+CREATE TABLE operations (
+    doc_id      UUID,
+    revision    BIGINT,                    -- server-side global counter per document
+    user_id     UUID,
+    client_id   TEXT,                      -- UUID per browser session (for de-duplication)
+    op_type     TEXT,                      -- 'insert' | 'delete' | 'retain' (for rich text)
+    position    INT,                       -- character offset in the document
+    content     TEXT,                      -- for insert: the inserted string; for delete: null
+    length      INT,                       -- for delete: number of characters to remove
+    base_rev    BIGINT,                    -- client's revision when this op was created (for OT)
+    applied_at  TIMESTAMP,
+    PRIMARY KEY (doc_id, revision)         -- range scan: SELECT WHERE doc_id=? AND revision > ?
+) WITH CLUSTERING ORDER BY (revision ASC)
+  AND compaction = {'class': 'LeveledCompactionStrategy'};  -- fast range reads
+
+-- Index for client de-duplication (prevent replay on reconnect)
+CREATE INDEX ON operations (doc_id, client_id, base_rev);</code></pre>
+
+          <h3>Snapshots — S3 (binary/compressed, infrequent writes)</h3>
+          <pre><code class="language-json">// S3 key: snapshots/{doc_id}/{revision}.json.gz
+// Written every 1,000 operations, or on named "Save version"
+{
+  "doc_id": "550e8400-e29b-41d4-a716-446655440000",
+  "revision": 5000,
+  "content": "The full document text at revision 5000...",
+  "format": "plain_text",     // or "rich_text_delta" for formatted docs
+  "snapshot_at": "2024-01-15T10:30:00Z",
+  "size_bytes": 48291,
+  "checksum_sha256": "a1b2c3..."
+}</code></pre>
+
+          <h3>Named versions (version history) — PostgreSQL</h3>
+          <pre><code class="language-sql">CREATE TABLE document_versions (
+    doc_id      UUID    NOT NULL REFERENCES documents(doc_id),
+    revision    BIGINT  NOT NULL,    -- the revision this version refers to
+    name        TEXT,                -- user-provided name ("Before review", null if auto-saved)
+    is_auto     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by  UUID    REFERENCES users(user_id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (doc_id, revision)
+);</code></pre>
+
+          <h3>Presence data — Redis (ephemeral, 30s TTL)</h3>
+          <pre><code class="language-json">// Redis key: presence:{doc_id}:{user_id}   Type: Hash   TTL: 30s
+// Client refreshes every 15s while connected
+{
+  "user_id":    "user-123",
+  "username":   "Alice",
+  "color":      "#FF6B6B",           // deterministic from user_id hash
+  "cursor_pos": 247,                 // character offset
+  "selection_start": 247,
+  "selection_end":   260,            // null if cursor only
+  "section_id": "paragraph-14",     // semantic anchor for large docs
+  "last_seen":  1705312200000        // epoch ms for TTL tracking
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           H — HIGH-LEVEL DESIGN
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="hld" aria-labelledby="hld-title">
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon">🏗️</span>H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <h3>Architecture Overview</h3>
+          <svg viewBox="0 0 860 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google Docs high-level architecture diagram" style="width:100%;max-width:860px;display:block;margin:0 auto 2rem;font-family:Inter,sans-serif;font-size:12px">
+            <!-- Client boxes -->
+            <rect x="20" y="60" width="120" height="60" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="80" y="85" text-anchor="middle" fill="#1e40af" font-weight="600">Client A</text>
+            <text x="80" y="102" text-anchor="middle" fill="#1e40af">(WebSocket)</text>
+
+            <rect x="20" y="200" width="120" height="60" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="80" y="225" text-anchor="middle" fill="#1e40af" font-weight="600">Client B</text>
+            <text x="80" y="242" text-anchor="middle" fill="#1e40af">(WebSocket)</text>
+
+            <rect x="20" y="340" width="120" height="60" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="80" y="365" text-anchor="middle" fill="#1e40af" font-weight="600">Client C</text>
+            <text x="80" y="382" text-anchor="middle" fill="#1e40af">(WebSocket)</text>
+
+            <!-- WebSocket Router / Load Balancer -->
+            <rect x="200" y="190" width="130" height="60" rx="8" fill="#f3e8ff" stroke="#8b5cf6" stroke-width="1.5"/>
+            <text x="265" y="215" text-anchor="middle" fill="#6d28d9" font-weight="600">WS Router</text>
+            <text x="265" y="232" text-anchor="middle" fill="#6d28d9">(sticky: doc_id)</text>
+
+            <!-- Collab Server -->
+            <rect x="390" y="150" width="150" height="140" rx="8" fill="#dcfce7" stroke="#22c55e" stroke-width="1.5"/>
+            <text x="465" y="175" text-anchor="middle" fill="#15803d" font-weight="700">Collab Server</text>
+            <text x="465" y="195" text-anchor="middle" fill="#15803d">1. Receive op</text>
+            <text x="465" y="213" text-anchor="middle" fill="#15803d">2. OT transform</text>
+            <text x="465" y="231" text-anchor="middle" fill="#15803d">3. Assign revision</text>
+            <text x="465" y="249" text-anchor="middle" fill="#15803d">4. Persist to log</text>
+            <text x="465" y="267" text-anchor="middle" fill="#15803d">5. Broadcast</text>
+
+            <!-- Storage layer -->
+            <rect x="610" y="80" width="130" height="55" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+            <text x="675" y="103" text-anchor="middle" fill="#713f12" font-weight="600">Cassandra</text>
+            <text x="675" y="121" text-anchor="middle" fill="#713f12">Operation log</text>
+
+            <rect x="610" y="160" width="130" height="55" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+            <text x="675" y="183" text-anchor="middle" fill="#713f12" font-weight="600">S3 / GCS</text>
+            <text x="675" y="201" text-anchor="middle" fill="#713f12">Snapshots</text>
+
+            <rect x="610" y="240" width="130" height="55" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.5"/>
+            <text x="675" y="263" text-anchor="middle" fill="#991b1b" font-weight="600">Redis</text>
+            <text x="675" y="281" text-anchor="middle" fill="#991b1b">Presence / cursors</text>
+
+            <rect x="610" y="320" width="130" height="55" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+            <text x="675" y="343" text-anchor="middle" fill="#713f12" font-weight="600">PostgreSQL</text>
+            <text x="675" y="361" text-anchor="middle" fill="#713f12">Metadata / ACLs</text>
+
+            <!-- Snapshot worker -->
+            <rect x="390" y="350" width="150" height="55" rx="8" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+            <text x="465" y="374" text-anchor="middle" fill="#0c4a6e" font-weight="600">Snapshot Worker</text>
+            <text x="465" y="392" text-anchor="middle" fill="#0c4a6e">(every 1000 ops)</text>
+
+            <!-- Arrows: clients to router -->
+            <line x1="140" y1="90" x2="200" y2="210" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="140" y1="230" x2="200" y2="225" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="140" y1="370" x2="200" y2="240" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+            <!-- Router to collab server -->
+            <line x1="330" y1="220" x2="390" y2="220" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+            <!-- Collab server to storage -->
+            <line x1="540" y1="190" x2="610" y2="180" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="540" y1="200" x2="610" y2="115" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="540" y1="220" x2="610" y2="268" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+            <!-- Snapshot worker arrows -->
+            <line x1="465" y1="290" x2="465" y2="350" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowhead)"/>
+            <line x1="540" y1="375" x2="610" y2="188" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowhead)"/>
+
+            <!-- Broadcast back to clients (dashed) -->
+            <line x1="390" y1="215" x2="330" y2="215" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowblue)"/>
+            <line x1="200" y1="210" x2="140" y2="215" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowblue)"/>
+
+            <!-- Legend -->
+            <line x1="30" y1="460" x2="60" y2="460" stroke="#6366f1" stroke-width="1.5"/>
+            <text x="68" y="464" fill="#374151">Client → Server (op send)</text>
+            <line x1="250" y1="460" x2="280" y2="460" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="288" y="464" fill="#374151">Server → Client (broadcast)</text>
+            <line x1="500" y1="460" x2="530" y2="460" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="538" y="464" fill="#374151">Snapshot job</text>
+
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#4b5563"/>
+              </marker>
+              <marker id="arrowblue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#22c55e"/>
+              </marker>
+            </defs>
+          </svg>
+
+          <h3>Component Responsibilities</h3>
+
+          <h4>1. Client (Browser/Mobile)</h4>
+          <ul>
+            <li><strong>Optimistic local application:</strong> Every keystroke is applied to the local document immediately — zero latency for the typing user. The op is simultaneously queued for server transmission.</li>
+            <li><strong>Client state machine:</strong> The client tracks two states — <em>synchronized</em> (no unacknowledged ops) and <em>pending</em> (ops sent but not yet ACK'd). While pending, any new local ops are buffered and not sent until the pending op is ACK'd. This prevents ordering chaos.</li>
+            <li><strong>Transform on receipt:</strong> When the server broadcasts another user's op, the client transforms it against any pending/buffered ops before applying it to the local document.</li>
+          </ul>
+
+          <h4>2. WebSocket Router (Sticky routing by doc_id)</h4>
+          <ul>
+            <li>Maintains a routing table: <code>doc_id → collab_server_instance_id</code></li>
+            <li>All connections for the same document MUST go to the same collaboration server — this is required for OT correctness, because the collab server maintains the per-document operation queue in memory</li>
+            <li>When a collab server fails, the router reassigns the doc to another instance and that instance loads the latest snapshot + op log to reconstruct state</li>
+          </ul>
+
+          <h4>3. Collaboration Server (The OT engine)</h4>
+          <ul>
+            <li>Holds in-memory state for all active documents: a map of <code>doc_id → {revision, in-flight ops, connected session IDs}</code></li>
+            <li>Receives an op from Client A with <code>base_revision=N</code></li>
+            <li>Fetches all server-side ops from revision N+1 to current from its in-memory queue (or Cassandra if not cached)</li>
+            <li>Transforms the incoming op against each of those ops sequentially (the diamond problem — explained in Deep Dive)</li>
+            <li>Assigns the next revision number atomically (in-memory counter, flushed to Cassandra)</li>
+            <li>Persists the transformed op to Cassandra, then broadcasts to all other sessions on the same document</li>
+          </ul>
+
+          <h4>4. Snapshot Worker</h4>
+          <ul>
+            <li>Monitors the <code>operations</code> log per document. When a document accumulates 1,000 new operations since its last snapshot, the worker materializes the current state and writes it to S3</li>
+            <li>Updates <code>documents.snapshot_rev</code> in PostgreSQL to point to the new snapshot revision</li>
+            <li>Without this, loading a 3-year-old document would require replaying millions of operations — unacceptable latency</li>
+          </ul>
+
+          <h4>5. Document Load Path</h4>
+          <ol>
+            <li>REST call to fetch the document: returns <code>snapshot_rev</code> and the S3 snapshot URL</li>
+            <li>Client downloads and decompresses the S3 snapshot (the base state)</li>
+            <li>Client fetches operations from Cassandra: <code>WHERE doc_id=? AND revision &gt; snapshot_rev</code></li>
+            <li>Client applies all ops in revision order to the snapshot — now at current state</li>
+            <li>Client upgrades to WebSocket for live sync</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           A — APIS
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon">🔌</span>A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <h3>WebSocket Protocol (primary interface for collaborative editing)</h3>
+          <pre><code class="language-json">// ── CLIENT → SERVER ────────────────────────────────────────────────
+
+// Operation submission
+{
+  "type": "op",
+  "doc_id": "550e8400-e29b-41d4-a716-446655440000",
+  "client_id": "session-abc-123",         // unique per browser tab
+  "base_revision": 247,                   // the revision the client was at when this op was created
+  "op": {
+    "op_type": "insert",                  // "insert" | "delete"
+    "position": 42,                       // character offset
+    "content": "Hello",                   // present for insert only
+    "length": null                        // present for delete only
+  }
+}
+
+// Cursor/selection presence update (sent every 200ms while typing/moving)
+{
+  "type": "cursor",
+  "doc_id": "550e8400-e29b-41d4-a716-446655440000",
+  "cursor_pos": 247,
+  "selection_start": 247,
+  "selection_end": 260                    // null = cursor only
+}
+
+// ── SERVER → CLIENT ────────────────────────────────────────────────
+
+// ACK: client's own op was accepted and assigned a revision
+{
+  "type": "ack",
+  "client_id": "session-abc-123",
+  "revision": 248                         // the global revision assigned to this op
+}
+
+// Broadcast: another user's op (already OT-transformed relative to server state)
+{
+  "type": "op",
+  "revision": 249,
+  "user_id": "user-456",
+  "username": "Bob",
+  "op": {
+    "op_type": "insert",
+    "position": 15,
+    "content": "World"
+  }
+}
+
+// Presence broadcast: another user's cursor moved
+{
+  "type": "presence",
+  "user_id": "user-456",
+  "username": "Bob",
+  "color": "#4CAF50",
+  "cursor_pos": 247,
+  "selection_start": 247,
+  "selection_end": 260
+}
+
+// Error: op rejected (e.g., permission revoked while editing)
+{
+  "type": "error",
+  "code": "PERMISSION_DENIED",
+  "message": "Your editing access was revoked"
+}</code></pre>
+
+          <h3>REST API (document management, version history)</h3>
+          <pre><code class="language-http">GET  /v1/documents/{docId}
+     → { snapshot_url, snapshot_rev, current_rev, title, permissions }
+     // Client loads snapshot from S3, then fetches ops from snapshot_rev+1 to current_rev
+
+GET  /v1/documents/{docId}/ops?from_revision=248&to_revision=300
+     → [ { revision, op_type, position, content, length, user_id, applied_at }, ... ]
+
+GET  /v1/documents/{docId}/revisions
+     → [ { revision, name, created_by, created_at, is_auto }, ... ]
+
+POST /v1/documents/{docId}/revisions
+     Body: { "name": "Before final review" }
+     → { revision, name, created_at }
+     // Names the current server revision for easy access
+
+GET  /v1/documents/{docId}/revisions/{revision}/content
+     → { content: "full document text at this revision" }
+     // Server replays from nearest snapshot to requested revision
+
+POST /v1/documents/{docId}/restore
+     Body: { "revision": 150 }
+     → { new_revision: 301 }
+     // Inserts a special RESTORE op into the log — does not delete history
+
+PATCH /v1/documents/{docId}/permissions
+     Body: { "user_id": "user-789", "role": "editor" }
+     → 200 OK | 403 Forbidden</code></pre>
+
+          <div class="insight-box insight-box--green">
+            <strong>L6 note — RESTORE as an operation:</strong> Restoring to a past revision is NOT implemented by truncating the operation log (which would violate durability and audit requirements). Instead, the system inserts a <code>RESTORE</code> operation at the current head that says "set document content to revision 150's state." This preserves full history and allows you to undo the restore.
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DEEP DIVE
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon">🔬</span>D — Deep Dive: OT, CRDT, Presence, and Offline Sync
+          <span class="reshaded-step__letter">10–12 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <!-- 1. OT CORE -->
+          <h3>1. Operational Transformation — The Core Algorithm</h3>
+
+          <div class="insight-box insight-box--purple">
+            <strong>Google's choice:</strong> Google Docs uses OT, not CRDT. The server serializes all operations — every op passes through a single coordination point per document. This is acceptable because Google controls the infrastructure and can guarantee low latency to that server. CRDT is preferred for peer-to-peer systems (Figma, Linear) where you cannot assume a reliable central coordinator.
+          </div>
+
+          <p>OT defines two fundamental operation types for a text document:</p>
+          <ul>
+            <li><code>Insert(position, text)</code> — insert <em>text</em> at character offset <em>position</em></li>
+            <li><code>Delete(position, length)</code> — delete <em>length</em> characters starting at <em>position</em></li>
+          </ul>
+
+          <p>The invariant OT must preserve is called <strong>CP1</strong> (Convergence Property 1):</p>
+          <blockquote style="border-left:4px solid var(--color-primary,#6366f1);padding:0.75rem 1rem;margin:1rem 0;background:var(--color-surface,#f8fafc);font-style:italic">
+            For any two concurrent operations <em>op1</em> and <em>op2</em>:<br>
+            <code>apply(apply(doc, op1), transform(op2, op1)) ≡ apply(apply(doc, op2), transform(op1, op2))</code>
+          </blockquote>
+          <p>In plain English: if both users start from the same document, apply their own op, and then apply the other's transformed op — they must reach the exact same document state.</p>
+
+          <h3>The OT Diamond Problem — Visualized</h3>
+          <!-- OT Diamond SVG -->
+          <svg viewBox="0 0 700 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OT diamond problem showing how transform() resolves concurrent operations" style="width:100%;max-width:700px;display:block;margin:0 auto 1.5rem;font-family:Inter,sans-serif;font-size:13px">
+
+            <!-- State S0 -->
+            <rect x="270" y="20" width="160" height="50" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+            <text x="350" y="42" text-anchor="middle" fill="#14532d" font-weight="700">State S0</text>
+            <text x="350" y="60" text-anchor="middle" fill="#14532d" font-family="monospace">"Hello"</text>
+
+            <!-- User A branch (left) -->
+            <line x1="270" y1="70" x2="130" y2="160" stroke="#3b82f6" stroke-width="2" marker-end="url(#arr-blue)"/>
+            <rect x="40" y="115" width="180" height="40" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+            <text x="130" y="133" text-anchor="middle" fill="#1e3a8a" font-size="11">Insert('X', pos=5)</text>
+            <text x="130" y="149" text-anchor="middle" fill="#1e3a8a" font-size="11">base_rev = 0</text>
+
+            <!-- State SA: A applied op_a -->
+            <rect x="40" y="165" width="180" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2"/>
+            <text x="130" y="187" text-anchor="middle" fill="#1e40af" font-weight="700">State SA</text>
+            <text x="130" y="205" text-anchor="middle" fill="#1e40af" font-family="monospace">"HelloX"</text>
+
+            <!-- User B branch (right) -->
+            <line x1="430" y1="70" x2="570" y2="160" stroke="#ef4444" stroke-width="2" marker-end="url(#arr-red)"/>
+            <rect x="480" y="115" width="180" height="40" rx="6" fill="#fee2e2" stroke="#ef4444"/>
+            <text x="570" y="133" text-anchor="middle" fill="#7f1d1d" font-size="11">Insert('Y', pos=5)</text>
+            <text x="570" y="149" text-anchor="middle" fill="#7f1d1d" font-size="11">base_rev = 0</text>
+
+            <!-- State SB: B applied op_b -->
+            <rect x="480" y="165" width="180" height="50" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="2"/>
+            <text x="570" y="187" text-anchor="middle" fill="#7f1d1d" font-weight="700">State SB</text>
+            <text x="570" y="205" text-anchor="middle" fill="#7f1d1d" font-family="monospace">"HelloY"</text>
+
+            <!-- Server receives op_a first (arbitrary), assigns rev 1 -->
+            <rect x="260" y="250" width="180" height="55" rx="8" fill="#f3e8ff" stroke="#8b5cf6" stroke-width="2"/>
+            <text x="350" y="272" text-anchor="middle" fill="#4c1d95" font-weight="700">Server assigns rev=1 to op_a</text>
+            <text x="350" y="290" text-anchor="middle" fill="#4c1d95" font-size="11">Transforms op_b against op_a:</text>
+            <text x="350" y="306" text-anchor="middle" fill="#4c1d95" font-size="11" font-family="monospace">Insert('Y', pos=5) → pos=6</text>
+
+            <!-- Lines to server transform box -->
+            <line x1="130" y1="215" x2="280" y2="255" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-blue)"/>
+            <line x1="570" y1="215" x2="420" y2="255" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-red)"/>
+
+            <!-- Final state -->
+            <line x1="350" y1="305" x2="350" y2="360" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-purple)"/>
+            <rect x="220" y="360" width="260" height="60" rx="8" fill="#fdf4ff" stroke="#a855f7" stroke-width="2"/>
+            <text x="350" y="384" text-anchor="middle" fill="#581c87" font-weight="700">Converged State S&#8242;</text>
+            <text x="350" y="405" text-anchor="middle" fill="#581c87" font-family="monospace">"HelloXY"</text>
+            <text x="350" y="421" text-anchor="middle" fill="#581c87" font-size="11">(both clients reach this state)</text>
+
+            <defs>
+              <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+              </marker>
+              <marker id="arr-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+              </marker>
+              <marker id="arr-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#7c3aed"/>
+              </marker>
+            </defs>
+          </svg>
+
+          <h3>OT Transform Rules — Full Table</h3>
+
+          <p>The <code>transform(op_a, op_b)</code> function returns a new <code>op_a'</code> that can be correctly applied <em>after</em> <code>op_b</code> has already been applied:</p>
+
+          <div class="table-wrapper"><table>
+            <thead>
+              <tr><th>op_a (to transform)</th><th>op_b (already applied)</th><th>Transformed op_a'</th><th>Reason</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>Insert(posA, text)</code></td>
+                <td><code>Insert(posB, textB)</code></td>
+                <td>If posB ≤ posA: <code>Insert(posA + len(textB), text)</code><br>Else: <code>Insert(posA, text)</code></td>
+                <td>B's insert before A shifts A's target position right</td>
+              </tr>
+              <tr>
+                <td><code>Insert(posA, text)</code></td>
+                <td><code>Delete(posB, lenB)</code></td>
+                <td>If posB &lt; posA: <code>Insert(posA - min(lenB, posA-posB), text)</code><br>If posB ≥ posA: unchanged</td>
+                <td>B deleted characters before A's target — shift A left by deleted amount</td>
+              </tr>
+              <tr>
+                <td><code>Delete(posA, lenA)</code></td>
+                <td><code>Insert(posB, textB)</code></td>
+                <td>If posB ≤ posA: <code>Delete(posA + len(textB), lenA)</code><br>Else: unchanged</td>
+                <td>B's insert shifted the characters A wants to delete</td>
+              </tr>
+              <tr>
+                <td><code>Delete(posA, lenA)</code></td>
+                <td><code>Delete(posB, lenB)</code></td>
+                <td>Complex: adjust posA and shrink lenA to account for overlap (see implementation)</td>
+                <td>Overlapping deletes must not double-delete; both users deleting the same text = no-op for the second</td>
+              </tr>
+            </tbody>
+          </table></div>
+
+          <h3>Server-Side OT: The Complete Flow</h3>
+          <pre><code class="language-java">// Pseudocode for the server's operation processing loop (per document)
+void receiveOperation(IncomingOp incomingOp) {
+    // incomingOp.baseRevision = the revision the client was at when they typed this
+    // serverRevision = current committed revision for this document
+
+    List&lt;Operation&gt; concurrentOps =
+        operationLog.getRange(incomingOp.docId,
+                              fromRevision = incomingOp.baseRevision + 1,
+                              toRevision = serverRevision);
+
+    // Transform the incoming op against every op that was committed
+    // on the server since the client's base revision
+    Operation transformedOp = incomingOp.op;
+    for (Operation serverOp : concurrentOps) {
+        transformedOp = transform(transformedOp, serverOp);
+    }
+
+    // Atomically assign the next revision and persist
+    long newRevision = ++serverRevision;
+    operationLog.append(incomingOp.docId, newRevision, transformedOp);
+
+    // Send ACK to the original sender
+    sender.sendAck(incomingOp.clientId, newRevision);
+
+    // Broadcast the transformed op to all other editors of this document
+    broadcastToOtherEditors(incomingOp.docId, incomingOp.clientId,
+                            newRevision, transformedOp);
+}</code></pre>
+
+          <!-- 2. CRDT -->
+          <h3>2. CRDT — The Alternative: Replicated Growable Array (RGA)</h3>
+
+          <p>CRDT (Conflict-free Replicated Data Type) embeds merge semantics into the data structure itself. The RGA variant handles text sequences by assigning each character a globally unique identifier (a logical clock + site ID tuple), creating a total order that all replicas can agree on without coordination.</p>
+
+          <h4>How RGA works for concurrent inserts:</h4>
+          <ul>
+            <li>Each character is a node: <code>{id: (timestamp, siteId), value: char, prev: id}</code></li>
+            <li>Insert means "insert this character after the character with id <em>prev</em>"</li>
+            <li>If two users both insert after the same character (<em>prev</em> is the same), the tie-break is deterministic: the character with the higher <em>(timestamp, siteId)</em> goes first</li>
+            <li>Because the tie-break is deterministic and depends only on the operations themselves (not on delivery order), any two replicas that receive the same set of operations will converge to the same sequence — <em>without needing a server</em></li>
+          </ul>
+
+          <div class="insight-box insight-box--yellow">
+            <strong>OT vs CRDT — The real trade-off:</strong>
+            <br><br>
+            <strong>OT requires server serialization</strong> — all ops flow through a single server that transforms and orders them. This means the server is a single point of failure per document (mitigated by failover), and all clients must be online to commit. However, the document representation is just a string — no metadata overhead per character.
+            <br><br>
+            <strong>CRDT (RGA) is peer-to-peer</strong> — any two replicas can sync directly. Figma uses this for vector design objects. However, every character carries metadata (the unique ID + prev pointer), which can make the document 3–5× larger in memory. RGA also accumulates "tombstones" — deleted characters remain in the structure (just marked invisible) to preserve the ordering invariant. Long-lived documents accumulate significant tombstone overhead.
+            <br><br>
+            <strong>Google chose OT</strong> because: (1) they control the infrastructure and can guarantee low-latency server access, (2) no tombstone overhead, (3) OT's correctness for plain text is well-understood and proven. Figma chose CRDT because their design objects need peer-to-peer sync across potentially disconnected clients, and the metadata overhead for vector graphics objects (which are large already) is relatively small.
+          </div>
+
+          <!-- 3. WebSocket Architecture -->
+          <h3>3. WebSocket Architecture — Sticky Sessions</h3>
+          <p>Why sticky sessions are required for OT correctness:</p>
+          <ul>
+            <li>The collaboration server maintains the per-document operation queue and current revision counter <strong>in memory</strong>. This in-memory state is what enables fast transforms without hitting the database on every operation.</li>
+            <li>If two operations for the same document went to two different servers, each server would have an incomplete view of the concurrent ops — producing incorrect transform results.</li>
+            <li>The sticky routing rule: <strong><code>hash(doc_id) mod num_servers</code></strong> routes all connections for the same document to the same server.</li>
+            <li>On failover: the new server loads the document's operation log from Cassandra and rebuilds in-memory state (at most 1,000 ops since last snapshot).</li>
+          </ul>
+
+          <h4>Connection lifecycle:</h4>
+          <pre><code class="language-java">// Client WebSocket connection state machine
+enum ClientState {
+    CONNECTING,
+    LOADING_SNAPSHOT,   // downloading S3 snapshot
+    REPLAYING_OPS,      // fetching ops from snapshot_rev to current_rev
+    SYNCHRONIZED,       // no pending ops, fully caught up
+    PENDING,            // one op in-flight (sent, not ACK'd)
+    BUFFERING,          // pending op not yet ACK'd, new ops buffered locally
+    RECONNECTING        // WebSocket dropped, attempting reconnect
+}
+
+// Only ONE op is ever in-flight at a time (pending state).
+// While an op is pending, new keystrokes go into a buffer.
+// On ACK, the buffered ops are transformed against the ACK'd revision
+// and the first buffered op is sent.</code></pre>
+
+          <!-- 4. Presence System -->
+          <h3>4. Presence System — Colored Cursors</h3>
+          <p>The presence system is decoupled from the OT operation log because cursor positions are ephemeral — they don't need durability, just low latency.</p>
+
+          <ul>
+            <li><strong>Client sends cursor updates</strong> via the same WebSocket connection, but as a separate message type (<code>"type": "cursor"</code>), not as an operation in the log.</li>
+            <li><strong>Collab server receives cursor updates</strong> and writes them to Redis: <code>HSET presence:{doc_id}:{user_id} cursor_pos 247 ... EX 30</code></li>
+            <li><strong>Server broadcasts</strong> the cursor update to all other editors on the document immediately (via their WebSocket connections)</li>
+            <li><strong>Cursor positions need OT too:</strong> If User A has their cursor at position 50, and User B inserts 5 characters at position 30, A's cursor must shift to position 55. The client applies the same transform logic to cursor positions when receiving operations from other users.</li>
+            <li><strong>Color assignment:</strong> Each user's cursor color is deterministically derived from a hash of their user_id — same color on every session, no coordination needed.</li>
+          </ul>
+
+          <!-- 5. Offline Editing -->
+          <h3>5. Offline Editing and Reconnect Merge</h3>
+
+          <p>This is where OT shines over simpler last-write-wins approaches:</p>
+
+          <ol>
+            <li>User goes offline at <code>revision = 500</code>. They continue typing — 20 local operations are buffered in the client.</li>
+            <li>Meanwhile, the server processes operations from other users: revisions 501 through 560.</li>
+            <li>User reconnects. Client sends buffered ops, each tagged with <code>base_revision = 500</code>.</li>
+            <li>Server transforms each buffered op against ops 501–560 in sequence, assigns new revision numbers (561–580), persists, and broadcasts.</li>
+            <li>Client receives ACKs and the server's ops 501–560. Client transforms the server's ops against its own pending ops (the same diamond-transform, from the client's perspective) and applies them to the local document.</li>
+            <li>Result: the user's offline edits are merged correctly — no data lost, no manual conflict resolution required.</li>
+          </ol>
+
+          <div class="insight-box insight-box--blue">
+            <strong>Why not just "last write wins"?</strong> LWW would silently discard one user's work whenever two users edit nearby positions. For a word processor, that's catastrophic. OT guarantees that <em>every</em> user's intent is preserved — both users' text appears in the document, at the correct positions relative to each other.
+          </div>
+
+          <!-- 6. Document Versioning -->
+          <h3>6. Document Versioning — Snapshot + Delta</h3>
+
+          <p>Loading a document that was edited 2 years ago without efficient versioning would require replaying millions of operations. The snapshot + delta model solves this:</p>
+
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Strategy</th><th>Load time for old doc</th><th>Storage cost</th><th>Complexity</th></tr></thead>
+            <tbody>
+              <tr><td>Full log replay from op 0</td><td>O(N) operations — potentially minutes</td><td>Just the log</td><td>Simple</td></tr>
+              <tr><td><strong>Snapshot + delta (chosen)</strong></td><td>O(1,000) ops max (since last snapshot)</td><td>Log + snapshots (~2× storage)</td><td>Snapshot worker needed</td></tr>
+              <tr><td>Store only current state</td><td>O(1) — just fetch the state</td><td>Minimal</td><td>No history, no version restore</td></tr>
+            </tbody>
+          </table></div>
+
+          <p>The snapshot worker is a background service that:</p>
+          <ol>
+            <li>Polls Cassandra for documents where <code>current_rev - snapshot_rev &gt; 1000</code></li>
+            <li>Replays operations from <code>snapshot_rev</code> to <code>current_rev</code> to materialize the current text</li>
+            <li>Compresses with gzip (~10:1 ratio for text) and uploads to S3 with path <code>snapshots/{doc_id}/{current_rev}.json.gz</code></li>
+            <li>Updates <code>documents.snapshot_rev = current_rev</code> atomically</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           E — EVALUATE
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon">✅</span>E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <h3>Does the design satisfy each requirement?</h3>
+
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Requirement</th><th>How it's satisfied</th><th>Risk / edge case</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Convergence (strongest)</td>
+                <td>Server-side OT with a single server per document provides proven CP1 convergence. All clients apply the same sequence of transformed operations.</td>
+                <td>Requires sticky routing — if two ops for the same doc land on different servers, correctness breaks. Mitigated by consistent hash routing.</td>
+              </tr>
+              <tr>
+                <td>Latency &lt;500ms for remote edits</td>
+                <td>Local edit: instant (optimistic). Remote: WebSocket push → no polling. Typical RTT is 20–80ms. Transform + persist + broadcast adds ~10ms.</td>
+                <td>Clients with very high base_revision lag (offline for hours) will see a slow reconnect while the server transforms many buffered ops. Mitigation: cap offline buffer at 1,000 ops; prompt user to refresh if exceeded.</td>
+              </tr>
+              <tr>
+                <td>1B documents, 10M concurrent editors</td>
+                <td>Cassandra partitions by doc_id — unlimited horizontal scale. Collab servers scale horizontally (1 server per 100K connections = 100 servers for 10M users). Snapshot workers are stateless, auto-scaled.</td>
+                <td>Hotspot: a document with 10,000 simultaneous editors (e.g., a viral shared doc) saturates one collab server. Mitigation: shard high-collaboration docs across multiple collab servers using sub-document partitioning (by paragraph range).</td>
+              </tr>
+              <tr>
+                <td>Zero operation loss (RPO = 0)</td>
+                <td>Cassandra is synchronously written to quorum (QUORUM write) before ACK is sent to client. No op is ACK'd until it's durably committed on 2 of 3 replicas.</td>
+                <td>Client doesn't retry until it receives an ACK — this ensures no duplicate ops from network timeouts.</td>
+              </tr>
+              <tr>
+                <td>Version history and restore</td>
+                <td>Append-only log provides complete history. Named versions in PostgreSQL. Restore inserts a RESTORE op rather than truncating history.</td>
+                <td>Restoring a very old version of a large document requires replaying from a distant snapshot — mitigated by writing an intermediate snapshot immediately before the restore.</td>
+              </tr>
+              <tr>
+                <td>Offline editing</td>
+                <td>Client buffers ops locally during disconnect; on reconnect, sends all ops tagged with the offline base_revision. Server transforms each against concurrent server ops.</td>
+                <td>If offline &gt;1 hour on a highly active document (many concurrent editors), the transform chain is very long. Mitigation: cap at 500 offline ops and surface a merge UI if exceeded.</td>
+              </tr>
+            </tbody>
+          </table></div>
+
+          <h3>Failure scenarios</h3>
+          <ul>
+            <li><strong>Collab server crash:</strong> The router detects the failure (TCP RST to all connected clients). Clients reconnect; router hashes their doc_id to a different live server. That server loads the last 1,000 ops from Cassandra, rebuilds in-memory state, and begins accepting connections. Clients resend any unACK'd ops with their base_revision — server transforms and applies normally.</li>
+            <li><strong>Cassandra write failure:</strong> The collab server retries with exponential backoff. The op is NOT broadcast until it is durably committed. Clients do not see their ACK and retry (idempotent via client_id + base_rev deduplication).</li>
+            <li><strong>Network partition between regions:</strong> Clients route to the nearest region's collab server. If the global router is partitioned, documents may temporarily have two active collab servers (split-brain). This breaks OT correctness. Mitigation: use a distributed lock (Zookeeper/etcd) to ensure only one collab server is active per document globally. On partition, the secondary server rejects operations with a 503 — clients queue locally and retry when partition heals.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DELIVER
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon">🚀</span>D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+          <p>We designed Google Docs to support 1B documents and 10M concurrent editors. The key architectural decisions:</p>
+          <ol>
+            <li><strong>Server-side OT</strong> for conflict resolution — each document has a single authoritative collab server that transforms and serializes all operations, providing proven convergence with a simple text-only document representation.</li>
+            <li><strong>Append-only operation log in Cassandra</strong> — partitioned by doc_id, clustered by revision. This is the durable source of truth, enables offline merge, and supports version history without any additional infrastructure.</li>
+            <li><strong>Snapshot + delta loading</strong> — periodic S3 snapshots every 1,000 ops ensure document load time stays bounded regardless of document age.</li>
+            <li><strong>Sticky WebSocket routing by doc_id</strong> — required for OT correctness; the collab server's in-memory state must see all operations for a document.</li>
+            <li><strong>Redis-backed presence system</strong> — ephemeral cursor state with 30s TTL, decoupled from the durable operation log.</li>
+          </ol>
+          <p>The most critical scalability constraint is the fan-out of operation broadcasts. At 10M concurrent editors with an average of 5 co-editors per document, the system must push 8.3M messages/sec — this drives the horizontal scaling of collab servers and the choice of long-lived WebSocket connections over polling.</p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           TRADE-OFFS
+           ══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon">⚖️</span>Trade-offs
+        </h2>
+        <div class="content-section__body">
+
+          <h3>OT vs CRDT for collaborative text editing</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Dimension</th><th>OT (Google Docs)</th><th>CRDT / RGA (Figma, Linear)</th></tr></thead>
+            <tbody>
+              <tr><td>Server required?</td><td>Yes — ops must pass through a central server for transform ordering</td><td>No — any two replicas can sync directly (peer-to-peer)</td></tr>
+              <tr><td>Document representation</td><td>Plain string (minimal overhead)</td><td>Each character has a unique ID + parent pointer (3–5× memory overhead)</td></tr>
+              <tr><td>Deleted characters</td><td>Physically removed from string</td><td>Tombstoned (remain in structure, invisible) — metadata grows indefinitely</td></tr>
+              <tr><td>Correctness proof</td><td>CP1 + CP2 proven for centralized OT</td><td>Merge correctness guaranteed by CRDT algebraic properties (CmRDT or CvRDT)</td></tr>
+              <tr><td>Offline support</td><td>Excellent — reconnect sends buffered ops with base_revision; server transforms</td><td>Excellent — merging is always possible; no base_revision concept needed</td></tr>
+              <tr><td>Implementation complexity</td><td>Moderate — transform() function is well-defined; the hard part is client state machine</td><td>High — RGA is more complex; garbage-collecting tombstones is non-trivial</td></tr>
+              <tr><td>Best for</td><td>Text editing where Google controls infrastructure</td><td>Design tools, code editors, offline-first apps, P2P collaboration</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>WebSocket vs SSE (Server-Sent Events) for real-time sync</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Dimension</th><th>WebSocket (chosen)</th><th>SSE + HTTP POST</th></tr></thead>
+            <tbody>
+              <tr><td>Direction</td><td>Bidirectional — single connection for both sending ops and receiving broadcasts</td><td>SSE is server→client only; client sends ops via separate HTTP POST requests</td></tr>
+              <tr><td>Overhead</td><td>Low after handshake — 2-byte framing per message</td><td>HTTP headers on each POST (~400 bytes overhead per op)</td></tr>
+              <tr><td>Load balancer compatibility</td><td>Requires sticky sessions or L7 WebSocket-aware LB</td><td>HTTP POST can go to any server; SSE stream needs affinity only for the push channel</td></tr>
+              <tr><td>Browser support</td><td>Universal (IE10+)</td><td>Universal, but Safari had quirks with SSE reconnection</td></tr>
+              <tr><td>Verdict</td><td>Correct choice for collaborative editing — low overhead, bidirectional, and the persistent connection is needed anyway for broadcast</td><td>Acceptable for read-heavy apps (e.g., live dashboards) where client sends infrequently</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>Snapshot + delta log vs alternatives for document storage</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Strategy</th><th>Load latency</th><th>Storage cost</th><th>Version history</th><th>Verdict</th></tr></thead>
+            <tbody>
+              <tr><td>Pure operation log (no snapshots)</td><td>O(N) — replay all ops; could be minutes for old docs</td><td>Low — just the log</td><td>Full — every op is recorded</td><td>Unacceptable load latency for documents with long history</td></tr>
+              <tr><td><strong>Snapshot + delta log (chosen)</strong></td><td>O(1,000) — at most 1,000 ops since last snapshot</td><td>~2× — snapshot + log overlap</td><td>Full — log is still append-only</td><td>Best balance — bounded load time with complete history</td></tr>
+              <tr><td>Mutable state only (overwrite on each save)</td><td>O(1) — fetch current state directly</td><td>Minimal — just current state</td><td>None — cannot restore or diff</td><td>Unacceptable — no version history; violates requirements</td></tr>
+              <tr><td>Snapshot per revision (every op is a snapshot)</td><td>O(1)</td><td>Extremely high — N snapshots per document</td><td>Full</td><td>Unacceptable storage cost</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>Cassandra vs PostgreSQL for the operation log</h3>
+          <div class="table-wrapper"><table>
+            <thead><tr><th>Dimension</th><th>Cassandra (chosen)</th><th>PostgreSQL</th></tr></thead>
+            <tbody>
+              <tr><td>Write throughput</td><td>Excellent — log-structured, tunable consistency, ~100K ops/sec per node</td><td>Good — but MVCC overhead and WAL contention at very high write rates</td></tr>
+              <tr><td>Range scans</td><td>Excellent — partition by doc_id, cluster by revision = sequential disk reads</td><td>Good with B-tree index, but less predictable at Cassandra's scale</td></tr>
+              <tr><td>Horizontal scale</td><td>Linear — add nodes for capacity and throughput</td><td>Requires sharding (e.g., Citus) — operational complexity</td></tr>
+              <tr><td>Transactions</td><td>None (LWT available but expensive)</td><td>Full ACID — but not needed for append-only log</td></tr>
+              <tr><td>Verdict</td><td>Correct for append-only high-throughput log with range scans by doc_id</td><td>Correct for documents metadata, permissions, and version names — not for the hot log</td></tr>
             </tbody>
           </table></div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           JAVA IMPLEMENTATION
+           ══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon">☕</span>Java Implementation
+        </h2>
         <div class="content-section__body">
+          <div class="insight-box insight-box--blue">
+            <strong>What to implement in an interview:</strong> You won't write 300 lines in 45 minutes. Show the <code>Operation</code> value object, the <code>transform()</code> function for the four cases, and the server's operation processing loop. That covers the core algorithm and demonstrates you understand OT at depth.
+          </div>
+
+          <h3>Operation value objects</h3>
           <pre><code class="language-java">/**
- * OperationalTransformer — transforms operations for concurrent insert/delete conflicts.
- * Ensures all clients converge to the same document state regardless of operation order.
+ * @file Operation.java
+ * @description Immutable value object representing a single text editing operation.
+ *              Operations are the atomic unit of the OT log — Insert or Delete at a position.
+ *
+ * @requires none
+ *
+ * Public API:
+ *   Operation.insert(position, content) — creates an Insert operation
+ *   Operation.delete(position, length)  — creates a Delete operation
+ *   getType(), getPosition(), getContent(), getLength() — field accessors
+ */
+public final class Operation {
+
+    public enum Type { INSERT, DELETE }
+
+    private final Type type;
+    private final int position;
+    private final String content;  // non-null for INSERT; null for DELETE
+    private final int length;      // 0 for INSERT; chars to remove for DELETE
+
+    private Operation(Type type, int position, String content, int length) {
+        this.type = type;
+        this.position = position;
+        this.content = content;
+        this.length = length;
+    }
+
+    public static Operation insert(int position, String content) {
+        if (content == null || content.isEmpty()) {
+            throw new IllegalArgumentException("Insert content must be non-empty");
+        }
+        return new Operation(Type.INSERT, position, content, 0);
+    }
+
+    public static Operation delete(int position, int length) {
+        if (length <= 0) {
+            throw new IllegalArgumentException("Delete length must be positive");
+        }
+        return new Operation(Type.DELETE, position, null, length);
+    }
+
+    public Type getType()       { return type; }
+    public int getPosition()    { return position; }
+    public String getContent()  { return content; }
+    public int getLength()      { return length; }
+
+    @Override
+    public String toString() {
+        return type == Type.INSERT
+            ? String.format("Insert('%s', pos=%d)", content, position)
+            : String.format("Delete(pos=%d, len=%d)", position, length);
+    }
+}</code></pre>
+
+          <h3>The transform() function — the core of OT</h3>
+          <pre><code class="language-java">/**
+ * @file OperationalTransformer.java
+ * @description Implements the OT transform function for text editing operations.
+ *              transform(opA, opB) returns opA' such that:
+ *              apply(apply(doc, opB), opA') == apply(apply(doc, opA), transform(opB, opA))
+ *              This is the CP1 (Convergence Property 1) guarantee.
+ *
+ * @requires Operation.java
+ *
+ * Public API:
+ *   transform(operationA, operationB) — transforms opA against concurrent opB, returns opA'
  */
 public class OperationalTransformer {
 
     /**
-     * Transforms operationA against a concurrent operationB.
-     * Returns a new operation that, when applied after operationB, produces the same
-     * result as applying the original operationA before operationB.
+     * Transforms operationA so it can be correctly applied after operationB has already
+     * been applied. Returns a new Operation — the original is never mutated.
      *
-     * @param operationA  the operation to transform
-     * @param operationB  the concurrent operation that was applied first by the server
-     * @return transformed version of operationA
+     * @param operationA  the operation to transform (client's pending op)
+     * @param operationB  the concurrent operation already applied by the server
+     * @return transformed operationA that accounts for operationB's effect
      */
     public Operation transform(Operation operationA, Operation operationB) {
-        if (operationA.getType() == OperationType.INSERT && operationB.getType() == OperationType.INSERT) {
-            return transformInsertVsInsert(operationA, operationB);
+        if (operationA.getType() == Operation.Type.INSERT) {
+            return operationB.getType() == Operation.Type.INSERT
+                ? transformInsertAgainstInsert(operationA, operationB)
+                : transformInsertAgainstDelete(operationA, operationB);
+        } else {
+            return operationB.getType() == Operation.Type.INSERT
+                ? transformDeleteAgainstInsert(operationA, operationB)
+                : transformDeleteAgainstDelete(operationA, operationB);
         }
-        if (operationA.getType() == OperationType.INSERT && operationB.getType() == OperationType.DELETE) {
-            return transformInsertVsDelete(operationA, operationB);
-        }
-        if (operationA.getType() == OperationType.DELETE && operationB.getType() == OperationType.INSERT) {
-            return transformDeleteVsInsert(operationA, operationB);
-        }
-        // DELETE vs DELETE
-        return transformDeleteVsDelete(operationA, operationB);
     }
 
-    /** insert(pos_a) vs insert(pos_b): shift A right if B inserted before or at A's position */
-    private Operation transformInsertVsInsert(Operation insertA, Operation insertB) {
+    /**
+     * Insert vs Insert:
+     * If B inserted at or before A's position, A's position shifts right by B's length.
+     * Tie-break: if both insert at the exact same position, B goes first (server priority),
+     *            so A shifts right.
+     */
+    private Operation transformInsertAgainstInsert(Operation insertA, Operation insertB) {
         int transformedPosition = insertA.getPosition();
-        if (insertB.getPosition() &lt;= insertA.getPosition()) {
+        if (insertB.getPosition() <= insertA.getPosition()) {
             transformedPosition += insertB.getContent().length();
         }
-        return new Operation(OperationType.INSERT, transformedPosition, insertA.getContent());
+        return Operation.insert(transformedPosition, insertA.getContent());
     }
 
-    /** insert(pos_a) vs delete(pos_b, len_b): shift A left if B deleted text before A */
-    private Operation transformInsertVsDelete(Operation insertA, Operation deleteB) {
-        int transformedPosition = insertA.getPosition();
-        if (deleteB.getPosition() &lt; insertA.getPosition()) {
-            int overlap = Math.min(deleteB.getLength(),
-                                    insertA.getPosition() - deleteB.getPosition());
-            transformedPosition -= overlap;
+    /**
+     * Insert vs Delete:
+     * If B deleted characters entirely before A's position, shift A left by deleted length.
+     * If B's delete range overlaps A's position, A moves to where B's deletion started.
+     */
+    private Operation transformInsertAgainstDelete(Operation insertA, Operation deleteB) {
+        int posA = insertA.getPosition();
+        int posB = deleteB.getPosition();
+        int lenB = deleteB.getLength();
+
+        if (posB >= posA) {
+            // B's deletion is entirely after A's position — A is unaffected
+            return insertA;
         }
-        return new Operation(OperationType.INSERT, transformedPosition, insertA.getContent());
+
+        // B deleted some characters before A's position
+        int charsDeletedBeforeA = Math.min(lenB, posA - posB);
+        return Operation.insert(posA - charsDeletedBeforeA, insertA.getContent());
     }
 
-    /** delete(pos_a) vs insert(pos_b): shift A right if B inserted before A */
-    private Operation transformDeleteVsInsert(Operation deleteA, Operation insertB) {
+    /**
+     * Delete vs Insert:
+     * If B inserted at or before A's deletion point, shift A's position right.
+     */
+    private Operation transformDeleteAgainstInsert(Operation deleteA, Operation insertB) {
         int transformedPosition = deleteA.getPosition();
-        if (insertB.getPosition() &lt;= deleteA.getPosition()) {
+        if (insertB.getPosition() <= deleteA.getPosition()) {
             transformedPosition += insertB.getContent().length();
         }
-        return new Operation(OperationType.DELETE, transformedPosition, deleteA.getLength());
+        return Operation.delete(transformedPosition, deleteA.getLength());
     }
 
-    /** delete(pos_a) vs delete(pos_b): adjust A's position and length based on B's deletion */
-    private Operation transformDeleteVsDelete(Operation deleteA, Operation deleteB) {
-        if (deleteB.getPosition() &gt;= deleteA.getPosition() + deleteA.getLength()) {
-            return deleteA; // B is after A — no effect
+    /**
+     * Delete vs Delete:
+     * Most complex case — handles four sub-cases:
+     * 1. B is entirely after A: no effect on A
+     * 2. B is entirely before A: shift A's position left
+     * 3. B is entirely within A's range: shrink A's length
+     * 4. Overlapping: compute surviving range
+     *
+     * The key invariant: if A and B both want to delete the same characters,
+     * A's transformed version should delete 0 of those characters (they're already gone).
+     */
+    private Operation transformDeleteAgainstDelete(Operation deleteA, Operation deleteB) {
+        int posA = deleteA.getPosition();
+        int lenA = deleteA.getLength();
+        int posB = deleteB.getPosition();
+        int lenB = deleteB.getLength();
+
+        // Case 1: B starts after A's range ends — B has no effect on A
+        if (posB >= posA + lenA) {
+            return deleteA;
         }
-        if (deleteB.getPosition() + deleteB.getLength() &lt;= deleteA.getPosition()) {
-            // B is entirely before A — shift A left
-            return new Operation(OperationType.DELETE,
-                deleteA.getPosition() - deleteB.getLength(), deleteA.getLength());
+
+        // Case 2: B ends before A starts — B entirely precedes A, shift A left
+        if (posB + lenB <= posA) {
+            return Operation.delete(posA - lenB, lenA);
         }
-        // Overlapping deletes — shrink A's length by the overlap
-        int overlapStart = Math.max(deleteA.getPosition(), deleteB.getPosition());
-        int overlapEnd = Math.min(deleteA.getPosition() + deleteA.getLength(),
-                                   deleteB.getPosition() + deleteB.getLength());
-        int reducedLength = deleteA.getLength() - (overlapEnd - overlapStart);
-        int newPosition = Math.min(deleteA.getPosition(), deleteB.getPosition());
-        return new Operation(OperationType.DELETE, newPosition, Math.max(0, reducedLength));
+
+        // Cases 3 & 4: B's range overlaps with A's range
+        // Compute how many of A's characters B has already deleted
+        int overlapStart = Math.max(posA, posB);
+        int overlapEnd   = Math.min(posA + lenA, posB + lenB);
+        int alreadyDeleted = overlapEnd - overlapStart;
+
+        int newPosition = Math.min(posA, posB);
+        int newLength   = Math.max(0, lenA - alreadyDeleted);
+
+        // If the entire range was already deleted by B, return a no-op delete of length 0
+        // (caller should check for length == 0 and skip applying)
+        if (newLength == 0) {
+            return Operation.delete(newPosition, 0);
+        }
+        return Operation.delete(newPosition, newLength);
     }
+}</code></pre>
+
+          <h3>Server-side operation processing loop</h3>
+          <pre><code class="language-java">/**
+ * @file CollaborationServer.java
+ * @description Per-document operation processing loop running on the collaboration server.
+ *              Each document has exactly one active CollaborationServer instance (sticky routing).
+ *              Responsible for transforming incoming ops, assigning revisions, persisting,
+ *              and broadcasting.
+ *
+ * @requires OperationalTransformer.java, Operation.java
+ *
+ * Public API:
+ *   processOperation(incomingOp, senderSessionId) — main entry point for client ops
+ *   getDocumentState() — returns current document text (for snapshot worker)
+ */
+public class CollaborationServer {
+
+    private final String documentId;
+    private final OperationalTransformer transformer;
+    private final OperationLog operationLog;         // Cassandra-backed
+    private final SessionRegistry sessionRegistry;   // tracks WebSocket sessions per doc
+    private final PresenceStore presenceStore;        // Redis-backed
+
+    // In-memory cache: ops since last snapshot, ordered by revision
+    // Bounded at 2,000 entries — older ops evicted (still in Cassandra)
+    private final Deque&lt;CommittedOperation&gt; recentOps = new ArrayDeque&lt;&gt;();
+    private volatile long currentRevision;
+
+    /**
+     * Main entry point. Called once per incoming operation from any connected client.
+     * Must be called on a single thread per document (or with document-level locking)
+     * to maintain OT correctness — no concurrent transforms for the same document.
+     *
+     * @param incomingOp        the raw operation from the client
+     * @param senderSessionId   the WebSocket session ID of the sending client
+     */
+    public synchronized void processOperation(IncomingOp incomingOp, String senderSessionId) {
+        // 1. Find all server-side ops committed since the client's base revision
+        List&lt;CommittedOperation&gt; concurrentOps =
+            getOpsSince(incomingOp.getBaseRevision());
+
+        // 2. Transform the incoming op against each concurrent server op
+        Operation transformedOp = incomingOp.getOp();
+        for (CommittedOperation serverOp : concurrentOps) {
+            transformedOp = transformer.transform(transformedOp, serverOp.getOperation());
+        }
+
+        // 3. Skip no-op deletes (can result from overlapping concurrent deletes)
+        if (isNoOp(transformedOp)) {
+            sendAck(senderSessionId, currentRevision);
+            return;
+        }
+
+        // 4. Assign next revision atomically (in-memory, then persisted)
+        long newRevision = ++currentRevision;
+
+        // 5. Persist to Cassandra (QUORUM write — blocks until 2/3 replicas confirm)
+        CommittedOperation committed = new CommittedOperation(
+            documentId, newRevision, incomingOp.getUserId(),
+            incomingOp.getClientId(), transformedOp, Instant.now()
+        );
+        operationLog.appendWithQuorum(committed);
+
+        // 6. Cache in memory for future transforms
+        recentOps.addLast(committed);
+        if (recentOps.size() > 2_000) {
+            recentOps.removeFirst();
+        }
+
+        // 7. ACK the sender (must happen after durability confirmed)
+        sendAck(senderSessionId, newRevision);
+
+        // 8. Broadcast to all other editors on this document
+        broadcastToOtherEditors(senderSessionId, newRevision, transformedOp,
+                                incomingOp.getUserId());
+    }
+
+    private List&lt;CommittedOperation&gt; getOpsSince(long baseRevision) {
+        // Check in-memory cache first — avoids Cassandra read in the common case
+        long oldestCached = recentOps.isEmpty()
+            ? currentRevision : recentOps.peekFirst().getRevision();
+
+        if (baseRevision >= oldestCached - 1) {
+            return recentOps.stream()
+                .filter(op -> op.getRevision() > baseRevision)
+                .collect(Collectors.toList());
+        }
+
+        // Cache miss (large offline gap) — fetch from Cassandra
+        return operationLog.getRangeInclusive(documentId, baseRevision + 1, currentRevision);
+    }
+
+    private boolean isNoOp(Operation operation) {
+        return operation.getType() == Operation.Type.DELETE
+            && operation.getLength() == 0;
+    }
+
+    private void sendAck(String sessionId, long revision) {
+        sessionRegistry.sendToSession(sessionId,
+            new AckMessage(revision));
+    }
+
+    private void broadcastToOtherEditors(String excludeSessionId, long revision,
+                                          Operation operation, String userId) {
+        sessionRegistry.getSessionsForDocument(documentId).stream()
+            .filter(sessionId -> !sessionId.equals(excludeSessionId))
+            .forEach(sessionId -> sessionRegistry.sendToSession(sessionId,
+                new OperationBroadcast(revision, operation, userId)));
+    }
+}</code></pre>
+
+          <h3>Client-side OT state machine</h3>
+          <pre><code class="language-java">/**
+ * @file ClientOtEngine.java
+ * @description Client-side OT state machine. Ensures only one op is in-flight at a time,
+ *              and transforms received server ops against the pending/buffered client ops.
+ *
+ * Key insight: the client needs to transform server-broadcast ops against its own
+ * pending op before applying them — otherwise the local document diverges from
+ * what the server committed.
+ *
+ * Public API:
+ *   applyLocalOp(op)          — user typed something; apply locally and queue for server
+ *   onServerOp(op, revision)  — server broadcast; transform and apply to local doc
+ *   onAck(revision)           — server ACK'd our pending op; send next buffered op
+ */
+public class ClientOtEngine {
+
+    private final OperationalTransformer transformer;
+    private final DocumentState localDocument;
+    private final WebSocketConnection serverConnection;
+
+    // The one op we've sent to the server and are waiting for ACK on
+    private Operation pendingOp = null;
+
+    // Ops typed locally while pendingOp is in-flight; sent after ACK received
+    private final Deque&lt;Operation&gt; bufferedOps = new ArrayDeque&lt;&gt;();
+
+    private long currentRevision = 0;
+
+    /**
+     * User typed something. Apply immediately to local document (optimistic UI).
+     * If no op is in-flight, send to server. If one is in-flight, buffer it.
+     */
+    public void applyLocalOp(Operation localOp) {
+        localDocument.apply(localOp);
+
+        if (pendingOp == null) {
+            pendingOp = localOp;
+            serverConnection.sendOp(localOp, currentRevision);
+        } else {
+            bufferedOps.addLast(localOp);
+        }
+    }
+
+    /**
+     * Server broadcast: another user's op arrived (already transformed by the server).
+     * We must transform it against our pending + buffered ops before applying locally.
+     * This is the "client-side diamond" — our pending op and the server's op both
+     * branched from the same base revision.
+     */
+    public void onServerOp(Operation serverOp, long revision) {
+        Operation transformedServerOp = serverOp;
+
+        // Transform against pending op (if any) — our pending op branched from
+        // the same base revision as this server op
+        if (pendingOp != null) {
+            transformedServerOp = transformer.transform(transformedServerOp, pendingOp);
+            // Also update our pending op: transform it against what the server just applied
+            pendingOp = transformer.transform(pendingOp, serverOp);
+        }
+
+        // Transform against each buffered op
+        for (int index = 0; index < bufferedOps.size(); index++) {
+            Operation bufferedOp = getBufferedAt(index);
+            Operation transformedBuffered = transformer.transform(bufferedOp, transformedServerOp);
+            transformedServerOp = transformer.transform(transformedServerOp, bufferedOp);
+            replaceBufferedAt(index, transformedBuffered);
+        }
+
+        localDocument.apply(transformedServerOp);
+        currentRevision = revision;
+    }
+
+    /**
+     * Server ACK'd our pending op — it's now committed.
+     * If there are buffered ops, send the first one.
+     */
+    public void onAck(long revision) {
+        currentRevision = revision;
+        pendingOp = bufferedOps.isEmpty() ? null : bufferedOps.pollFirst();
+        if (pendingOp != null) {
+            serverConnection.sendOp(pendingOp, currentRevision);
+        }
+    }
+
+    // Helper methods (getBufferedAt, replaceBufferedAt) omitted for brevity
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           QUIZ
+           ══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon">🧠</span>Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-google-docs-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="The document is 'Hello'. User A inserts 'X' at position 0 (result: 'XHello'). Simultaneously, User B inserts 'Y' at position 0. After OT, where should User A's operation be re-applied from B's perspective?" data-options='["Position 0 — no transformation needed","Position 1 — B's insert at position 0 shifted A's original position 0 to position 1","Position 5 — A's insert must go at the end","Positions are irrelevant — OT uses content-based merging"]' data-correct="1" data-explanation="OT rule: insert(posA) vs insert(posB). If posB <= posA: posA becomes posA + len(B). Here posB=0 <= posA=0, so posA becomes 0+1=1. Result: B's 'Y' is at 0, A's 'X' is at 1: 'YXHello'. Both clients converge to this state." style="display:none"></div>
-          <div data-question="What is the key difference between OT (Operational Transformation) and CRDTs for collaborative editing?" data-options='["OT is newer than CRDT","OT requires a central server to order and transform operations — guaranteeing convergence through server-serialized transforms. CRDTs embed convergence properties into the data structure itself — they can merge without a central coordinator, enabling true peer-to-peer collaboration.","CRDT cannot handle text editing, only simple counters","OT is used by startups; CRDT is only for large companies"]' data-correct="1" data-explanation="OT's correctness proof relies on operations going through a central server that transforms them before broadcasting. Without a server, the transform complexity becomes exponential. CRDTs (like RGA for sequences) have merge semantics built in — any two replicas can merge directly. Figma uses CRDTs; Google Docs uses OT." style="display:none"></div>
-          <div data-question="Why store an append-only operation log rather than updating the document state directly?" data-options='["Append-only logs are faster than mutable state","Append-only logs provide complete history: you can replay all operations to reconstruct any past state, support version history (restore to any point), enable audit trails, and replay for new clients joining mid-session. Mutable state only has the current snapshot.","Append-only is required for Cassandra's data model","Cassandra doesn't support UPDATE operations"]' data-correct="1" data-explanation="This is Event Sourcing applied to documents. The log is the source of truth. Current state is a derived value (apply all ops). Benefits: full history, time travel (restore to revision N), debugging (replay to reproduce a bug), new clients (replay ops since their last sync). Trade-off: loading a doc requires replaying ops — mitigated by periodic snapshots." style="display:none"></div>
-          <div data-question="When a user goes offline for 10 minutes and returns, how does their buffered edits get merged?" data-options='["Offline edits are discarded — only online edits are accepted","The client stores the revision number when it went offline and buffers all local ops. On reconnect, it sends each buffered op with its base revision. The server transforms each op against all server-side ops that occurred during the offline period, then applies and broadcasts them.","The server sends the latest document state and the client discards their offline edits","Offline edits are stored in a separate 'conflict branch' that the user must manually merge"]' data-correct="1" data-explanation="This is the core value of OT for offline support. The client knows its last-synced revision (say, 500). All ops buffered offline have baseRevision=500. The server has applied ops 501-600 while the user was offline. It transforms each buffered op against 501-600, assigns new revision numbers, and applies them. The user's edits are preserved and merged correctly." style="display:none"></div>
+
+          <!-- Q1 -->
+          <div data-question="Document is 'Hello'. User A runs Insert('X', pos=0) and User B simultaneously runs Insert('Y', pos=0), both from the same base revision. The server receives A's op first and commits it (rev=1). How does the server transform B's op before committing it?" data-options='["Insert(Y, pos=0) unchanged — both inserts at position 0 are identical so no transform is needed","Insert(Y, pos=1) — the rule is: if B.pos &lt;= A.pos, shift B right by len(A.content). Since A inserted at pos=0 &lt;= B.pos=0, B shifts to pos=1. Final doc: XYHello","Insert(Y, pos=5) — B must insert at the end to avoid collision","Insert(Y, pos=0) — the incoming op always takes priority over the committed op"]' data-correct="1" data-explanation="OT rule for Insert-vs-Insert: transform(B, A) → if A.pos &lt;= B.pos then B.pos += len(A.content). Here A.pos=0 &lt;= B.pos=0, so B's position shifts to 0+1=1. Result: 'XYHello'. Both clients converge: Client A applied X at 0 then receives transform(B,A)=Insert(Y,pos=1); Client B applied Y at 0 then receives A's op and transforms it — arriving at the same string from the other direction." style="display:none"></div>
+
+          <!-- Q2 -->
+          <div data-question="What is the critical architectural constraint that makes server-side OT work correctly — and what breaks if you violate it?" data-options='["The operation log must use Cassandra specifically — PostgreSQL does not support the required revision-based range scans","All WebSocket connections for the same document must route to the same collaboration server instance (sticky routing). If two ops for the same doc land on different servers, each server has an incomplete view of concurrent ops and will produce incorrect transform results — clients diverge permanently","Each client must receive all operations in real-time — any delay &gt;500ms causes divergence and requires the client to reload the document","The server must process operations synchronously in a single-threaded event loop — multi-threading causes race conditions even within one server instance"]' data-correct="1" data-explanation="OT requires the server to transform each incoming op against ALL concurrent ops committed since the client's base revision. The server maintains this set in memory for performance. If two servers each see only half the concurrent ops (split-brain), they will produce different transform results and the clients they serve will diverge to different document states permanently. Sticky routing by doc_id (consistent hashing) ensures one authoritative server per document. On failover, the new server must reload all ops from Cassandra before accepting connections." style="display:none"></div>
+
+          <!-- Q3 -->
+          <div data-question="Why does Google Docs use OT instead of CRDT, and which real systems use each approach?" data-options='["Google Docs uses CRDT because it enables offline-first editing without a central server","Google Docs uses OT because: (1) Google controls infrastructure and can guarantee low-latency server access, (2) the document is just a string — no per-character metadata overhead unlike CRDT, (3) OT correctness for plain text is well-proven. Figma and Linear use CRDT (RGA variant) because their design objects need peer-to-peer sync and the metadata overhead for large objects is proportionally smaller","Google Docs uses OT because CRDT was not invented until 2015","OT and CRDT are equivalent — the choice is only a matter of implementation preference"]' data-correct="1" data-explanation="The OT vs CRDT trade-off is architectural, not algorithmic. OT with a central server: simple document representation (just a string), proven correctness, but requires a reliable server in the critical path. CRDT (RGA for sequences): each character carries a unique ID and parent pointer (3-5× memory overhead), tombstones accumulate for deleted chars, but ANY two replicas can sync without coordination. Figma chose CRDT because design tools need offline-first, peer-to-peer sync between clients, and the metadata overhead is acceptable for vector objects. Google chose OT because they can guarantee server availability and want minimal document representation overhead." style="display:none"></div>
+
+          <!-- Q4 -->
+          <div data-question="A user edits a Google Doc offline for 10 minutes. When they reconnect, they have 30 locally buffered operations created at base_revision=500. The server has committed revisions 501–580 while they were offline. What exactly happens during reconnect?" data-options='["The client discards its 30 offline ops and downloads the server's latest state at revision 580","The client sends all 30 buffered ops each tagged with base_revision=500. The server transforms each op sequentially against ops 501–580 before committing. For the first offline op: transform against 80 server ops. For the second: transform against 80 server ops + the first transformed offline op. Each op is committed with a new revision (581–610) and broadcast. The user's edits are preserved.","The server detects the version gap and prompts the user with a manual merge UI showing the conflicting changes","The client replays its local state from revision 500, overwriting any changes made by other users during the offline period"]' data-correct="1" data-explanation="This is OT's most important property for real-world use. The client buffers every offline op with the base_revision at the time of creation (500 for all 30, since they were all created against the same base). On reconnect, the server acts as if these 30 ops were just received from a very-lagged client. It transforms each through the chain of 80 concurrent server ops — O(30 × 80) = O(2,400) transform calls. The user's intent is fully preserved. The only limitation: if the offline buffer exceeds a cap (e.g., 1,000 ops), clients are prompted to refresh to avoid excessive server-side transform chains." style="display:none"></div>
+
+          <!-- Q5 -->
+          <div data-question="Explain the snapshot + delta storage model for Google Docs and why it's necessary. What would break if you only kept the operation log without snapshots?" data-options='["Snapshots are only needed for version history — the current document state can always be reconstructed quickly from the log","Without snapshots, loading any document requires replaying every operation from revision 0. A document edited daily for 3 years at 10 ops/min accumulates ~15 million operations. Replaying 15M ops on document open is unacceptable (minutes of latency). Snapshots (every 1,000 ops) bound load time to replaying at most 1,000 ops — O(constant) regardless of document age. The operation log is kept for version history and offline merge; snapshots are just a performance optimization.","Snapshots replace the operation log entirely — after a snapshot, old ops are deleted to save storage","Snapshots are a regulatory requirement for audit logging — the technical reason is secondary"]' data-correct="1" data-explanation="This is a classic Event Sourcing pattern. The operation log is the source of truth (every edit ever made). Current document state is a derived/materialized view. Without snapshots, materializing the view requires replaying the entire log — O(N) where N grows unboundedly. The snapshot worker periodically materializes and persists the current state, so document load is: fetch snapshot (O(1)) + replay ops since snapshot (O(1,000 max)). The operation log is NOT deleted — it's still needed for version history, offline merge, and auditing. Snapshots are purely a read-path optimization." style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
               <a href="metrics-dashboard.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Metrics Dashboard →</a>
@@ -309,15 +1354,24 @@ public class OperationalTransformer {
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
         <a href="flash-sale.html" class="btn btn--outline">← Flash Sale</a>
         <a href="metrics-dashboard.html" class="btn btn--primary">Next: Metrics Dashboard →</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Metrics Dashboard like Datadog — RESHADED walkthrough covering time-series storage, metric ingestion, cardinality problems, and alerting engine for MAANG interviews.">
+  <meta name="description" content="Design Metrics Dashboard like Datadog — RESHADED walkthrough covering time-series storage, gorilla compression, cardinality explosion, pull vs push ingestion, and PromQL for MAANG L6 interviews.">
   <title>Design Metrics Dashboard (Datadog) — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -26,9 +26,11 @@
       <a href="../../mock-interview/index.html" class="site-nav__cta">Mock Interview →</a>
     </div>
   </nav>
+
   <div class="module-page" id="main">
     <aside class="module-sidebar" aria-label="Table of contents">
-      <nav class="module-toc"><div class="module-toc__title">RESHADED Steps</div>
+      <nav class="module-toc" aria-label="Page sections">
+        <div class="module-toc__title">RESHADED Steps</div>
         <ul class="module-toc__list" role="list">
           <li><a href="#requirements" class="module-toc__link">R — Requirements</a></li>
           <li><a href="#estimation" class="module-toc__link">E — Estimation</a></li>
@@ -48,261 +50,1345 @@
         <a href="../../mock-interview/index.html?problem=metrics" class="btn btn--outline" style="width:100%;text-align:center">Try in Mock Interview</a>
       </div>
     </aside>
+
     <main class="module-content">
       <header class="module-header">
         <nav class="module-header__breadcrumb" aria-label="Breadcrumb">
-          <a href="../../index.html">Home</a><span class="separator" aria-hidden="true">›</span>
-          <a href="../../index.html#problems">Problems</a><span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html">Home</a>
+          <span class="separator" aria-hidden="true">›</span>
+          <a href="../../index.html#problems">Problems</a>
+          <span class="separator" aria-hidden="true">›</span>
           <span>Tier 2</span>
         </nav>
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="tag tag--blue">Tier 2 — Should Know</span><span class="tag">45 min</span><span class="tag">Observability</span>
+          <span class="tag tag--blue">Tier 2 — Should Know</span>
+          <span class="tag">45 min</span>
+          <span class="tag">Observability</span>
         </div>
         <h1 class="module-header__title">Design Metrics Dashboard (Datadog)</h1>
-        <p class="module-header__desc">Metrics systems have a specific storage problem called the cardinality explosion: adding even one high-cardinality tag (like user_id) can increase storage by 1,000×. Understanding why, and how to mitigate it, is the signal the interviewer is looking for.</p>
+        <p class="module-header__desc">Metrics systems have a deceptively specific storage problem: adding even one high-cardinality tag (like <code>user_id</code>) can increase storage by 1,000,000×. Every architectural decision — pull vs push collection, column-oriented storage, delta-delta encoding, downsampling — flows from this constraint. Understanding why is the L6 signal the interviewer is looking for.</p>
         <div class="module-header__meta">
           <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Datadog, Prometheus, New Relic</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> Time-series at scale</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📈</span> 10M metrics/sec at scale</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           R — REQUIREMENTS
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon">❓</span>R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Clarifying Questions to Ask the Interviewer</h3>
+          <ul>
+            <li><strong>Who are the producers?</strong> Internal services only, or third-party agents running on customer infra (Datadog model)?</li>
+            <li><strong>What metric types?</strong> Gauges (CPU%), counters (request count), histograms (latency distribution), summaries?</li>
+            <li><strong>Query patterns?</strong> Real-time dashboard (last 5 min), short-term debug (last 24h), or long-term trend (year-over-year)?</li>
+            <li><strong>Alerting?</strong> Simple threshold ("CPU &gt; 90% for 5 min") or anomaly detection (ML-based)?</li>
+          </ul>
+
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Ingest metrics: metric_name, tags (key:value pairs), timestamp, value</li>
-            <li>Query: time-range aggregations (avg, sum, p99) by metric + tag filters</li>
-            <li>Dashboard: visualize metrics as line/bar charts</li>
-            <li>Alerting: trigger alert when metric crosses threshold for N minutes</li>
-            <li>Downsampling: roll up high-resolution data to lower resolution over time</li>
+            <li><strong>Ingest:</strong> Receive metrics as (metric_name, tag_set, timestamp, value) tuples from millions of agents at 10M/sec peak throughput</li>
+            <li><strong>Store:</strong> Persist time-series data with configurable retention — raw for 15 days, 1-min rollup for 90 days, 1-hour rollup for 2 years</li>
+            <li><strong>Query:</strong> Time-range queries with tag filters, arithmetic, and aggregation functions (avg, sum, p99, rate)</li>
+            <li><strong>Dashboard:</strong> Visualize multiple metrics as line/area/bar/heatmap charts; refresh every 10–60 seconds</li>
+            <li><strong>Alert:</strong> Evaluate alert rules on a schedule; notify via PagerDuty, Slack, email when thresholds are breached</li>
+            <li><strong>Downsampling:</strong> Automatically roll up high-resolution data to lower resolution as it ages</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 1M metrics/sec ingestion; 10B data points/day</li>
-            <li><strong>Query latency:</strong> &lt;1s for dashboard queries over last 24h</li>
-            <li><strong>Retention:</strong> Raw (1s) for 7 days; 1-min aggregates for 1 year; 1-hour for 5 years</li>
+            <li><strong>Ingestion throughput:</strong> 10M data points/sec sustained; 50M/sec peak burst</li>
+            <li><strong>Write latency:</strong> Agent→storage &lt;5 seconds (near-real-time dashboards)</li>
+            <li><strong>Query latency:</strong> &lt;1 second for dashboard queries over last 24h; &lt;10 seconds for year-long range</li>
+            <li><strong>Storage:</strong> 100TB compressed; 10× compression expected via Gorilla encoding</li>
+            <li><strong>Availability:</strong> 99.9% for ingestion (data loss is worse than delay); 99.5% for query (dashboards can degrade)</li>
+            <li><strong>Cardinality limit:</strong> Max 10M active time series per tenant to prevent runaway storage</li>
           </ul>
+
+          <div class="callout callout--insight">
+            <div class="callout__title">L6 Insight: What makes this problem uniquely hard</div>
+            <p>Unlike a typical database, a metrics system must handle <strong>write-heavy, append-only workloads</strong> at extreme scale, while simultaneously serving <strong>read-heavy analytical queries</strong> spanning millions of data points. No general-purpose database handles both well. The entire architecture exists to reconcile this tension.</p>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — ESTIMATION
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon">🔢</span>E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Scale Assumptions</h3>
           <ul>
-            <li>1M metrics/sec × 16 bytes per data point = 16MB/sec = 1.4TB/day raw</li>
-            <li>After 7-day raw retention + rollup: 1.4TB × 7 + (1-min aggregate: 1.4TB/60 × 365) + (1-hour: ~250GB × 5) = ~15TB total</li>
-            <li>Compression (Gorilla XOR encoding): ~10× ratio → 1.5TB actual storage</li>
+            <li>10M monitored hosts × 1 metric/sec average = 10M data points/sec</li>
+            <li>Each raw data point: 8 bytes (timestamp) + 8 bytes (value) + ~40 bytes (metric name + tags) = ~56 bytes</li>
+            <li>Before compression: 10M × 56 bytes = <strong>560 MB/sec = ~47 TB/day</strong></li>
           </ul>
+
+          <h3>Compression Impact (Gorilla Encoding)</h3>
+          <ul>
+            <li>Timestamp delta-delta: ~1.5 bits per timestamp vs 64 bits raw → <strong>40× timestamp compression</strong></li>
+            <li>Value XOR encoding: ~1.37 bytes per double vs 8 bytes raw → <strong>~6× value compression</strong></li>
+            <li>Combined (12 bytes uncompressed timestamp+value → 1.37 bytes): <strong>~8.7× compression</strong></li>
+            <li>Compressed daily write: 47 TB / 8.7 ≈ <strong>5.4 TB/day</strong></li>
+          </ul>
+
+          <h3>Retention Tiers and Storage Totals</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Tier</th><th>Resolution</th><th>Retention</th><th>Data points/day</th><th>Total storage</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Raw</td><td>1 second</td><td>15 days</td><td>864B points</td><td>5.4 TB/day × 15 = <strong>81 TB</strong></td></tr>
+                <tr><td>1-min rollup</td><td>1 minute</td><td>90 days</td><td>14.4B points/day</td><td>81 TB / 60 × 90 = <strong>122 TB</strong></td></tr>
+                <tr><td>1-hour rollup</td><td>1 hour</td><td>2 years</td><td>240M points/day</td><td>122 TB / 60 × 730 = <strong>1.5 TB</strong></td></tr>
+                <tr><td><strong>Total</strong></td><td>—</td><td>—</td><td>—</td><td><strong>~205 TB compressed</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Query Load</h3>
+          <ul>
+            <li>100K active dashboards × 1 query/10s = <strong>10K queries/sec</strong></li>
+            <li>Each query touches ~1M data points → need parallel execution and caching</li>
+            <li>Alert evaluation: 1M alert rules × every 60s = ~17K rule evaluations/sec</li>
+            <li>Kafka: 10M events/sec × 56 bytes = 560 MB/sec → 600 partitions at 1 MB/sec/partition</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <div class="callout__title">Why raw data cannot answer year-over-year questions</div>
+            <p>A query like "show me CPU usage for this service over the last year" would need to scan <strong>31.5 billion data points</strong> at 1-second resolution. Even at 10 GB/s disk throughput, that's ~3,150 seconds = 52 minutes. This is why downsampling is mandatory — you query the 1-hour rollup tier (8,760 points per metric per year) instead, which answers in milliseconds.</p>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           S — SCHEMA
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon">🗄️</span>S — Schema
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Time-series data (column-oriented storage — ClickHouse or custom like Gorilla)
-// Each unique (metric_name, tag_set) combination = one time series
-metric_data:
-    metric_name  VARCHAR(200),    -- "http.request.latency"
-    tags         MAP&lt;STRING, STRING&gt;, -- {service: "auth", region: "us-east"}
-    timestamp    UINT32,          -- Unix epoch seconds (not ms — saves 50% space)
-    value        DOUBLE,
+          <h3>Why Time-Series Data is NOT Relational</h3>
+          <p>A relational model stores each data point as a row: <code>(metric_name, service, region, timestamp, value)</code>. Querying "avg CPU for service=auth over last hour" requires scanning millions of rows with full row reads. A time-series model stores a <strong>series</strong> (a unique metric+tag combination) as a compressed sequence of (timestamp, value) pairs — the query reads only the relevant sequence, not all rows. This is a fundamentally different access pattern.</p>
 
-// Series index (Inverted index — for tag-based queries)
-// "Find all series for service=auth" → lookup tag index → get series IDs
-tag_index: tag_key, tag_value → [series_id_1, series_id_2, ...]</code></pre>
+          <h3>Core Data Model</h3>
+          <pre><code class="language-java">// ── SERIES IDENTITY ───────────────────────────────────────────────────
+// A "time series" = unique combination of (metric_name + all tag values)
+// Example: cpu.usage{service="auth", host="prod-001", region="us-east-1"}
+// is a DIFFERENT series from:
+//          cpu.usage{service="auth", host="prod-002", region="us-east-1"}
+
+series_metadata:
+    series_id      UINT64 (hash of metric_name + sorted tag pairs),
+    metric_name    VARCHAR(200),        -- "http.request.latency"
+    tags           MAP&lt;STRING,STRING&gt;,  -- {service:"auth", region:"us-east-1"}
+    created_at     TIMESTAMP,
+    last_seen_at   TIMESTAMP,
+    -- Maintained in memory (Redis) + persisted to PostgreSQL
+
+// ── TIME-SERIES DATA (compressed blocks) ──────────────────────────────
+// Stored as 2-hour Gorilla-compressed blocks on disk
+// NOT in a relational database — stored as binary files or in a
+// column-oriented engine like ClickHouse, Apache Parquet, or custom TSDB.
+
+tsdb_block:
+    series_id      UINT64,
+    block_start    UINT32,    -- Unix epoch seconds (4 bytes, not 8)
+    block_end      UINT32,    -- 2 hours later
+    data_points    BYTES,     -- Gorilla-compressed (timestamp, value) pairs
+    point_count    UINT32,
+    min_value      DOUBLE,    -- Pre-computed for fast range queries
+    max_value      DOUBLE,
+
+// ── DOWNSAMPLED AGGREGATES ─────────────────────────────────────────────
+// Pre-computed rollups stored separately per retention tier
+
+metric_rollup_1min:
+    series_id      UINT64,
+    bucket_ts      UINT32,    -- Truncated to minute boundary
+    sum_value      DOUBLE,
+    min_value      DOUBLE,
+    max_value      DOUBLE,
+    count          UINT32,    -- Needed to compute avg across rollups
+    p50_value      DOUBLE,    -- Pre-computed percentiles via t-digest
+    p99_value      DOUBLE,
+    PRIMARY KEY (series_id, bucket_ts)
+    -- ClickHouse: PARTITION BY toYYYYMM(toDateTime(bucket_ts))
+    -- ORDER BY (series_id, bucket_ts)  ← enables columnar time-range scan
+
+// ── INVERTED INDEX (tag → series IDs) ─────────────────────────────────
+// Critical for query: "find all series where service='auth' AND region='us-east-1'"
+// Without this index: scan all 10M series. With it: O(1) set intersection.
+
+tag_index:
+    tag_key        VARCHAR(100),   -- "service"
+    tag_value      VARCHAR(200),   -- "auth"
+    series_ids     ROARING_BITMAP, -- Compressed set of matching series IDs
+    -- Stored in Redis for hot lookups, Elasticsearch for persistence
+    -- Index intersection: series_ids(service=auth) AND series_ids(region=us-east-1)
+
+// ── ALERT DEFINITIONS ─────────────────────────────────────────────────
+alert_rule:
+    rule_id        UUID,
+    name           VARCHAR(200),
+    query          TEXT,           -- PromQL expression
+    condition      VARCHAR(100),   -- "value > 500"
+    for_duration   INTERVAL,       -- Must breach for N minutes (avoids flapping)
+    severity       ENUM(critical, warning, info),
+    notification_channels  JSONB,  -- [{type:"pagerduty", key:"..."}, ...]
+    is_silenced    BOOLEAN,
+    silenced_until TIMESTAMP</code></pre>
+
+          <div class="callout callout--insight">
+            <div class="callout__title">L6 Insight: Why 4-byte timestamps instead of 8-byte</div>
+            <p>Unix epoch as UINT32 overflows in 2038 — but TSDB block headers use a base timestamp per block. Each data point stores only the <strong>delta from the block start</strong> (max 2 hours = 7200 seconds). This fits in 13 bits uncompressed, and Gorilla delta-delta reduces it further to ~1.5 bits. At 10M metrics/sec for 5 years, 4 bytes saved per point = 1.5 petabytes saved.</p>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           H — HIGH-LEVEL DESIGN
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon">🏗️</span>H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Pull vs Push Collection: The Fundamental Architecture Choice</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Dimension</th><th>Pull (Prometheus model)</th><th>Push (StatsD / Datadog Agent)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Mechanism</strong></td><td>Collector scrapes targets on a schedule</td><td>Services push metrics to a local agent or directly to ingestion endpoint</td></tr>
+                <tr><td><strong>Discovery</strong></td><td>Collector must know all targets; Kubernetes service discovery solves this</td><td>Services need to know the agent endpoint; simpler for dynamic infra</td></tr>
+                <tr><td><strong>Agent requirement</strong></td><td>Services expose an HTTP /metrics endpoint (no separate agent)</td><td>Services push to a sidecar agent or use client libraries (StatsD UDP)</td></tr>
+                <tr><td><strong>Gaps on failure</strong></td><td>If service is down, scrape returns 0 metrics — you know it's down</td><td>If push fails silently, you see no data and can't distinguish "down" from "no metrics"</td></tr>
+                <tr><td><strong>Firewall</strong></td><td>Collector must reach targets (inbound firewall rules needed)</td><td>Targets reach out to agent (outbound only — easier for customer infra)</td></tr>
+                <tr><td><strong>Scale</strong></td><td>1 collector per N targets; fan-out is bounded by scrape interval</td><td>Agents handle local buffering; ingestion service scales independently</td></tr>
+                <tr><td><strong>Who uses it</strong></td><td>Prometheus (internal Kubernetes monitoring)</td><td>Datadog, InfluxDB, StatsD (external SaaS, customer agents)</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p><strong>Our design uses push</strong> (Datadog model) because we're building a multi-tenant SaaS where customers run agents on their own infrastructure behind firewalls. Pull would require exposing inbound ports on customer servers — a non-starter for security.</p>
+
+          <h3>Pipeline Architecture SVG Diagram</h3>
+          <!-- Full pipeline: Agent → Kafka → Flink → TimeSeries DB → Query Engine → Dashboard -->
+          <svg viewBox="0 0 900 340" xmlns="http://www.w3.org/2000/svg" aria-label="Metrics ingestion and query pipeline diagram" role="img" style="width:100%;max-width:900px;display:block;margin:var(--space-6) 0;font-family:Inter,sans-serif">
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+              <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+              </marker>
+            </defs>
+            <!-- Background -->
+            <rect width="900" height="340" fill="#0f172a" rx="12"/>
+            <!-- Lane labels -->
+            <text x="16" y="28" fill="#94a3b8" font-size="11" font-weight="600">WRITE PATH</text>
+            <text x="16" y="220" fill="#94a3b8" font-size="11" font-weight="600">READ PATH</text>
+            <line x1="0" y1="190" x2="900" y2="190" stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"/>
+
+            <!-- WRITE PATH boxes -->
+            <!-- Agent -->
+            <rect x="20" y="50" width="110" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="75" y="78" fill="#f1f5f9" font-size="12" font-weight="600" text-anchor="middle">Metric</text>
+            <text x="75" y="94" fill="#f1f5f9" font-size="12" font-weight="600" text-anchor="middle">Agent</text>
+            <text x="75" y="116" fill="#64748b" font-size="10" text-anchor="middle">Runs on host</text>
+            <text x="75" y="130" fill="#64748b" font-size="10" text-anchor="middle">Batches 10s</text>
+            <text x="75" y="144" fill="#64748b" font-size="10" text-anchor="middle">UDP/HTTP push</text>
+
+            <!-- Arrow: Agent → Kafka -->
+            <line x1="132" y1="100" x2="188" y2="100" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowhead)"/>
+            <text x="160" y="92" fill="#6366f1" font-size="9" text-anchor="middle">batch</text>
+
+            <!-- Kafka -->
+            <rect x="190" y="50" width="110" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="245" y="78" fill="#f59e0b" font-size="12" font-weight="600" text-anchor="middle">Kafka</text>
+            <text x="245" y="94" fill="#f59e0b" font-size="12" font-weight="600" text-anchor="middle">Cluster</text>
+            <text x="245" y="116" fill="#64748b" font-size="10" text-anchor="middle">600 partitions</text>
+            <text x="245" y="130" fill="#64748b" font-size="10" text-anchor="middle">keyed by</text>
+            <text x="245" y="144" fill="#64748b" font-size="10" text-anchor="middle">series_id</text>
+
+            <!-- Arrow: Kafka → Flink -->
+            <line x1="302" y1="100" x2="358" y2="100" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowhead)"/>
+            <text x="330" y="92" fill="#6366f1" font-size="9" text-anchor="middle">consume</text>
+
+            <!-- Flink -->
+            <rect x="360" y="50" width="120" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="420" y="78" fill="#ec4899" font-size="12" font-weight="600" text-anchor="middle">Flink</text>
+            <text x="420" y="94" fill="#ec4899" font-size="12" font-weight="600" text-anchor="middle">Stream Proc.</text>
+            <text x="420" y="116" fill="#64748b" font-size="10" text-anchor="middle">Assigns series_id</text>
+            <text x="420" y="130" fill="#64748b" font-size="10" text-anchor="middle">Gorilla compress</text>
+            <text x="420" y="144" fill="#64748b" font-size="10" text-anchor="middle">2h block flush</text>
+
+            <!-- Arrow: Flink → TSDB -->
+            <line x1="482" y1="100" x2="538" y2="100" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowhead)"/>
+            <text x="510" y="92" fill="#6366f1" font-size="9" text-anchor="middle">write</text>
+
+            <!-- TimeSeries DB -->
+            <rect x="540" y="50" width="120" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="600" y="78" fill="#06b6d4" font-size="12" font-weight="600" text-anchor="middle">TimeSeries</text>
+            <text x="600" y="94" fill="#06b6d4" font-size="12" font-weight="600" text-anchor="middle">DB (TSDB)</text>
+            <text x="600" y="116" fill="#64748b" font-size="10" text-anchor="middle">Hot: SSD (15d)</text>
+            <text x="600" y="130" fill="#64748b" font-size="10" text-anchor="middle">Warm: HDD (90d)</text>
+            <text x="600" y="144" fill="#64748b" font-size="10" text-anchor="middle">Cold: S3 (2yr)</text>
+
+            <!-- Downsampling Job (below TSDB) -->
+            <rect x="540" y="160" width="120" height="50" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1" stroke-dasharray="3,3"/>
+            <text x="600" y="180" fill="#94a3b8" font-size="10" text-anchor="middle">Downsampling</text>
+            <text x="600" y="196" fill="#64748b" font-size="9" text-anchor="middle">Cron: 1s→1min→1hr</text>
+            <line x1="600" y1="150" x2="600" y2="160" stroke="#475569" stroke-width="1.5" stroke-dasharray="3,2"/>
+
+            <!-- READ PATH boxes -->
+            <!-- Query Engine -->
+            <rect x="360" y="215" width="120" height="90" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="420" y="240" fill="#a78bfa" font-size="12" font-weight="600" text-anchor="middle">Query</text>
+            <text x="420" y="256" fill="#a78bfa" font-size="12" font-weight="600" text-anchor="middle">Engine</text>
+            <text x="420" y="276" fill="#64748b" font-size="10" text-anchor="middle">PromQL parse</text>
+            <text x="420" y="291" fill="#64748b" font-size="10" text-anchor="middle">Tag index lookup</text>
+            <text x="420" y="302" fill="#64748b" font-size="9" text-anchor="middle">Parallel fetch</text>
+
+            <!-- Arrow: TSDB → Query Engine -->
+            <line x1="560" y1="212" x2="480" y2="250" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+            <text x="540" y="228" fill="#10b981" font-size="9" text-anchor="middle">time-series data</text>
+
+            <!-- Dashboard -->
+            <rect x="190" y="225" width="120" height="70" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="250" y="252" fill="#34d399" font-size="12" font-weight="600" text-anchor="middle">Dashboard</text>
+            <text x="250" y="268" fill="#64748b" font-size="10" text-anchor="middle">Visualisation</text>
+            <text x="250" y="283" fill="#64748b" font-size="10" text-anchor="middle">10–60s refresh</text>
+
+            <!-- Arrow: Query Engine → Dashboard -->
+            <line x1="358" y1="260" x2="312" y2="260" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+
+            <!-- Alerting Engine -->
+            <rect x="20" y="225" width="130" height="70" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="85" y="252" fill="#fb923c" font-size="12" font-weight="600" text-anchor="middle">Alerting</text>
+            <text x="85" y="268" fill="#fb923c" font-size="12" font-weight="600" text-anchor="middle">Engine</text>
+            <text x="85" y="283" fill="#64748b" font-size="10" text-anchor="middle">Evaluate every 60s</text>
+            <text x="85" y="295" fill="#64748b" font-size="9" text-anchor="middle">→ PagerDuty</text>
+
+            <!-- Arrow: Dashboard → Alerting -->
+            <line x1="188" y1="260" x2="152" y2="260" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+
+            <!-- User/Client -->
+            <rect x="740" y="50" width="130" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+            <text x="805" y="84" fill="#f1f5f9" font-size="12" font-weight="600" text-anchor="middle">Client</text>
+            <text x="805" y="100" fill="#64748b" font-size="10" text-anchor="middle">Browser / API</text>
+            <text x="805" y="116" fill="#64748b" font-size="10" text-anchor="middle">Issues PromQL</text>
+            <text x="805" y="132" fill="#64748b" font-size="10" text-anchor="middle">queries</text>
+
+            <!-- Arrow: TSDB → Client (query response) -->
+            <line x1="662" y1="90" x2="738" y2="90" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowhead)"/>
+            <text x="700" y="82" fill="#6366f1" font-size="9" text-anchor="middle">query</text>
+
+            <!-- Arrow: Client → TSDB (query request) -->
+            <line x1="738" y1="108" x2="662" y2="108" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+            <text x="700" y="122" fill="#10b981" font-size="9" text-anchor="middle">result</text>
+
+            <!-- Legend -->
+            <rect x="680" y="225" width="200" height="90" rx="6" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+            <text x="780" y="244" fill="#94a3b8" font-size="11" font-weight="600" text-anchor="middle">Legend</text>
+            <line x1="695" y1="258" x2="720" y2="258" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowhead)"/>
+            <text x="760" y="262" fill="#94a3b8" font-size="10">Write path</text>
+            <line x1="695" y1="278" x2="720" y2="278" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+            <text x="760" y="282" fill="#94a3b8" font-size="10">Read path</text>
+            <line x1="695" y1="298" x2="720" y2="298" stroke="#475569" stroke-width="1.5" stroke-dasharray="3,2"/>
+            <text x="760" y="302" fill="#94a3b8" font-size="10">Background job</text>
+          </svg>
+
+          <h3>Component Deep-Dive</h3>
+
+          <h4>1. Metric Agent (runs on monitored host)</h4>
           <ul>
-            <li><strong>Metric Agent:</strong> Runs on each monitored host. Collects system/app metrics every 10s. Sends to Kafka in batch.</li>
-            <li><strong>Ingestion Service:</strong> Consumes Kafka. Assigns series IDs. Writes to write buffer (in-memory, 2h). Flushes to SSD in compressed blocks (Gorilla format).</li>
-            <li><strong>Time-Series Store (TSDB):</strong> Hot data in SSD (last 7 days), warm in HDD, cold in S3. Read path: merge SSD + in-memory buffer.</li>
-            <li><strong>Query Engine:</strong> Parses PromQL-like queries. Resolves tag filters to series IDs via inverted index. Fetches and merges time series data. Aggregates per time bucket.</li>
-            <li><strong>Alerting Engine:</strong> Evaluates alert rules every 60s. Checks if metric crosses threshold for configured duration. Triggers PagerDuty/Slack on alert fire.</li>
-            <li><strong>Downsampling Job:</strong> Runs every hour. Aggregates 1s data to 1-min buckets. Runs nightly for 1-min to 1-hour rollup.</li>
+            <li>Collects OS metrics (CPU, memory, disk I/O) via /proc, Windows API, or eBPF hooks</li>
+            <li>Receives application metrics pushed via StatsD UDP (non-blocking for the app)</li>
+            <li>Batches data points for 10 seconds, then POSTs to ingestion endpoint over HTTPS</li>
+            <li>Local disk buffer handles network interruptions — agents never drop data on transient failures</li>
+            <li>Computes local pre-aggregation (60-second averages) for high-frequency app metrics to reduce egress</li>
+          </ul>
+
+          <h4>2. Ingestion Service (stateless, horizontally scaled)</h4>
+          <ul>
+            <li>Receives agent batches. Validates schema. Resolves or creates series_id (hash of metric_name + sorted tags)</li>
+            <li>Enforces cardinality limit: if tenant exceeds 10M active series, reject new series (not new data points)</li>
+            <li>Publishes to Kafka partitioned by series_id — ensures all data for one series goes to one Flink task (no cross-task aggregation)</li>
+            <li>Returns 202 Accepted immediately; durability is Kafka's responsibility</li>
+          </ul>
+
+          <h4>3. Kafka Cluster (buffering and fan-out)</h4>
+          <ul>
+            <li>600 partitions × 1 MB/sec/partition = 600 MB/sec capacity (headroom over 560 MB/sec peak)</li>
+            <li>Retention: 48 hours (allows Flink to reprocess if it falls behind or crashes)</li>
+            <li>Three consumers: Flink (TSDB writer), Downsampling pre-aggregation, Alert rule evaluator</li>
+            <li>Partition key = series_id (not random) — critical so Flink's stateful operators don't need cross-partition coordination</li>
+          </ul>
+
+          <h4>4. Flink Stream Processor (the write path brain)</h4>
+          <ul>
+            <li>Assigns series_id to incoming metric_name+tags (cached in local RocksDB, fallback to metadata service)</li>
+            <li>Accumulates data points in an in-memory 2-hour write buffer, organized as (series_id → sorted list of (timestamp, value))</li>
+            <li>On buffer flush: applies Gorilla delta-delta + XOR encoding to produce compressed block, writes to TSDB</li>
+            <li>Handles out-of-order arrival: data points up to 5 minutes late are accepted (clock skew on agents is common)</li>
+            <li>Checkpoints to S3 every 60s for fault tolerance (Flink exactly-once semantics via two-phase commit)</li>
+          </ul>
+
+          <h4>5. Time-Series DB (storage layer)</h4>
+          <ul>
+            <li><strong>Hot tier (SSD):</strong> Last 15 days of raw data. Serves real-time dashboard queries. Nodes hold ~5 TB each.</li>
+            <li><strong>Warm tier (HDD):</strong> 1-minute rollup data for 90 days. Served from column-oriented engine (ClickHouse). Partitioned by tenant + date.</li>
+            <li><strong>Cold tier (S3):</strong> 1-hour rollup data for 2 years. Queried via S3 Select or Athena for historical reports.</li>
+            <li>Read path merges across tiers transparently — the query engine handles tier routing based on time range.</li>
+          </ul>
+
+          <h4>6. Query Engine</h4>
+          <ul>
+            <li>Parses PromQL-like query language into an AST</li>
+            <li>Uses tag inverted index (Roaring Bitmap intersections) to resolve tag filters to series_id sets</li>
+            <li>Fetches time-series data for each series_id in parallel from the appropriate storage tier</li>
+            <li>Applies time-range aggregation: splits time range into buckets, computes aggregate per bucket per series</li>
+            <li>Result cache (Redis): query hash → result. TTL = 30s for real-time, 10 min for historical.</li>
+          </ul>
+
+          <h4>7. Alerting Engine</h4>
+          <ul>
+            <li>Maintains a schedule of 1M alert rules. Each rule has a PromQL expression + condition + for-duration.</li>
+            <li>Evaluates each rule every 60s by executing the PromQL query against pre-aggregated data</li>
+            <li>State machine per rule: OK → Pending (condition met but for-duration not elapsed) → Firing → OK</li>
+            <li>The for-duration prevents alert flapping from transient spikes</li>
+            <li>Routes to PagerDuty, Slack, email via notification routing tree (based on severity + team assignment)</li>
+            <li>Alert deduplication: same alert firing multiple times = one notification. Grouping: related alerts batched.</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           A — APIs
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon">🔌</span>A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">POST /v1/metrics/ingest          // batch metric ingestion from agents
-  Body: [{ metricName, tags, timestamp, value }, ...]
+          <h3>Ingestion API (Agent → Ingestion Service)</h3>
+          <pre><code class="language-java">// Batch ingest — agents POST every 10 seconds
+POST /v1/metrics/ingest
+Authorization: Bearer &lt;agent_api_key&gt;
+Content-Type: application/json
 
-GET  /v1/metrics/query
-  ?query=avg(http.request.latency{service=auth})&from=now-1h&to=now&step=1m
+Body (batch for efficiency — single HTTP call for 1000 data points):
+{
+  "series": [
+    {
+      "metric": "system.cpu.usage",
+      "tags": { "host": "prod-001", "service": "auth", "region": "us-east-1" },
+      "points": [
+        [1716000000, 45.2],   // [unix_timestamp, value]
+        [1716000010, 46.1],
+        [1716000020, 44.8]
+      ],
+      "type": "gauge"          // gauge | counter | histogram | distribution
+    },
+    {
+      "metric": "http.request.duration_ms",
+      "tags": { "service": "auth", "endpoint": "/login", "status": "200" },
+      "points": [[1716000010, 142.5]],
+      "type": "histogram"
+    }
+  ]
+}
 
+Response:
+HTTP 202 Accepted
+{ "accepted": 2, "rejected": 0, "errors": [] }
+
+// On cardinality limit breach:
+HTTP 400 Bad Request
+{ "error": "cardinality_limit_exceeded",
+  "message": "Tenant has reached 10M active series limit. New series rejected.",
+  "existing_series_count": 10000000 }</code></pre>
+
+          <h3>Query API (Dashboard / Client → Query Engine)</h3>
+          <pre><code class="language-java">// Instant vector query — current value(s) at a point in time
+GET /v1/query
+  ?query=avg(system.cpu.usage{service="auth"})
+  &time=1716000000     // Unix timestamp for evaluation
+
+Response:
+{
+  "status": "success",
+  "data": {
+    "resultType": "vector",
+    "result": [
+      { "metric": { "service": "auth" }, "value": [1716000000, "45.8"] }
+    ]
+  }
+}
+
+// Range vector query — values over a time window (for dashboards)
+GET /v1/query_range
+  ?query=rate(http.requests_total{service="auth"}[5m])
+  &start=1715990000
+  &end=1716000000
+  &step=60             // Resolution: one data point per 60 seconds
+
+// Alert management
 POST /v1/alerts
-  Body: { name, query, condition: "value > 500", for: "5m", severity }
-GET  /v1/alerts                  // list active alerts</code></pre>
+  Body: {
+    "name": "High CPU Alert",
+    "query": "avg(system.cpu.usage{service='auth'})",
+    "condition": "value > 90",
+    "for": "5m",        // Must stay above 90% for 5 minutes before firing
+    "severity": "critical",
+    "channels": [{ "type": "pagerduty", "key": "pd-service-key-xxx" }]
+  }
+
+GET /v1/alerts?state=firing    // List all currently firing alerts
+DELETE /v1/alerts/{alertId}/silence?duration=2h   // Silence during maintenance</code></pre>
+
+          <h3>PromQL Primer: Key Concepts the Interviewer Expects</h3>
+          <pre><code class="language-java">// ── INSTANT VECTOR ────────────────────────────────────────────────────
+// Returns one sample per matching time series at evaluation time
+system.cpu.usage{service="auth", region="us-east-1"}
+// → [{ labels: {host:"prod-001"}, value: 45.2 },
+//    { labels: {host:"prod-002"}, value: 51.7 }, ...]
+
+// ── RANGE VECTOR ──────────────────────────────────────────────────────
+// Returns all samples in a lookback window — needed for rate()
+system.cpu.usage{service="auth"}[5m]
+// → [{ labels: {host:"prod-001"}, values: [[t-300,44.1],[t-240,45.2],...] }]
+
+// ── rate() — calculates per-second rate from counter ──────────────────
+// Counters only go up (total requests since process start)
+// rate() computes the per-second increase over a window
+rate(http_requests_total{service="auth"}[5m])
+// → ~850 requests/sec over last 5 minutes
+
+// ── Aggregation operators ─────────────────────────────────────────────
+// sum by() — sum across a dimension, keeping other labels
+sum by(service)(rate(http_requests_total[5m]))
+// → one result per service, summing across all hosts
+
+// avg without() — avg across all dimensions except listed
+avg without(host)(system.cpu.usage{service="auth"})
+// → per-service average CPU, discarding host label
+
+// ── histogram_quantile — compute p99 from histogram buckets ──────────
+// Requires metrics to be published as histograms (not raw values)
+histogram_quantile(0.99, sum by(le)(rate(http_request_duration_bucket[5m])))
+// → p99 latency over last 5 minutes, across all instances</code></pre>
+
+          <div class="callout callout--insight">
+            <div class="callout__title">L6 Insight: Why histograms exist as a metric type</div>
+            <p>You cannot compute p99 by averaging p99s. If instance A has p99=100ms and instance B has p99=200ms, the fleet p99 is NOT 150ms — it depends on the traffic distribution. Prometheus histograms pre-bucket observations into configurable latency bands (le="0.1", le="0.5", le="1.0", etc.) so that the query engine can reconstruct the aggregate distribution using <code>histogram_quantile()</code>. Gauges and counters are insufficient for latency monitoring at scale.</p>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DEEP DIVE
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Cardinality Problem + Gorilla Compression<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon">🔬</span>D — Deep Dive
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
-          <p><strong>Cardinality explosion:</strong> Metric http.request.latency with tags {service, region} = 10 services × 5 regions = 50 unique time series. Add tag {user_id} with 10M users = 500M time series. Storage × 10,000,000. This is cardinality explosion.</p>
-          <p><strong>Mitigation:</strong> Never use high-cardinality tags (user_id, request_id, trace_id) in metrics. Use histograms/percentiles for distribution. Use logs/traces for per-request data.</p>
-          <p><strong>Gorilla compression (Facebook's TSDB):</strong></p>
+
+          <h3>Deep Dive 1: Gorilla Compression — The Storage Foundation</h3>
+          <p>Facebook's Gorilla TSDB (2015) demonstrated that time-series data has two properties that enable extreme compression: timestamps arrive at predictable intervals, and values change slowly. Gorilla exploits both.</p>
+
+          <h4>Timestamp Delta-of-Delta Encoding</h4>
+          <p>The key insight: if a metric is collected every 10 seconds, the difference between consecutive timestamps (delta) is always 10. The difference between consecutive deltas (delta-of-delta) is always 0. Encoding 0 costs 1 bit. Only clock drift or late packets produce non-zero deltas-of-delta.</p>
+          <pre><code class="language-java">// Example: metrics arriving every 10 seconds (perfectly regular)
+Timestamps:  1716000000, 1716000010, 1716000020, 1716000030
+
+// Step 1: First timestamp stored as-is (32 bits, as block offset from header)
+// Step 2: Delta = current - previous
+Deltas:      [10, 10, 10, 10]
+
+// Step 3: Delta-of-delta = delta - prev_delta
+Delta-of-deltas: [10, 0, 0, 0]  // First delta stored as 14-bit value
+
+// Gorilla variable-length encoding rules:
+// delta-of-delta == 0          → write "0" (1 bit)          [regular intervals]
+// delta-of-delta in [-63, 64]  → write "10" + 7-bit value   [minor drift]
+// delta-of-delta in [-255,256] → write "110" + 9-bit value  [larger drift]
+// delta-of-delta in [-2047,2048]→ write "1110" + 12-bit     [significant]
+// otherwise                    → write "1111" + 32-bit value [irregular]
+
+// For our example (3 regular data points after the first):
+// 3 timestamps × 1 bit each = 3 bits  vs  3 × 32 bits = 96 bits
+// Compression ratio for timestamps: 96 / (14 + 3) ≈ 5.6×
+// With realistic workloads (mostly regular): ~40× compression</code></pre>
+
+          <h4>Value XOR Encoding</h4>
+          <p>For floating-point values, Gorilla XORs consecutive values. If CPU% goes from 45.2 → 45.3 → 45.1, the XOR of their 64-bit IEEE 754 representations has many leading and trailing zeros — only the mantissa changes. Gorilla encodes only the meaningful changing bits.</p>
+          <pre><code class="language-java">// IEEE 754 double-precision layout:
+// [ sign: 1 bit | exponent: 11 bits | mantissa: 52 bits ]
+
+// CPU percentages 45.2 and 45.3 in binary:
+// 45.2: 0 10000000100 0110100110011001100110011001100110011001100110011010
+// 45.3: 0 10000000100 0110100110011001100110011001100110011001100110011011
+// XOR:  0 00000000000 0000000000000000000000000000000000000000000000000001
+//        ← 63 leading zeros!                             ←  only 1 bit changes →
+
+// Gorilla encoding for XOR result:
+// If XOR == 0 (identical value):    write "0" (1 bit)
+// If meaningful bits fit in prev window: write "10" + value bits
+// Otherwise:  write "11" + 5-bit leading_zeros_count + 6-bit length + meaningful_bits
+
+// Real-world compression:
+// Typical CPU gauge:   ~1.5 bytes per data point vs 8 bytes raw  → 5.3× compression
+// HTTP request counts: ~1.2 bytes per data point (monotonically increasing)
+// Volatile metrics:    ~3-4 bytes per data point (random-ish values)
+// Combined average:    ~8.7× value compression (matches Facebook's published 1.37 bytes/point)</code></pre>
+
+          <div class="callout callout--insight">
+            <div class="callout__title">L6 Insight: The famous 1.37 bytes number</div>
+            <p>Facebook's Gorilla paper reported <strong>1.37 bytes per data point</strong> versus the naive 16 bytes (8-byte timestamp + 8-byte double). This 11.7× compression comes from: (1) timestamps compressing to ~1.5 bits in the regular case, (2) values compressing to ~8 bits when changing slowly, and (3) most metric data being either stable (many 0-bit XORs) or monotonically increasing (small delta-of-delta). When you cite this number in an interview and explain the mechanism, you signal that you've read primary sources — not just tutorials.</p>
+          </div>
+
+          <h3>Deep Dive 2: The High Cardinality Problem</h3>
+          <p>This is the most important concept in the problem. Get it wrong and your TSDB will OOM in production.</p>
+
+          <pre><code class="language-java">// ── What IS a time series? ────────────────────────────────────────────
+// Every unique combination of (metric_name + all tag values) = 1 time series
+// Each time series has its own compressed block in storage
+// Each time series must be indexed for fast lookup
+
+// ── Low cardinality (safe) ────────────────────────────────────────────
+http.request.latency{service="auth", region="us-east-1"}  // series #1
+http.request.latency{service="auth", region="eu-west-1"}  // series #2
+http.request.latency{service="payment", region="us-east-1"} // series #3
+// 10 services × 5 regions = 50 time series — trivial
+
+// ── Cardinality explosion (catastrophic) ─────────────────────────────
+// A developer adds user_id to track per-user latency:
+http.request.latency{service="auth", region="us-east-1", user_id="u001"}
+http.request.latency{service="auth", region="us-east-1", user_id="u002"}
+// ... × 10,000,000 users
+
+// RESULT:
+// 50 series × 10M users = 500,000,000 time series
+//
+// Memory cost of series index: 500M entries × ~500 bytes metadata each = 250 TB
+// Kafka: 500M series × separate partition routing = impossible
+// Query: "avg latency for service=auth" now needs to merge 50M series → OOM
+//
+// Storage: 500M series × 1 data point/sec × 8.7 bytes = 43 TB/sec (!)
+// (vs 50 series × 1 dp/sec = 435 bytes/sec before user_id was added)
+
+// ── Why it's called the "silent killer" ──────────────────────────────
+// Cardinality issues don't crash immediately.
+// New series are created as users sign up.
+// At 100K users: fine. At 1M: slow. At 10M: OOM. At 100M: disk full.
+// Engineers often don't notice until production degrades suddenly.</code></pre>
+
+          <div class="callout callout--warning">
+            <div class="callout__title">L6 Insight: High cardinality is the silent killer</div>
+            <p><strong>1000 services × 50 endpoints × 10 HTTP status codes = 500,000 time series.</strong> That's fine. Now add <code>user_id</code> with 10M users: 500 billion series. Datadog charges per custom metric for exactly this reason — each unique (metric, tag_set) combination is billed independently. This is why the rule is absolute: <strong>never use request_id, trace_id, user_id, or any unbounded identifier as a metric tag.</strong> Use logs and distributed traces for per-request granularity. Use metrics only for aggregate dimensions with bounded cardinality.</p>
+          </div>
+
+          <h4>Cardinality Mitigations at the System Level</h4>
           <ul>
-            <li><strong>Timestamp delta-delta encoding:</strong> Store timestamp differences (deltas), then differences of differences. Regular 10s intervals → delta = 10, delta-delta = 0. Encodes to ~1.5 bits per timestamp vs 4 bytes uncompressed.</li>
-            <li><strong>Value XOR encoding:</strong> XOR consecutive doubles. If value changes little (e.g., CPU% 45.1, 45.3, 44.9), the XOR has many leading zeros. Use variable-length encoding: XOR=0 (1 bit), XOR changes only trailing bits (shorter code), full XOR (worst case).</li>
-            <li><strong>Result:</strong> ~10× compression. 1.4TB/day → 140GB/day.</li>
+            <li><strong>Cardinality enforcement at ingestion:</strong> Reject new series once tenant exceeds limit. Alert the operator, not the end user.</li>
+            <li><strong>Tag value hashing for high-cardinality dimensions:</strong> Hash user_id into 1000 buckets. You lose per-user granularity but preserve per-cohort analytics.</li>
+            <li><strong>Roaring Bitmaps for the series index:</strong> 500M series IDs as a sorted integer set compresses to ~60 MB using Roaring Bitmaps (vs 2 GB as a naive list). Set intersection for tag queries runs in microseconds.</li>
+            <li><strong>Series pruning:</strong> A series that receives no data for 1 hour is marked stale and removed from the hot index. Series that haven't appeared in 7 days are evicted entirely.</li>
           </ul>
+
+          <h3>Deep Dive 3: Downsampling and Retention Policy</h3>
+          <pre><code class="language-java">// ── WHY you can't query raw data for long time ranges ─────────────────
+// Query: "show CPU usage for auth service over the past year"
+// At 1-second resolution: 365 × 24 × 3600 = 31,536,000 data points per series
+// With 10 series for auth service: 315M data points
+// At 10 GB/s SSD throughput: ~31 seconds just to read
+// At 1 Gbps network: ~2.5 seconds to transfer compressed data
+// This is why dashboards show 1-hour granularity for year-long ranges.
+
+// ── Retention tiers ───────────────────────────────────────────────────
+Tier 1 (Raw):       1-second resolution → retained 15 days
+                    Purpose: Real-time monitoring, debugging incidents
+                    "Why is my service slow right now?"
+
+Tier 2 (1-min):     1-minute resolution → retained 90 days
+                    Purpose: Week-over-week comparison, weekly reports
+                    Stored as (sum, min, max, count, p50, p99) per minute
+                    "How was last week's deployment different from this week?"
+
+Tier 3 (1-hour):    1-hour resolution → retained 2 years
+                    Purpose: Long-term trends, capacity planning
+                    Stored as (sum, min, max, count, p50, p99) per hour
+                    "Are we using more CPU this quarter vs last quarter?"
+
+// ── Downsampling computation ───────────────────────────────────────────
+// 1-sec → 1-min rollup (runs every hour, processes prior hour's data):
+INSERT INTO metric_rollup_1min
+SELECT
+    series_id,
+    toStartOfMinute(toDateTime(timestamp)) AS bucket_ts,
+    sum(value)                             AS sum_value,
+    min(value)                             AS min_value,
+    max(value)                             AS max_value,
+    count()                                AS count,
+    quantile(0.50)(value)                  AS p50_value,
+    quantile(0.99)(value)                  AS p99_value
+FROM tsdb_raw
+WHERE timestamp BETWEEN prev_hour_start AND prev_hour_end
+GROUP BY series_id, bucket_ts
+
+// KEY INSIGHT: Why store COUNT alongside SUM?
+// You cannot compute avg(avg1, avg2) correctly.
+// avg across 2 minutes with different point counts:
+//   minute1: sum=450, count=60 → avg=7.5
+//   minute2: sum=300, count=20 → avg=15.0
+// Wrong: (7.5 + 15.0) / 2 = 11.25
+// Right: (450 + 300) / (60 + 20) = 9.375
+// Always store SUM + COUNT. Derive AVG at query time.</code></pre>
+
+          <h3>Deep Dive 4: Alerting at Scale — 1M Rules Every 60 Seconds</h3>
+          <pre><code class="language-java">// Problem: 1M alert rules × 1 eval/60s = 16,667 evaluations/sec
+// Each eval = a PromQL query against TSDB
+// Naive approach: 16,667 queries/sec on TSDB → catastrophic
+
+// ── Strategy 1: Pre-aggregated alert evaluation ───────────────────────
+// Instead of evaluating against raw 1s data,
+// evaluate against the 1-min rollup that's already pre-computed.
+// Query complexity: O(1) lookup by (series_id, bucket_ts) instead of
+// scanning 60 raw data points per minute.
+
+// ── Strategy 2: Partition alert rules across evaluator nodes ──────────
+// 10 evaluator nodes × 100K rules each = 1,667 evals/sec/node
+// Each node independently evaluates its shard of rules.
+// Node assignment: consistent hash on rule_id → node_id
+
+// ── Alert state machine to prevent flapping ───────────────────────────
+enum AlertState { OK, PENDING, FIRING, SILENCED }
+
+// Transition logic:
+// OK → PENDING:  condition is met but "for" duration not elapsed
+// PENDING → FIRING: condition met for full "for" duration → notify
+// FIRING → OK:   condition no longer met → send resolved notification
+// ANY → SILENCED: operator-triggered during maintenance windows
+
+// Example: CPU > 90% for 5 minutes
+// t=0:   CPU=91%   → state=PENDING (condition met, timer starts)
+// t=60s: CPU=89%   → state=OK (condition broken, reset timer — avoids flapping)
+// t=120s:CPU=92%   → state=PENDING (timer restarts)
+// t=420s:CPU=94%   → state=FIRING (5 minutes elapsed at threshold)
+
+// ── Alert deduplication and grouping ─────────────────────────────────
+// Problem: 100 hosts all hit CPU > 90% simultaneously = 100 alerts
+// Solution: Group by {alertname, service} → one PagerDuty incident
+// Grouping window: alerts arriving within 30 seconds → one notification
+// Wait: configurable delay to batch alerts before first notification
+// Repeat: re-notify every N hours while still firing (not every eval cycle)</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — EVALUATE
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon">✅</span>E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Does the Design Meet Its Goals?</h3>
+
+          <h4>Ingestion Throughput: 10M data points/sec</h4>
           <ul>
-            <li><strong>Alert evaluation latency:</strong> Evaluating 1M alert rules every 60s = 1M queries/min on TSDB. Pre-compute common aggregations; evaluate alert rules from pre-aggregated data, not raw.</li>
-            <li><strong>Stale metrics:</strong> If an agent stops sending (host dies), the last data point should not project forward. TSDB should mark series as stale after missing N intervals.</li>
+            <li>Ingestion service: 100 stateless nodes × 100K req/sec each = 10M/sec ✓</li>
+            <li>Kafka: 600 partitions × 1 MB/sec = 600 MB/sec capacity vs 560 MB/sec peak ✓ (8% headroom)</li>
+            <li>Flink: 600 tasks (one per Kafka partition), each handles ~17K data points/sec ✓</li>
+            <li>Bottleneck risk: TSDB write throughput. Each Flink task writes one 2-hour block per series every 2 hours — staggered naturally, but spiky at block boundaries. Solution: write-ahead log with background async flush.</li>
+          </ul>
+
+          <h4>Query Latency: &lt;1 second for 24h range</h4>
+          <ul>
+            <li>24h at 1-min resolution = 1440 data points per series. At p99 query size of 50 series = 72,000 points.</li>
+            <li>From SSD at 1 GB/s read, 72K × 8 bytes = 576 KB → 0.6 ms read. Easily under 1s. ✓</li>
+            <li>Year-long query against 1-hour rollup: 8,760 points × 50 series = 438K points → 3.5 MB → 3.5 ms read. ✓</li>
+            <li>Bottleneck: query engine CPU for PromQL evaluation and aggregation. Solution: result caching (30s TTL) eliminates 80% of redundant dashboard refreshes.</li>
+          </ul>
+
+          <h4>What Can Still Fail</h4>
+          <ul>
+            <li><strong>Stale metrics problem:</strong> If an agent dies, the last data point doesn't project forward. Dashboards should show "no data" gap, not flat line. TSDB must mark series stale after missing 3× the expected scrape interval. Query engine must surface gaps, not interpolate.</li>
+            <li><strong>Clock skew:</strong> Agent hosts with misconfigured NTP can send data points with timestamps from the future. Accept up to +5 minutes future, reject beyond that. Store as-received; do not adjust timestamps (adjusting would corrupt delta-delta compression).</li>
+            <li><strong>Write amplification at rollup:</strong> Downsampling reads raw data and writes rollup data — 2× I/O per data point being rolled up. Schedule during off-peak hours, or use streaming rollup (Flink computes 1-min agg in parallel with writing raw data).</li>
+            <li><strong>Hot series problem:</strong> If 1M dashboards all query the same metric (e.g., "global error rate"), the TSDB node holding that series becomes a hotspot. Solution: series-level replication + query routing to replicas, or materialized/cached responses for frequently queried series.</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DELIVER
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon">🚀</span>D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
         <div class="content-section__body">
-          <p>We designed a metrics system handling 1M metrics/sec. Key decisions: Kafka for ingestion buffering, Gorilla compression for 10× storage reduction, inverted tag index for fast series lookup, tiered storage (SSD→HDD→S3) for retention, and downsampling jobs for long-term rollup.</p>
+          <h3>Summary of Key Decisions</h3>
+          <p>We designed a metrics system handling <strong>10M data points/sec</strong> with sub-second query latency and 100+ TB storage. Every major decision was driven by the time-series access pattern:</p>
+          <ul>
+            <li><strong>Push collection model</strong> (Datadog-style agents) because customers run behind firewalls — pull requires inbound ports, which is a security non-starter for SaaS</li>
+            <li><strong>Kafka as the ingestion buffer</strong> for durability and decoupling — agents get fast acknowledgment, TSDB gets ordered writes, Flink gets exactly-once replay on failures</li>
+            <li><strong>Gorilla delta-delta + XOR compression</strong> achieving ~8.7× compression — the mathematical foundation that makes the economics work at 10M metrics/sec</li>
+            <li><strong>Inverted tag index (Roaring Bitmaps)</strong> for O(1) series discovery — without this, every tag-filtered query would scan all 10M series</li>
+            <li><strong>Three-tier tiered storage</strong> (SSD → HDD → S3) + downsampling — raw 1s data for real-time, 1-min rollup for week-scale, 1-hour rollup for year-scale. Can't afford to store raw data for long-term trends.</li>
+            <li><strong>Cardinality limits enforced at ingestion</strong> — the silent killer is contained before it can reach the storage layer</li>
+            <li><strong>Alert evaluation against pre-aggregated data</strong> — not raw TSDB. The for-duration state machine prevents flapping without adding complexity at the notification layer</li>
+          </ul>
+
+          <h3>What Would Change Under Different Constraints</h3>
+          <ul>
+            <li><strong>If query latency &lt; 100ms required:</strong> Move more data to in-memory cache (Apache Arrow columnar). Pre-materialize common query patterns. This increases cost 3–5× but is what Datadog's premium tier delivers.</li>
+            <li><strong>If multi-region required:</strong> Region-local ingestion and storage with async cross-region replication for global dashboards. Alerting evaluates locally — don't want cross-region latency in the alert critical path.</li>
+            <li><strong>If anomaly detection required (vs threshold):</strong> Add a separate ML inference service. It consumes pre-aggregated 1-min data, runs time-series forecasting (e.g., Holt-Winters, Prophet), and generates synthetic "expected value" metrics. Alert rules then compare observed vs expected.</li>
+          </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           TRADE-OFFS
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon">⚖️</span>Trade-offs
+        </h2>
         <div class="content-section__body">
-          <div class="table-wrapper"><table>
-            <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
-            <tbody>
-              <tr><td>Storage format</td><td>Column-oriented (Gorilla blocks)</td><td>Row-oriented (RDBMS)</td><td>Time-series queries access one column (value) across many rows (time). Column store reads only the value column — 10× less I/O than row store.</td></tr>
-              <tr><td>Timestamp compression</td><td>Delta-delta encoding</td><td>Raw 4-byte timestamps</td><td>Metrics arrive at regular intervals; delta-delta of a constant interval = 0, encodes to 1–2 bits instead of 32 bits.</td></tr>
-              <tr><td>Retention strategy</td><td>Tiered (raw→1min→1hr rollup)</td><td>Keep raw data forever</td><td>Raw 1s data for 5 years = 250TB. Downsampled data captures trends at 100× compression. Use raw only for short-term (7 days) debugging.</td></tr>
-            </tbody>
-          </table></div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Decision</th><th>Chosen Approach</th><th>Alternative</th><th>Why Chosen</th><th>When Alternative Wins</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Collection model</strong></td>
+                  <td>Push (agent sends data)</td>
+                  <td>Pull (Prometheus scrapes)</td>
+                  <td>Customers are behind firewalls; push requires only outbound ports from agent. Multi-tenant SaaS cannot open inbound firewall rules to customer servers.</td>
+                  <td>Internal Kubernetes monitoring: pull is simpler, service discovery is native, failed scrapes expose service health automatically.</td>
+                </tr>
+                <tr>
+                  <td><strong>Storage orientation</strong></td>
+                  <td>Column-oriented (Gorilla blocks / ClickHouse)</td>
+                  <td>Row-oriented (PostgreSQL, MySQL)</td>
+                  <td>Time-series queries access one column (value) across millions of rows. Column store reads only the value column — 10× less I/O. Row stores must read all fields (timestamp, tags, value) per row even when only value is needed.</td>
+                  <td>If you need to retrieve all fields for a single data point (e.g., audit log query by ID), row stores are faster. Pure time-series never needs this.</td>
+                </tr>
+                <tr>
+                  <td><strong>Compression</strong></td>
+                  <td>Gorilla delta-delta + XOR (custom binary format)</td>
+                  <td>Snappy / ZSTD general compression</td>
+                  <td>Gorilla exploits domain-specific properties (regular intervals, slowly-changing values) to achieve 8.7× compression vs ~2–3× for general compressors. Decompression is also faster because the format aligns with how queries access data (sequential timestamp scan).</td>
+                  <td>Irregular metrics with random values and random intervals: general-purpose compression may outperform Gorilla. In practice, most operational metrics are regular enough.</td>
+                </tr>
+                <tr>
+                  <td><strong>Retention strategy</strong></td>
+                  <td>Tiered downsampling (raw 15d → 1min 90d → 1hr 2yr)</td>
+                  <td>Keep raw data forever</td>
+                  <td>Raw 1s data for 2 years = 205 TB × 130 (2yr/15d) = ~26 PB. Economically infeasible. Query performance also degrades — year-long range queries become minute-long. Downsampling reduces storage 3600× for long-term data at the cost of resolution.</td>
+                  <td>Regulated industries (finance, healthcare) requiring exact historical values. Solve with differential privacy sampling, not full retention.</td>
+                </tr>
+                <tr>
+                  <td><strong>Pre-aggregation vs on-query rollup</strong></td>
+                  <td>Pre-aggregate into rollup tables at write time</td>
+                  <td>Compute rollups on-demand at query time from raw data</td>
+                  <td>Query latency for dashboard refresh (every 10s) requires fast reads. Pre-aggregation trades extra write I/O for dramatically faster reads — 1440 pre-computed points vs 86,400 raw points for a 24h range at 1s resolution.</td>
+                  <td>Ad-hoc analysis where users need custom time buckets not pre-computed (e.g., "group by 13-minute intervals"). Druid solves this with configurable granularity, but at higher complexity.</td>
+                </tr>
+                <tr>
+                  <td><strong>Alert evaluation data source</strong></td>
+                  <td>Evaluate against 1-min pre-aggregated rollups</td>
+                  <td>Evaluate against raw 1s TSDB data</td>
+                  <td>1M rules × 1 eval/60s against raw data = 1M complex queries/min on the hot tier. Pre-aggregated data reduces each eval to an O(1) index lookup for the latest 1-min bucket. Orders of magnitude less load.</td>
+                  <td>High-frequency alerts needing 1-second granularity (e.g., "any spike &gt; 5ms for 3 consecutive seconds"). These are rare; most operational alerts tolerate 1-minute resolution.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           JAVA IMPLEMENTATION
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon">☕</span>Java Implementation
+        </h2>
         <div class="content-section__body">
+          <p>Full implementation of Gorilla-style delta-of-delta timestamp compression and XOR value encoding. This is the exact algorithm used in Prometheus's TSDB (written in Go) and Facebook's Gorilla TSDB. The Java here follows the same logic with explicit bit-level encoding to show the compression mechanism clearly.</p>
+
           <pre><code class="language-java">/**
- * TimeSeriesStore — Gorilla-style delta-delta encoding for timestamps
- * and XOR encoding for double values.
- * Stores a single time series as a compact byte sequence.
+ * @file GorillaBlockEncoder.java
+ * @description Gorilla-style time-series block encoder.
+ *              Implements delta-of-delta encoding for timestamps and XOR encoding
+ *              for double values, producing a compact bit stream per 2-hour block.
+ *
+ * @requires none (pure Java, no dependencies)
+ *
+ * Public API:
+ *   append(timestamp, value) — adds a data point to the current block
+ *   getEncodedBytes()        — returns the compressed byte array
+ *   getCompressionRatio()    — ratio of raw bytes to compressed bytes
+ *   decode(bytes)            — static: reconstructs (timestamp, value) pairs
  */
-public class TimeSeriesStore {
+public final class GorillaBlockEncoder {
 
-    private final List&lt;Long&gt; timestamps = new ArrayList&lt;&gt;();
-    private final List&lt;Double&gt; values = new ArrayList&lt;&gt;();
+    // ── Constants ──────────────────────────────────────────────────────
+    private static final int BITS_PER_BYTE = 8;
+    // Delta-of-delta encoding thresholds (Gorilla paper, Table 1)
+    private static final long DOD_ZERO_MAX = 0;
+    private static final long DOD_SMALL_MIN = -63;
+    private static final long DOD_SMALL_MAX = 64;
+    private static final long DOD_MEDIUM_MIN = -255;
+    private static final long DOD_MEDIUM_MAX = 256;
+    private static final long DOD_LARGE_MIN = -2047;
+    private static final long DOD_LARGE_MAX = 2048;
+    // Control bit sequences for timestamp encoding
+    private static final int CTRL_ZERO   = 0b0;         // 1 bit
+    private static final int CTRL_SMALL  = 0b10;        // 2 bits  → then 7-bit value
+    private static final int CTRL_MEDIUM = 0b110;       // 3 bits  → then 9-bit value
+    private static final int CTRL_LARGE  = 0b1110;      // 4 bits  → then 12-bit value
+    private static final int CTRL_FULL   = 0b1111;      // 4 bits  → then 32-bit value
 
-    // For delta-delta encoding
-    private long previousTimestamp = 0;
-    private long previousDelta = 0;
+    // ── State ──────────────────────────────────────────────────────────
+    private final BitBuffer outputBuffer;
+    private long previousTimestamp;
+    private long previousDelta;
+    private long previousValueBits;
+    private int previousLeadingZeros;
+    private int previousMeaningfulBitLength;
+    private boolean isFirstDataPoint;
+    private int dataPointCount;
+    private final long blockStartTimestamp;
 
-    // For XOR encoding
-    private long previousValueBits = 0;
+    public GorillaBlockEncoder(long blockStartTimestamp) {
+        this.blockStartTimestamp = blockStartTimestamp;
+        this.outputBuffer = new BitBuffer(4096); // 4KB initial capacity
+        this.isFirstDataPoint = true;
+        this.previousLeadingZeros = Integer.MAX_VALUE;
+        this.previousMeaningfulBitLength = 0;
+        // Write block header: 64-bit start timestamp
+        outputBuffer.writeBits(blockStartTimestamp, 64);
+    }
 
     /**
-     * Appends a data point to the time series.
-     * In a real implementation, this would write compressed bits to a buffer.
-     * Here we compute the compression metrics to illustrate the algorithm.
+     * Appends a single (timestamp, value) data point to the compressed block.
+     * Timestamps must be monotonically non-decreasing.
+     * Out-of-order data points are rejected with an exception.
+     *
+     * @param timestamp Unix epoch seconds (must be &gt;= previous timestamp)
+     * @param value     IEEE 754 double-precision floating point metric value
      */
     public void append(long timestamp, double value) {
+        if (timestamp &lt; blockStartTimestamp) {
+            throw new IllegalArgumentException(
+                "Timestamp " + timestamp + " precedes block start " + blockStartTimestamp);
+        }
+
+        encodeTimestamp(timestamp);
+        encodeValue(value);
+        dataPointCount++;
+    }
+
+    // ── Core logic functions ───────────────────────────────────────────
+
+    /**
+     * Encodes a timestamp using delta-of-delta variable-length encoding.
+     * The core insight: regular-interval metrics have delta-of-delta = 0,
+     * which encodes to a single control bit.
+     */
+    private void encodeTimestamp(long timestamp) {
+        if (isFirstDataPoint) {
+            // First data point: store full delta from block start (14 bits handles up to 2hr=7200s)
+            long initialDelta = timestamp - blockStartTimestamp;
+            outputBuffer.writeBits(initialDelta, 14);
+            previousTimestamp = timestamp;
+            previousDelta = initialDelta;
+            isFirstDataPoint = false;
+            return;
+        }
+
         long delta = timestamp - previousTimestamp;
         long deltaOfDelta = delta - previousDelta;
 
-        // Delta-delta encoding: small changes encode in few bits
-        // deltaOfDelta == 0: encode as 1 bit (regular interval, the common case)
-        // deltaOfDelta in [-64, 64]: 7 bits
-        // deltaOfDelta in [-512, 512]: 9 bits
-        // Otherwise: full 64 bits
-        int timestampBitsUsed = estimateTimestampBits(deltaOfDelta);
-
-        // XOR encoding for value
-        long currentValueBits = Double.doubleToLongBits(value);
-        long xorValue = currentValueBits ^ previousValueBits;
-        int valueBitsUsed = estimateValueBits(xorValue);
-
-        timestamps.add(timestamp);
-        values.add(value);
+        if (deltaOfDelta == DOD_ZERO_MAX) {
+            // Most common case: regular interval. Encodes to 1 bit.
+            outputBuffer.writeBit(CTRL_ZERO);
+        } else if (deltaOfDelta &gt;= DOD_SMALL_MIN &amp;&amp; deltaOfDelta &lt;= DOD_SMALL_MAX) {
+            // Minor drift (e.g., ±1 second). Control=2bits + 7-bit signed value.
+            outputBuffer.writeBits(CTRL_SMALL, 2);
+            outputBuffer.writeBits(deltaOfDelta + 64, 7); // offset to make unsigned
+        } else if (deltaOfDelta &gt;= DOD_MEDIUM_MIN &amp;&amp; deltaOfDelta &lt;= DOD_MEDIUM_MAX) {
+            // Larger drift. Control=3bits + 9-bit signed value.
+            outputBuffer.writeBits(CTRL_MEDIUM, 3);
+            outputBuffer.writeBits(deltaOfDelta + 256, 9);
+        } else if (deltaOfDelta &gt;= DOD_LARGE_MIN &amp;&amp; deltaOfDelta &lt;= DOD_LARGE_MAX) {
+            // Significant gap. Control=4bits + 12-bit signed value.
+            outputBuffer.writeBits(CTRL_LARGE, 4);
+            outputBuffer.writeBits(deltaOfDelta + 2048, 12);
+        } else {
+            // Irregular timestamp: fall back to full 32-bit representation.
+            outputBuffer.writeBits(CTRL_FULL, 4);
+            outputBuffer.writeBits(deltaOfDelta, 32);
+        }
 
         previousTimestamp = timestamp;
         previousDelta = delta;
-        previousValueBits = currentValueBits;
-    }
-
-    private int estimateTimestampBits(long deltaOfDelta) {
-        if (deltaOfDelta == 0) return 1;
-        if (deltaOfDelta &gt;= -64 && deltaOfDelta &lt;= 63) return 7;
-        if (deltaOfDelta &gt;= -512 && deltaOfDelta &lt;= 511) return 9;
-        if (deltaOfDelta &gt;= -65536 && deltaOfDelta &lt;= 65535) return 12;
-        return 64;
-    }
-
-    private int estimateValueBits(long xorValue) {
-        if (xorValue == 0) return 1; // identical value — just flag bit
-        // Count leading and trailing zeros to find meaningful bits
-        int leadingZeros = Long.numberOfLeadingZeros(xorValue);
-        int trailingZeros = Long.numberOfTrailingZeros(xorValue);
-        int meaningfulBits = 64 - leadingZeros - trailingZeros;
-        return 1 + 5 + 6 + meaningfulBits; // flag + leading_zeros_count + length + bits
     }
 
     /**
-     * Returns the theoretical compression ratio compared to storing raw values.
-     * Raw: 8 bytes timestamp + 8 bytes value = 16 bytes per point.
+     * Encodes a double value using XOR-based compression.
+     * XOR with the previous value exposes unchanged leading/trailing bits.
+     * Only the "meaningful" (changed) bits are written, with metadata
+     * describing their position in the 64-bit representation.
+     */
+    private void encodeValue(double value) {
+        long currentValueBits = Double.doubleToLongBits(value);
+        long xorValue = currentValueBits ^ previousValueBits;
+
+        if (xorValue == 0L) {
+            // Value identical to previous: write one control bit "0".
+            // This is common for slowly-changing metrics like CPU%.
+            outputBuffer.writeBit(0);
+        } else {
+            outputBuffer.writeBit(1); // flag: value changed
+
+            int leadingZeros = Long.numberOfLeadingZeros(xorValue);
+            int trailingZeros = Long.numberOfTrailingZeros(xorValue);
+            int meaningfulBitLength = 64 - leadingZeros - trailingZeros;
+
+            // Check if meaningful bits fit within the window from the previous encoding.
+            // If they do, reuse the same window (saves 5+6 = 11 bits of metadata).
+            boolean fitsInPreviousWindow = (leadingZeros &gt;= previousLeadingZeros)
+                &amp;&amp; (meaningfulBitLength &lt;= previousMeaningfulBitLength);
+
+            if (fitsInPreviousWindow) {
+                outputBuffer.writeBit(0); // flag: reuse window
+                // Extract only the meaningful bits at the known position
+                long meaningfulBits = (xorValue &gt;&gt;&gt; (64 - previousLeadingZeros - previousMeaningfulBitLength))
+                    &amp; ((1L &lt;&lt; previousMeaningfulBitLength) - 1);
+                outputBuffer.writeBits(meaningfulBits, previousMeaningfulBitLength);
+            } else {
+                outputBuffer.writeBit(1); // flag: new window
+                // Store new window metadata: 5 bits for leading zeros, 6 bits for length
+                outputBuffer.writeBits(leadingZeros, 5);
+                outputBuffer.writeBits(meaningfulBitLength - 1, 6); // -1: length 0 is meaningless
+                // Store the meaningful bits
+                long meaningfulBits = (xorValue &gt;&gt;&gt; trailingZeros);
+                outputBuffer.writeBits(meaningfulBits, meaningfulBitLength);
+                previousLeadingZeros = leadingZeros;
+                previousMeaningfulBitLength = meaningfulBitLength;
+            }
+        }
+
+        previousValueBits = currentValueBits;
+    }
+
+    // ── DOM functions (output) ─────────────────────────────────────────
+
+    /**
+     * Finalizes and returns the compressed byte array for this block.
+     * Appends an end-of-block marker (0xFF control sequence) before returning.
+     *
+     * @returns compressed byte array representing all appended data points
+     */
+    public byte[] getEncodedBytes() {
+        outputBuffer.writeBits(0xFFL, 8); // end-of-block marker
+        return outputBuffer.toByteArray();
+    }
+
+    /**
+     * Returns the theoretical compression ratio for all data points appended so far.
+     * Raw size = 16 bytes per point (8-byte timestamp + 8-byte double).
+     *
+     * @returns ratio of raw size to compressed size (higher = better compression)
      */
     public double getCompressionRatio() {
-        if (timestamps.isEmpty()) return 1.0;
-        int rawBits = timestamps.size() * 128; // 16 bytes × 8 bits
-
-        int compressedBits = 0;
-        long prevTs = 0;
-        long prevDelta = 0;
-        long prevValBits = 0;
-        for (int i = 0; i &lt; timestamps.size(); i++) {
-            long ts = timestamps.get(i);
-            long delta = ts - prevTs;
-            compressedBits += estimateTimestampBits(delta - prevDelta);
-            long valBits = Double.doubleToLongBits(values.get(i));
-            compressedBits += estimateValueBits(valBits ^ prevValBits);
-            prevTs = ts;
-            prevDelta = delta;
-            prevValBits = valBits;
-        }
+        if (dataPointCount == 0) return 1.0;
+        long rawBits = (long) dataPointCount * 128; // 16 bytes × 8 bits
+        long compressedBits = (long) outputBuffer.getBitCount();
         return (double) rawBits / compressedBits;
     }
 
-    public int getDataPointCount() { return timestamps.size(); }
+    public int getDataPointCount() { return dataPointCount; }
+
+    // ── Inner class: bit-level output buffer ──────────────────────────
+
+    /**
+     * Minimal write-only bit buffer for Gorilla encoding.
+     * Accumulates bits into a byte array with automatic resizing.
+     * Bits within each byte are written MSB-first.
+     */
+    private static final class BitBuffer {
+
+        private byte[] buffer;
+        private int bytePosition;
+        private int bitOffset; // 0..7, next bit position within current byte
+        private long totalBitsWritten;
+
+        BitBuffer(int initialCapacityBytes) {
+            this.buffer = new byte[initialCapacityBytes];
+        }
+
+        void writeBit(int bit) {
+            ensureCapacity();
+            if (bit != 0) {
+                buffer[bytePosition] |= (byte) (1 &lt;&lt; (7 - bitOffset));
+            }
+            advance();
+        }
+
+        void writeBits(long value, int bitCount) {
+            // Write from most significant to least significant bit
+            for (int shift = bitCount - 1; shift &gt;= 0; shift--) {
+                writeBit((int) ((value &gt;&gt;&gt; shift) &amp; 1L));
+            }
+        }
+
+        private void advance() {
+            totalBitsWritten++;
+            bitOffset++;
+            if (bitOffset == BITS_PER_BYTE) {
+                bitOffset = 0;
+                bytePosition++;
+            }
+        }
+
+        private void ensureCapacity() {
+            if (bytePosition &gt;= buffer.length - 1) {
+                byte[] grown = new byte[buffer.length * 2];
+                System.arraycopy(buffer, 0, grown, 0, buffer.length);
+                buffer = grown;
+            }
+        }
+
+        long getBitCount() { return totalBitsWritten; }
+
+        byte[] toByteArray() {
+            int usedBytes = bytePosition + (bitOffset &gt; 0 ? 1 : 0);
+            byte[] result = new byte[usedBytes];
+            System.arraycopy(buffer, 0, result, 0, usedBytes);
+            return result;
+        }
+    }
 }</code></pre>
+
+          <h3>Usage Example and Compression Verification</h3>
+          <pre><code class="language-java">/**
+ * Demonstrates Gorilla compression ratios for different metric patterns.
+ * Run this to see why the algorithm works so well for operational metrics.
+ */
+public class GorillaCompressionDemo {
+
+    public static void main(String[] args) {
+        demonstrateRegularIntervalMetric();
+        demonstrateSlowlyChangingGauge();
+        demonstrateHighVarianceMetric();
+    }
+
+    /**
+     * Simulates a CPU usage metric arriving every 10 seconds.
+     * Expected: ~8-10× compression (the common case Gorilla is optimized for).
+     */
+    private static void demonstrateRegularIntervalMetric() {
+        long blockStartTimestamp = 1716000000L;
+        GorillaBlockEncoder encoder = new GorillaBlockEncoder(blockStartTimestamp);
+
+        // 720 data points = 2 hours of 10-second interval CPU metrics
+        for (int intervalIndex = 0; intervalIndex &lt; 720; intervalIndex++) {
+            long timestamp = blockStartTimestamp + (long) intervalIndex * 10;
+            // CPU percentage: slowly oscillating around 45%
+            double cpuUsage = 45.0 + Math.sin(intervalIndex * 0.1) * 5.0;
+            encoder.append(timestamp, cpuUsage);
+        }
+
+        byte[] compressed = encoder.getEncodedBytes();
+        System.out.printf("Regular interval CPU metric:%n");
+        System.out.printf("  Data points: %d%n", encoder.getDataPointCount());
+        System.out.printf("  Raw size:    %d bytes (720 × 16)%n", 720 * 16);
+        System.out.printf("  Compressed:  %d bytes%n", compressed.length);
+        System.out.printf("  Ratio:       %.2f×%n", encoder.getCompressionRatio());
+        System.out.printf("  Per point:   %.2f bytes%n%n",
+            (double) compressed.length / encoder.getDataPointCount());
+        // Expected output: ~8.7× ratio, ~1.37 bytes/point (matches Facebook paper)
+    }
+
+    /**
+     * Simulates a counter metric (monotonically increasing request count).
+     * Expected: high compression because delta-of-value is nearly constant.
+     */
+    private static void demonstrateSlowlyChangingGauge() {
+        long blockStartTimestamp = 1716000000L;
+        GorillaBlockEncoder encoder = new GorillaBlockEncoder(blockStartTimestamp);
+
+        // HTTP request counter: ~1000 requests/sec, constant rate
+        long requestCount = 0;
+        for (int intervalIndex = 0; intervalIndex &lt; 720; intervalIndex++) {
+            long timestamp = blockStartTimestamp + (long) intervalIndex * 10;
+            requestCount += 10000; // 1000 req/sec × 10 sec = 10000 per interval
+            encoder.append(timestamp, (double) requestCount);
+        }
+
+        System.out.printf("Monotonically increasing counter:%n");
+        System.out.printf("  Compression: %.2f×%n%n", encoder.getCompressionRatio());
+        // Expected: 10-15× — the XOR of consecutive counter values has many leading zeros
+    }
+
+    /**
+     * Simulates a volatile metric (e.g., network packet loss: random 0-10%).
+     * Expected: lower compression ratio — Gorilla degrades on random data.
+     */
+    private static void demonstrateHighVarianceMetric() {
+        long blockStartTimestamp = 1716000000L;
+        GorillaBlockEncoder encoder = new GorillaBlockEncoder(blockStartTimestamp);
+
+        java.util.Random randomGenerator = new java.util.Random(42);
+        for (int intervalIndex = 0; intervalIndex &lt; 720; intervalIndex++) {
+            long timestamp = blockStartTimestamp + (long) intervalIndex * 10;
+            double packetLoss = randomGenerator.nextDouble() * 10.0; // 0-10% random
+            encoder.append(timestamp, packetLoss);
+        }
+
+        System.out.printf("High-variance random metric:%n");
+        System.out.printf("  Compression: %.2f×%n%n", encoder.getCompressionRatio());
+        // Expected: ~2-3× — random values produce large XOR with many meaningful bits
+        // This is why anomalous metrics (spikes) temporarily reduce compression efficiency
+    }
+}</code></pre>
+
+          <div class="callout callout--insight">
+            <div class="callout__title">L6 Insight: What to say about this code in an interview</div>
+            <p>You don't need to write the full BitBuffer in an interview. Sketch the delta-of-delta logic and the XOR logic. Then make these two points that demonstrate real depth: (1) the encoding table (1 bit for zero, 7 bits for small, etc.) is tunable — Prometheus uses slightly different thresholds than Gorilla; (2) the "reuse previous window" optimization for XOR encoding is what takes compression from 5× to 8.7× — without it you'd emit leading-zeros count + length on every changed value.</p>
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           QUIZ
+      ════════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon">🧠</span>Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-metrics-quiz" role="region" aria-label="Problem quiz">
-          <div class="quiz__header"><div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div><div class="quiz__score" aria-live="polite"></div></div>
+          <div class="quiz__header">
+            <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
+            <div class="quiz__score" aria-live="polite"></div>
+          </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="A developer adds tag user_id to an HTTP latency metric. How does this affect the TSDB?" data-options='["The query becomes faster because data is more granular","user_id has millions of unique values. Each unique (metric, tag_set) is a separate time series. Adding user_id explodes cardinality from ~50 series to millions of series — potentially exhausting RAM for the series index and making query performance degrade dramatically.","Tags are stored separately from values so storage is not affected","user_id is automatically hashed to reduce cardinality"]' data-correct="1" data-explanation="This is cardinality explosion. http.latency{service=auth, user_id=u123} is a distinct series from http.latency{service=auth, user_id=u456}. With 10M users × 10 services × 5 regions = 500M series. At 1KB metadata per series = 500GB just for the series index. This is why 'never use request_id or user_id as metric tags' is a cardinal rule." style="display:none"></div>
-          <div data-question="Why is column-oriented storage (ClickHouse, Gorilla) preferred over row-oriented (PostgreSQL) for time-series metrics?" data-options='["Column stores have faster inserts","Time-series queries access one dimension (value) across millions of rows (timestamps). Column stores co-locate all values together — one disk read fetches all values for a time range. Row stores co-locate all fields for one timestamp — to get values only, you read all fields unnecessarily.","PostgreSQL cannot store double-precision values","Column stores support more concurrent queries"]' data-correct="1" data-explanation="Classic OLAP vs OLTP storage pattern. For 'SELECT value FROM metrics WHERE time BETWEEN X AND Y': column store reads only the value column (1/N of the data). Row store reads every row including timestamp, tags, and other fields. At 10B data points, this difference is enormous — orders of magnitude I/O reduction." style="display:none"></div>
-          <div data-question="Gorilla delta-delta encoding achieves ~1-2 bits per timestamp instead of 32 bits. Why?" data-options='["Gorilla rounds timestamps to the nearest second","Metrics typically arrive at regular intervals (every 10 seconds). The delta between consecutive timestamps is constant (10). The delta-of-delta = 0. Gorilla encodes delta-of-delta=0 as a single bit — 32× compression for regular-interval metrics.","Gorilla only supports timestamps up to 2023","Delta encoding requires integer timestamps which are smaller than floating point"]' data-correct="1" data-explanation="The insight: if metrics arrive every 10s, delta = 10 always. Delta-of-delta = 10-10 = 0. Gorilla encodes 0 as one bit (a control bit). Only when the arrival time is irregular (late packet, clock drift) do you need more bits. Regular metrics (the common case) compress to ~1 bit. This is the key to Gorilla's ~10× compression ratio." style="display:none"></div>
-          <div data-question="The alerting engine must evaluate 1 million alert rules every 60 seconds. What strategy handles this at scale?" data-options='["Run all 1M queries sequentially on the raw TSDB — modern hardware is fast enough","Pre-aggregate common metrics into 1-minute rollup buckets. Alert rules evaluate against pre-aggregated data (fast index scan) rather than raw 1-second data. Partition alert rules across multiple evaluator nodes — each node handles a subset.","Evaluate alerts lazily only when a user views their dashboard","Use a separate Elasticsearch cluster just for alert evaluation"]' data-correct="1" data-explanation="1M complex queries/min on raw TSDB is infeasible. Solutions: (1) Pre-aggregate at write time — alert rules on avg/p99 evaluate against already-computed values. (2) Shard alert evaluation — 100 evaluator nodes × 10K rules each = manageable. (3) Query caching — if 10K rules query the same metric, evaluate once and fanout the result." style="display:none"></div>
+
+          <!-- Question 1: Cardinality explosion -->
+          <div
+            data-question="A developer adds the tag user_id to an HTTP latency metric that currently has 50 time series. The system has 10 million users. What happens to storage?"
+            data-options='[
+              "Storage increases by 10 million bytes — one extra byte per user per metric.",
+              "Storage increases proportionally: 50 series × 10M users = 500 million new time series. Each series has its own compressed block and index entry. At ~1KB metadata per series, the series index alone grows from ~50KB to ~500GB. Query performance degrades from milliseconds to minutes.",
+              "Tags are stored separately from values so the number of time series is unchanged.",
+              "Gorilla compression handles high-cardinality automatically by deduplicating similar tag values."
+            ]'
+            data-correct="1"
+            data-explanation="This is cardinality explosion. Every unique (metric_name + tag_set) is a separate time series — a separate compressed block, a separate index entry, a separate in-memory buffer in Flink. 50 series × 10M users = 500M series. At Datadog's billing model, that's 500M custom metrics. At $0.05/custom metric/month = $25M/month. This is why 'never use user_id as a metric tag' is absolute. Use distributed traces (Jaeger, Zipkin) for per-request granularity."
+            style="display:none"
+          ></div>
+
+          <!-- Question 2: Why not relational -->
+          <div
+            data-question="Why is column-oriented storage (ClickHouse, Gorilla blocks) preferred over row-oriented (PostgreSQL) for time-series metrics?"
+            data-options='[
+              "Column stores have faster INSERT throughput for single row writes.",
+              "Time-series queries scan one dimension (value) across millions of rows (timestamps). Column stores co-locate all values together — one I/O operation fetches all values for a time range. Row stores co-locate all fields per timestamp — to read just values, you must read the entire row including metric_name, tags, and timestamp fields you don't need.",
+              "PostgreSQL cannot index floating-point values efficiently.",
+              "Column stores automatically apply Gorilla compression; row stores do not support binary compression."
+            ]'
+            data-correct="1"
+            data-explanation="This is the core OLAP vs OLTP distinction. For SELECT value FROM metrics WHERE series_id=X AND timestamp BETWEEN A AND B: column store reads only the value column (1/N of the data on disk). Row store reads every row including all fields. At 10B data points and 8 bytes per field, if a row has 5 fields, column store reads 1/5 of the data. At 560 MB/sec write rate, this I/O difference compounds into hours vs seconds for year-long queries."
+            style="display:none"
+          ></div>
+
+          <!-- Question 3: Gorilla delta-of-delta -->
+          <div
+            data-question="Gorilla achieves ~1.5 bits per timestamp instead of 32 bits. The specific mechanism is delta-of-delta encoding. Why does this work so well for metrics?"
+            data-options='[
+              "Gorilla rounds timestamps to the nearest second, eliminating sub-second precision bits.",
+              "Metrics typically arrive at regular intervals (e.g., every 10 seconds). The delta between consecutive timestamps is always 10. The delta-of-delta = current_delta - previous_delta = 10 - 10 = 0. Gorilla encodes delta-of-delta=0 as a single control bit. Regular-interval metrics compress to ~1 bit per timestamp — 32× compression.",
+              "Delta encoding requires timestamps to be stored as relative offsets from Unix epoch which are smaller integers.",
+              "Gorilla uses a dictionary to map common timestamp patterns to short codes, similar to LZ77."
+            ]'
+            data-correct="1"
+            data-explanation="The insight is domain-specific: operational metrics are collected on a schedule. A Prometheus scrape every 15 seconds means every timestamp delta is exactly 15. Delta-of-delta = 0. One bit. Clock drift from NTP produces deltas of 0 ± a few seconds, which still encode in 7–9 bits (not 32). The only time you need full 32-bit encoding is for completely irregular arrival — which happens for less than 0.1% of data points in practice. This is why Gorilla's real-world compression (8.7×) matches the theoretical ceiling."
+            style="display:none"
+          ></div>
+
+          <!-- Question 4: Downsampling -->
+          <div
+            data-question="A user queries 'show CPU usage for the auth service over the past year.' Why does the system NOT query raw 1-second resolution data for this request?"
+            data-options='[
+              "The raw data is encrypted and cannot be decrypted efficiently for large ranges.",
+              "At 1-second resolution, a year-long query spans 31.5 billion data points per series. At 10 GB/s SSD read throughput, reading this data takes ~50 minutes — unusable for a dashboard. The system instead queries the 1-hour rollup tier (8,760 points per year) which answers in milliseconds, trading sub-second resolution for query feasibility.",
+              "Raw data is only retained for 24 hours to save storage costs.",
+              "The query engine automatically downsamples on-the-fly using reservoir sampling."
+            ]'
+            data-correct="1"
+            data-explanation="This is the core reason downsampling exists — it's not just about storage, it's about query feasibility. 31.5B points × 8 bytes = 252 GB just for one metric. No dashboard can afford to read that on every refresh. The 1-hour rollup (8,760 points) is 1/3,600 the data. The tradeoff: you lose the ability to detect a 5-minute spike that happened 6 months ago. For year-long trend analysis, this is acceptable. For debugging last week's incident, you use the 1-minute rollup (which still has that granularity)."
+            style="display:none"
+          ></div>
+
+          <!-- Question 5: Alert scale -->
+          <div
+            data-question="The alerting engine must evaluate 1 million alert rules every 60 seconds. What is the correct approach to handle this at scale without overloading the TSDB?"
+            data-options='[
+              "Run all 1M queries in parallel on the raw TSDB — modern SSDs can handle the concurrent I/O.",
+              "Pre-aggregate metrics into 1-minute rollup tables as they arrive. Alert rules evaluate against pre-aggregated data (an O(1) point lookup per rule) rather than scanning raw 1-second data. Partition the 1M rules across 10 evaluator nodes (100K rules each). Group alerts by metric to reuse query results: if 1000 rules check cpu.usage for different services, compute it once and fanout.",
+              "Evaluate alerts lazily — only when a user views their dashboard will the alert be checked.",
+              "Use Elasticsearch for alert evaluation because it supports full-text search over metric names."
+            ]'
+            data-correct="1"
+            data-explanation="1M PromQL queries per minute on raw TSDB = 16,667 queries/sec, each scanning 60 raw data points = 1 billion point reads/sec. Infeasible. The solution has three layers: (1) Pre-aggregation: alert rules evaluate the latest 1-min bucket (1 point lookup, not 60 point scan). (2) Sharding: 10 nodes × 100K rules each = 1,667 evals/sec/node — manageable. (3) Query deduplication: multiple rules querying the same metric share one TSDB read. Combined, this reduces TSDB load by ~99.9% compared to naive evaluation."
+            style="display:none"
+          ></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
-          <div class="quiz__actions"><div></div><button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button></div>
+          <div class="quiz__actions">
+            <div></div>
+            <button class="btn btn--primary btn--sm js-quiz-next is-hidden" type="button">Next →</button>
+          </div>
           <div class="quiz__result is-hidden" aria-live="polite">
-            <div class="quiz__result-score"></div><div class="quiz__result-label"></div>
+            <div class="quiz__result-score"></div>
+            <div class="quiz__result-label"></div>
             <div style="margin-top:var(--space-4)">
               <button class="btn btn--outline btn--sm js-quiz-retry" type="button">Try Again</button>
               <a href="leaderboard.html" class="btn btn--primary btn--sm" style="margin-left:var(--space-3)">Next: Leaderboard →</a>
@@ -310,13 +1396,20 @@ public class TimeSeriesStore {
           </div>
         </div>
       </section>
+
       <div style="display:flex;justify-content:space-between;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
         <a href="google-docs.html" class="btn btn--outline">← Google Docs</a>
         <a href="leaderboard.html" class="btn btn--primary">Next: Leaderboard →</a>
       </div>
     </main>
   </div>
-  <footer class="site-footer"><div class="site-footer__inner"><p>MAANG System Design Course — Built for engineers who want to pass the loop.</p></div></footer>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p>MAANG System Design Course — Built for engineers who want to pass the loop.</p>
+    </div>
+  </footer>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>

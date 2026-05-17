@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Instagram — RESHADED walkthrough covering photo upload pipeline, CDN delivery, social feed fanout, and explore page ranking for MAANG interviews.">
+  <meta name="description" content="Design Instagram — L6-depth RESHADED walkthrough covering photo upload pipeline, CDN, fanout-on-write/read, feed ranking, Stories, Explore, and the celebrity problem for MAANG interviews.">
   <title>Design Instagram — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -63,256 +63,1434 @@
         <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)">
           <span class="tag tag--blue">Tier 2 — Should Know</span>
           <span class="tag">45 min</span>
-          <span class="tag">Media heavy</span>
+          <span class="tag">Media Heavy</span>
+          <span class="tag">Social Graph</span>
         </div>
         <h1 class="module-header__title">Design Instagram</h1>
-        <p class="module-header__desc">Instagram combines two distinct hard problems: media storage/delivery at scale (photos/video) and social graph feed fanout. The celebrity problem (Kylie Jenner has 400M followers) forces a hybrid fanout strategy.</p>
+        <p class="module-header__desc">Instagram forces you to solve two distinct hard problems simultaneously: media storage and delivery at petabyte scale, and social graph fanout where a single celebrity post must reach 380M followers. The celebrity problem alone disqualifies any pure fanout-on-write strategy. At L6 you must know the hybrid approach, the algorithmic ranking pipeline, Stories vs Posts storage differences, and the Explore tab recommendation system.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Google, Pinterest</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Meta, Pinterest, Snap</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
           <div class="module-header__meta-item"><span aria-hidden="true">📸</span> 100M photos/day</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">👥</span> 2B MAU</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- R — REQUIREMENTS                                           -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <h3>Functional Requirements</h3>
+          <div class="callout callout--info">
+            <strong>Interview tip:</strong> Spend 3–4 minutes here. Ask: "Should I prioritize feed generation, the upload pipeline, or Explore?" Most interviewers say the feed. Scope explicitly before designing.
+          </div>
+
+          <h3>Functional Requirements (in-scope)</h3>
           <ul>
-            <li>Upload photos and short videos; view posts from followed accounts</li>
-            <li>Like, comment, and share posts</li>
-            <li>Follow/unfollow users; public and private accounts</li>
-            <li>Explore page — content discovery from non-followed accounts</li>
-            <li>Stories — 24-hour expiry content</li>
-            <li>Search users and hashtags</li>
+            <li><strong>Photo &amp; video upload:</strong> Users upload photos (up to 20MB) and short videos (up to 60 seconds). The system stores originals and asynchronously produces 5 resized variants.</li>
+            <li><strong>Home Feed:</strong> Chronological-then-algorithmic ranked feed of posts from followed accounts. Pre-load next 20 posts on scroll.</li>
+            <li><strong>Stories:</strong> 24-hour ephemeral content; viewers can see who watched; auto-advance slideshow.</li>
+            <li><strong>Like, comment, save:</strong> Like counts visible; comments threaded; saved posts private collection.</li>
+            <li><strong>Follow / unfollow:</strong> Public accounts followable immediately; private accounts require approval.</li>
+            <li><strong>Explore tab:</strong> Personalized grid of posts from non-followed accounts; powered by ML ranking.</li>
+            <li><strong>Search:</strong> User and hashtag search (out of deep-dive scope — treat as full-text search on Elasticsearch).</li>
+            <li><strong>Notifications:</strong> Push notifications (APNs / FCM) for likes, comments, follows, mentions.</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 1B MAU, 100M photos uploaded/day, 10B feed views/day</li>
-            <li><strong>Latency:</strong> Feed load &lt;500ms; image render &lt;200ms from CDN</li>
-            <li><strong>Availability:</strong> 99.99%; eventual consistency acceptable for feed</li>
-            <li><strong>Storage:</strong> Each photo stored at 3 resolutions; ~1PB new data per year</li>
+            <li><strong>Scale:</strong> 2B MAU, 500M DAU, 100M photos/day uploaded, 1B Stories/day, 10B feed views/day</li>
+            <li><strong>Feed load latency:</strong> p99 &lt; 500ms; p50 &lt; 150ms</li>
+            <li><strong>Image render from CDN:</strong> &lt; 50ms at edge; &lt; 200ms globally</li>
+            <li><strong>Upload acknowledgment:</strong> Client receives 201 within 2 seconds; processing continues async</li>
+            <li><strong>Availability:</strong> 99.99% for feed reads (revenue-critical); 99.9% for uploads</li>
+            <li><strong>Consistency:</strong> Eventual consistency acceptable for feed (a follower seeing a post 2s late is fine); strong consistency for follow/unfollow (bidirectional must complete atomically)</li>
+            <li><strong>Storage durability:</strong> Photos must never be lost (11 nines via S3)</li>
+            <li><strong>Compliance:</strong> GDPR — deleted photos must be purged from all storage tiers within 30 days</li>
+          </ul>
+
+          <h3>Explicitly Out of Scope</h3>
+          <ul>
+            <li>Direct messaging (separate DM service)</li>
+            <li>Live streaming (RTMP ingestion pipeline)</li>
+            <li>Reels / long-form video (requires HLS/DASH transcoding — see YouTube design)</li>
+            <li>Ads ranking system</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- E — ESTIMATION                                             -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Storage</h3>
           <ul>
-            <li>100M photos/day × 3 resolutions avg 200KB each = 60TB/day storage</li>
-            <li>10B feed views/day = 115K read QPS; 100M uploads/day = 1,150 write QPS → 100:1 read/write ratio</li>
-            <li>CDN serves 99% of media reads; origin only sees cache misses</li>
-            <li>Fan-out: avg 500 followers × 1,150 writes/sec = 575K feed writes/sec at peak</li>
+            <li><strong>Photo uploads:</strong> 100M photos/day × 5 variants × avg 200KB/variant = <strong>100TB/day</strong> new photo storage</li>
+            <li><strong>Stories:</strong> 1B stories/day × 1 variant (Stories are lower resolution) × 300KB avg = <strong>300TB/day</strong>, but expire after 24h → rolling ~300TB hot storage</li>
+            <li><strong>Original photos:</strong> 100M × 5MB avg original = <strong>500TB/day</strong> (archived to S3 Glacier after 30 days)</li>
+            <li><strong>Annual total (processed variants + metadata):</strong> ~40PB/year cumulative</li>
           </ul>
+
+          <h3>Traffic</h3>
+          <ul>
+            <li><strong>Feed views:</strong> 10B/day ÷ 86,400s = <strong>~115K read QPS</strong></li>
+            <li><strong>Photo uploads:</strong> 100M/day ÷ 86,400s = <strong>~1,160 write QPS</strong> → read:write ≈ 100:1</li>
+            <li><strong>Feed fanout:</strong> 1,160 posts/sec × 500 avg followers = <strong>580K Redis feed writes/sec</strong></li>
+            <li><strong>CDN bandwidth:</strong> 115K feed-item views/sec × 200KB avg image = <strong>~23 GB/s CDN egress</strong></li>
+            <li><strong>Like events:</strong> 4.2B likes/day ÷ 86,400 = <strong>~49K write QPS</strong> (Cassandra counter writes)</li>
+          </ul>
+
+          <h3>Celebrity Fanout Problem — The Numbers</h3>
+          <ul>
+            <li>Kylie Jenner: 380M followers. One post triggers <strong>380M Redis writes</strong> in fanout-on-write.</li>
+            <li>At 100K Redis writes/sec sustained, that would take <strong>63 minutes</strong> to complete — unacceptable.</li>
+            <li>Conclusion: accounts above a follower threshold (~1M) must be excluded from fanout-on-write.</li>
+          </ul>
+
+          <div class="callout callout--info">
+            <strong>L6 insight:</strong> The 100:1 read-write ratio means every optimization for feed reads (caching, CDN, pre-computation) has 100× the impact of write optimizations. Always optimize the hot path first.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- S — SCHEMA                                                 -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// PostgreSQL — users and social graph
-users: user_id, username, bio, is_private, follower_count, following_count
-follows: follower_id, followee_id, created_at  // INDEX on followee_id for fan-out
+          <h3>Users &amp; Auth (PostgreSQL — strong consistency required for account ops)</h3>
+          <pre><code class="language-java">CREATE TABLE users (
+    user_id        BIGINT PRIMARY KEY,          -- Snowflake ID
+    username       VARCHAR(30) UNIQUE NOT NULL,
+    email          VARCHAR(255) UNIQUE NOT NULL,
+    bio            VARCHAR(150),
+    profile_pic_key VARCHAR(255),               -- S3 key
+    is_private     BOOLEAN DEFAULT FALSE,
+    follower_count INT DEFAULT 0,               -- denormalized counter
+    following_count INT DEFAULT 0,
+    is_celebrity   BOOLEAN DEFAULT FALSE,       -- follower_count > 1M threshold
+    created_at     TIMESTAMP NOT NULL
+);</code></pre>
 
-// Posts table (PostgreSQL for metadata)
-posts: post_id (Snowflake), user_id, caption, location, created_at
-post_media: media_id, post_id, media_type (photo/video), s3_key, width, height
+          <h3>Social Graph — Follow Relationships (Cassandra — high write, range-scan by follower)</h3>
+          <pre><code class="language-java">-- Adjacency list: "who follows this user" (for fanout lookup)
+CREATE TABLE followers_of (
+    followee_id    BIGINT,
+    follower_id    BIGINT,
+    created_at     TIMESTAMP,
+    PRIMARY KEY (followee_id, follower_id)   -- partition by followee, cluster by follower
+) WITH CLUSTERING ORDER BY (follower_id ASC);
 
-// Feed table (Redis Sorted Set per user — fanout-on-write)
-// Key: feed:{user_id}  Value: sorted set of post_ids scored by timestamp
-// Max 300 posts per feed, trim on overflow
+-- Reverse: "who does this user follow" (for feed construction on-read)
+CREATE TABLE following_of (
+    follower_id    BIGINT,
+    followee_id    BIGINT,
+    created_at     TIMESTAMP,
+    PRIMARY KEY (follower_id, followee_id)
+);
+-- Both tables written atomically on follow (Cassandra lightweight transactions
+-- or application-level idempotent dual-write with dedup)</code></pre>
 
-// Cassandra — likes and comments (high write volume)
-likes: (post_id, user_id) PRIMARY KEY  → for dedup
-like_counts: post_id → counter column (atomic increment)</code></pre>
+          <h3>Posts (Cassandra — time-series access pattern, immutable after write)</h3>
+          <pre><code class="language-java">CREATE TABLE posts (
+    post_id        BIGINT,                     -- Snowflake ID (time-ordered)
+    user_id        BIGINT,
+    caption        VARCHAR(2200),
+    location       VARCHAR(100),
+    status         VARCHAR(20),                -- PROCESSING | READY | DELETED
+    like_count     COUNTER,
+    comment_count  COUNTER,
+    created_at     TIMESTAMP,
+    PRIMARY KEY (user_id, post_id)             -- partition by user, cluster by post_id desc
+) WITH CLUSTERING ORDER BY (post_id DESC);     -- latest posts first per user
+
+-- Media variants for each post (one row per size)
+CREATE TABLE post_media (
+    post_id        BIGINT,
+    variant        VARCHAR(20),                -- thumbnail|low|medium|high|original
+    s3_key         VARCHAR(512),
+    width          INT,
+    height         INT,
+    file_size_bytes INT,
+    PRIMARY KEY (post_id, variant)
+);</code></pre>
+
+          <h3>Feed Cache (Redis Sorted Set — pre-built per user)</h3>
+          <pre><code class="language-java">// Key:   feed:{user_id}
+// Type:  Sorted Set
+// Score: Unix timestamp (milliseconds) of post creation
+// Value: post_id (Snowflake ID as string)
+// TTL:   7 days (refresh on login if expired)
+// Max:   300 entries (ZREMRANGEBYRANK to trim oldest on overflow)
+
+// Example Redis commands:
+// ZADD feed:123456 1715123456789 "987654321"     // add post to feed
+// ZREVRANGEBYSCORE feed:123456 +inf -inf LIMIT 0 20  // get latest 20
+// ZREMRANGEBYRANK feed:123456 0 -301             // trim to 300 max</code></pre>
+
+          <h3>Stories (Redis with TTL — ephemeral, 24-hour expiry)</h3>
+          <pre><code class="language-java">// Key:   stories:{user_id}
+// Type:  Sorted Set
+// Score: expiry_timestamp (created_at + 86400s)
+// Value: story_id
+// The Fanout Service runs a daily job: ZRANGEBYSCORE stories:{uid} -inf {now}
+// to collect expired story IDs and purge from S3.
+
+// Story views (who saw my story)
+// Key:   story_views:{story_id}
+// Type:  Set
+// Value: viewer_user_id
+// TTL:   48 hours (24h story life + 24h grace for late reads)</code></pre>
+
+          <h3>Likes &amp; Comments (Cassandra — high write volume, need idempotency)</h3>
+          <pre><code class="language-java">-- Like table: PRIMARY KEY ensures one like per (post, user) — natural dedup
+CREATE TABLE likes (
+    post_id        BIGINT,
+    user_id        BIGINT,
+    created_at     TIMESTAMP,
+    PRIMARY KEY (post_id, user_id)
+);
+
+-- Like counts: separate counter column (avoids read-before-write)
+CREATE TABLE like_counts (
+    post_id        BIGINT PRIMARY KEY,
+    count          COUNTER
+);
+
+-- Comments (threaded)
+CREATE TABLE comments (
+    post_id        BIGINT,
+    comment_id     BIGINT,                     -- Snowflake ID
+    parent_id      BIGINT,                     -- null for top-level
+    user_id        BIGINT,
+    text           VARCHAR(2200),
+    created_at     TIMESTAMP,
+    PRIMARY KEY (post_id, comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC);</code></pre>
+
+          <div class="callout callout--warning">
+            <strong>Why Cassandra for follows and posts, not PostgreSQL?</strong> Follow-graph reads are fan-out reads: "give me all followers of user X" — this can be millions of rows. PostgreSQL handles this poorly beyond millions of rows without sharding. Cassandra's wide-partition model (all followers of X in one partition) makes this a single-node range scan. The trade-off: no JOINs, eventual consistency for counts.
+          </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- H — HIGH-LEVEL DESIGN                                      -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>System Components</h3>
           <ul>
-            <li><strong>Upload flow:</strong> Client → Upload Service → S3 (original) → Image Processing Service (async) → 3 resolutions → CDN push</li>
-            <li><strong>Feed flow:</strong> Client → Feed Service → Redis (pre-built feed) → return post_ids → Post Metadata Service → render</li>
-            <li><strong>Fanout Service:</strong> Triggered after upload. Reads follower list from DB, writes post_id to each follower's Redis feed sorted set. For celebrities: skip fanout-on-write, use fanout-on-read (pull).</li>
-            <li><strong>CDN:</strong> Images served from CDN edge nodes. URL format: <code>cdn.instagram.com/{user_id}/{post_id}/720w.jpg</code></li>
-            <li><strong>Explore page:</strong> ML ranking service. Candidate generation (posts from similar users, trending hashtags) + re-ranking by engagement signals.</li>
+            <li><strong>API Gateway:</strong> Auth (JWT), rate limiting, routing. Terminates TLS.</li>
+            <li><strong>Upload Service:</strong> Generates S3 pre-signed URLs, records metadata, publishes to Kafka <code>photo-uploads</code> topic.</li>
+            <li><strong>Photo Processor Workers:</strong> Kafka consumers. Resize to 5 variants, write to S3, update post status to READY, publish to <code>post-ready</code> topic.</li>
+            <li><strong>Fanout Service:</strong> Consumes <code>post-ready</code>. For normal users (&lt;1M followers): writes post_id to each follower's Redis feed sorted set (fanout-on-write). For celebrities: skips fanout — feed assembly handles it on read.</li>
+            <li><strong>Feed Service:</strong> Reads from Redis feed cache. For accounts followed by the user that are celebrities, merges their latest posts on the fly. Returns list of post_ids for the client to hydrate.</li>
+            <li><strong>Post Metadata Service:</strong> Takes a list of post_ids, fetches metadata + CDN URLs in parallel from Cassandra. Batches reads with a 10ms timeout.</li>
+            <li><strong>CDN (CloudFront / Fastly):</strong> Serves all photo variants. Origin is S3. TTL = 1 year (immutable content). URL format: <code>cdn.example.com/{post_id}/{variant}.jpg</code></li>
+            <li><strong>Stories Service:</strong> Separate service managing TTL in Redis, fanout to followers' story tray, viewer tracking.</li>
+            <li><strong>Explore Service:</strong> ML-based candidate generation + ranking. Reads from ANN index of content embeddings.</li>
+            <li><strong>Notification Service:</strong> Consumes like/comment/follow events from Kafka, routes to APNs (iOS) or FCM (Android).</li>
           </ul>
-        </div>
-      </section>
 
-      <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
-        <div class="content-section__body">
-          <pre><code class="language-java">POST /v1/posts                         // upload post (multipart/form-data)
-GET  /v1/feed?cursor={lastPostId}      // paginated home feed
-GET  /v1/posts/{postId}                // single post + metadata
-POST /v1/posts/{postId}/likes          // like a post
-GET  /v1/explore?page={n}             // explore page
-GET  /v1/users/{userId}/posts          // user's profile grid
-POST /v1/users/{userId}/follow         // follow user</code></pre>
-        </div>
-      </section>
-
-      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Image Processing Pipeline<span class="reshaded-step__letter">10 min</span></h2>
-        <div class="content-section__body">
-          <p>Raw uploads are large (5–20MB DSLR JPEGs, 500MB 4K videos). The pipeline must produce multiple optimized variants asynchronously.</p>
+          <h3>Photo Upload Flow (Step by Step)</h3>
           <ol>
-            <li>Client uploads original to S3 via pre-signed URL (bypasses app servers)</li>
-            <li>S3 event notification triggers Image Processing Service via SQS</li>
-            <li>Processing service generates: thumbnail (150×150), mobile (720px wide), full (1080px wide), WebP variants</li>
-            <li>Processed images written back to S3 with CDN-friendly keys</li>
-            <li>CDN origin pull: first request pulls from S3, subsequent requests served from edge cache (TTL: 1 year for immutable media)</li>
+            <li>Client calls <code>POST /v1/posts/upload-url</code> → Upload Service generates S3 pre-signed PUT URL (15-minute TTL), returns <code>{uploadUrl, postId}</code></li>
+            <li>Client uploads binary directly to S3 via pre-signed URL — Upload Service never sees the bytes</li>
+            <li>S3 emits <code>ObjectCreated</code> event → Upload Service Kafka producer publishes <code>{postId, userId, s3Key}</code> to <code>photo-uploads</code> topic</li>
+            <li>Photo Processor Worker consumes event, downloads original, generates 5 variants, uploads each variant, updates post status = READY in Cassandra</li>
+            <li>Processor publishes <code>{postId, userId}</code> to <code>post-ready</code> topic</li>
+            <li>Fanout Service consumes <code>post-ready</code>, queries follower list, writes to Redis feed sorted sets</li>
           </ol>
-          <p><strong>Why async?</strong> Processing a single image takes 100ms–2s. Doing it synchronously blocks the upload API. By queuing via SQS, the upload API returns immediately (201 Created) and the post becomes visible once processing completes (typically &lt;5s).</p>
+
+          <h3>Feed Read Flow (Step by Step)</h3>
+          <ol>
+            <li>Client calls <code>GET /v1/feed?cursor={lastPostId}&amp;limit=20</code></li>
+            <li>Feed Service reads from <code>feed:{userId}</code> Redis sorted set: <code>ZREVRANGEBYSCORE ... LIMIT 0 20</code></li>
+            <li>Feed Service identifies if the user follows any celebrities. If yes, fetches those celebrities' latest 20 posts from Cassandra (fanout-on-read for celebrities only)</li>
+            <li>Merge + rank the two lists (chronological or ML score)</li>
+            <li>Pass list of post_ids to Post Metadata Service → bulk fetch metadata from Cassandra</li>
+            <li>Return enriched feed JSON to client (metadata + CDN URLs per variant)</li>
+          </ol>
+
+          <h3>Fanout Architecture SVG Diagram</h3>
+          <div style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);overflow-x:auto;margin-top:var(--space-4)">
+            <svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" aria-label="Instagram fanout pipeline diagram" role="img" style="width:100%;max-width:900px;height:auto;font-family:Inter,sans-serif">
+              <!-- Background -->
+              <rect width="900" height="380" rx="12" fill="#0f172a"/>
+
+              <!-- Title -->
+              <text x="450" y="28" text-anchor="middle" fill="#94a3b8" font-size="12" font-weight="600" letter-spacing="1">INSTAGRAM FANOUT PIPELINE</text>
+
+              <!-- Post Created box -->
+              <rect x="20" y="50" width="130" height="50" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="85" y="71" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">Post Created</text>
+              <text x="85" y="87" text-anchor="middle" fill="#64748b" font-size="10">userId + postId</text>
+
+              <!-- Arrow to Kafka -->
+              <line x1="150" y1="75" x2="195" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+              <!-- Kafka box -->
+              <rect x="195" y="50" width="130" height="50" rx="8" fill="#1e3a2f" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="260" y="71" text-anchor="middle" fill="#86efac" font-size="11" font-weight="600">Kafka</text>
+              <text x="260" y="87" text-anchor="middle" fill="#64748b" font-size="10">post-ready topic</text>
+
+              <!-- Arrow to Fanout Service -->
+              <line x1="325" y1="75" x2="370" y2="75" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+              <!-- Fanout Service box -->
+              <rect x="370" y="50" width="160" height="50" rx="8" fill="#2d1b4e" stroke="#a855f7" stroke-width="1.5"/>
+              <text x="450" y="71" text-anchor="middle" fill="#d8b4fe" font-size="11" font-weight="600">Fanout Service</text>
+              <text x="450" y="87" text-anchor="middle" fill="#64748b" font-size="10">checks follower count</text>
+
+              <!-- Decision: follower count -->
+              <polygon points="450,145 500,170 450,195 400,170" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+              <text x="450" y="165" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">followers</text>
+              <text x="450" y="180" text-anchor="middle" fill="#fbbf24" font-size="10">&lt; 1M ?</text>
+              <!-- Vertical arrow from Fanout to diamond -->
+              <line x1="450" y1="100" x2="450" y2="143" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+              <!-- YES path: fanout-on-write -->
+              <line x1="400" y1="170" x2="230" y2="170" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <text x="315" y="162" text-anchor="middle" fill="#86efac" font-size="10">YES (normal user)</text>
+
+              <!-- Redis Feed Cache box -->
+              <rect x="80" y="145" width="150" height="50" rx="8" fill="#1e3a2f" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="155" y="166" text-anchor="middle" fill="#86efac" font-size="11" font-weight="600">Redis Feed Cache</text>
+              <text x="155" y="182" text-anchor="middle" fill="#64748b" font-size="10">ZADD feed:{followerId}</text>
+
+              <!-- Per-follower detail -->
+              <rect x="20" y="230" width="270" height="40" rx="6" fill="#0f2218" stroke="#166534" stroke-width="1"/>
+              <text x="155" y="247" text-anchor="middle" fill="#4ade80" font-size="10">Write post_id to each follower's sorted set</text>
+              <text x="155" y="261" text-anchor="middle" fill="#475569" font-size="9">~500 Redis writes per post (normal user)</text>
+              <line x1="155" y1="195" x2="155" y2="228" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+
+              <!-- NO path: celebrity bypass -->
+              <line x1="500" y1="170" x2="650" y2="170" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <text x="575" y="162" text-anchor="middle" fill="#fca5a5" font-size="10">NO (celebrity)</text>
+
+              <!-- Celebrity bypass box -->
+              <rect x="650" y="145" width="220" height="50" rx="8" fill="#3b1515" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="760" y="166" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="600">Skip Fanout — On-Read</text>
+              <text x="760" y="182" text-anchor="middle" fill="#64748b" font-size="10">Merged at feed assembly time</text>
+
+              <!-- Celebrity detail -->
+              <rect x="620" y="230" width="260" height="40" rx="6" fill="#1f0a0a" stroke="#7f1d1d" stroke-width="1"/>
+              <text x="750" y="247" text-anchor="middle" fill="#f87171" font-size="10">Feed Service fetches celebrity posts</text>
+              <text x="750" y="261" text-anchor="middle" fill="#475569" font-size="9">at read time (Cassandra lookup)</text>
+              <line x1="760" y1="195" x2="760" y2="228" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+
+              <!-- Feed Service reading both -->
+              <rect x="330" y="310" width="240" height="50" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+              <text x="450" y="330" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">Feed Service (Read Path)</text>
+              <text x="450" y="347" text-anchor="middle" fill="#64748b" font-size="10">Redis feed + celebrity Cassandra merge</text>
+
+              <line x1="155" y1="270" x2="155" y2="295" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+              <line x1="155" y1="295" x2="370" y2="320" stroke="#475569" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+              <line x1="760" y1="270" x2="760" y2="295" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+              <line x1="760" y1="295" x2="530" y2="320" stroke="#475569" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+              <!-- Arrow marker -->
+              <defs>
+                <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L8,3 z" fill="#475569"/>
+                </marker>
+              </defs>
+            </svg>
+          </div>
+
+          <div class="callout callout--tip" style="margin-top:var(--space-4)">
+            <strong>L6 insight — Hybrid Fanout:</strong> Instagram uses a hybrid fanout. For users with fewer than ~10K followers, fanout-on-write pre-populates all followers' feed caches immediately on post creation. For celebrities with more than ~1M followers, the feed is assembled on-read by merging the user's pre-built feed cache with the celebrity's latest posts fetched directly from Cassandra. The threshold is configurable — a background job monitors follower counts and updates the <code>is_celebrity</code> flag.
+          </div>
         </div>
       </section>
 
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- A — APIS                                                   -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="apis" aria-labelledby="api-title">
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
+          <h3>Upload Flow (two-step — client never goes through app server for binary)</h3>
+          <pre><code class="language-java">// Step 1: Get pre-signed S3 URL
+POST /v1/posts/upload-url
+Authorization: Bearer {jwt}
+Body: { "caption": "Sunset at Malibu", "location": "Malibu, CA", "mediaType": "photo" }
+
+Response 200:
+{
+  "postId": "7829374652910473216",
+  "uploadUrl": "https://s3.amazonaws.com/ig-originals/...?X-Amz-Signature=...",
+  "expiresAt": "2026-05-17T08:10:00Z"
+}
+
+// Step 2: Client PUTs binary directly to S3 using uploadUrl
+// After S3 confirms, client calls:
+POST /v1/posts/{postId}/confirm
+Body: { "s3Key": "originals/user123/7829374652910473216.jpg" }
+Response 201: { "postId": "...", "status": "PROCESSING" }</code></pre>
+
+          <h3>Feed</h3>
+          <pre><code class="language-java">// Paginated home feed (cursor-based, NOT offset-based)
+GET /v1/feed?limit=20&amp;cursor={lastPostId}
+Authorization: Bearer {jwt}
+
+Response 200:
+{
+  "posts": [
+    {
+      "postId": "...",
+      "userId": "...",
+      "username": "surf_emily",
+      "caption": "...",
+      "likeCount": 1823,
+      "commentCount": 47,
+      "createdAt": "2026-05-17T07:45:00Z",
+      "media": {
+        "thumbnail": "https://cdn.example.com/7829.../thumbnail.jpg",
+        "medium":    "https://cdn.example.com/7829.../medium.jpg",
+        "high":      "https://cdn.example.com/7829.../high.jpg"
+      }
+    }
+  ],
+  "nextCursor": "7828000000000000000",
+  "hasMore": true
+}
+
+// Why cursor-based pagination?
+// Offset-based (LIMIT 20 OFFSET 40) requires a full index scan to skip rows.
+// Cursor-based uses the last seen post_id (Snowflake, time-ordered) as a WHERE clause:
+// WHERE post_id &lt; {cursor} ORDER BY post_id DESC LIMIT 20
+// This is O(log N) via index, not O(N).</code></pre>
+
+          <h3>Social Graph</h3>
+          <pre><code class="language-java">POST /v1/users/{userId}/follow          // follow user
+DELETE /v1/users/{userId}/follow        // unfollow user
+
+GET /v1/users/{userId}/followers?cursor={cursor}&amp;limit=50
+GET /v1/users/{userId}/following?cursor={cursor}&amp;limit=50</code></pre>
+
+          <h3>Stories</h3>
+          <pre><code class="language-java">POST /v1/stories/upload-url             // same two-step flow as posts
+POST /v1/stories/{storyId}/views        // record a view (fire-and-forget)
+GET  /v1/stories/tray                   // get story tray for home screen
+     // Returns: list of {userId, username, profilePic, hasUnseenStories}
+GET  /v1/stories/{userId}               // get all stories for a user (24h window)</code></pre>
+
+          <h3>Explore &amp; Search</h3>
+          <pre><code class="language-java">GET /v1/explore?page=2&amp;category=travel   // explore grid
+GET /v1/search?q=surfing&amp;type=hashtag    // hashtag search
+GET /v1/search?q=emily&amp;type=user        // user search
+
+POST /v1/posts/{postId}/likes           // like
+DELETE /v1/posts/{postId}/likes         // unlike (idempotent)
+GET  /v1/posts/{postId}/comments?cursor=...
+POST /v1/posts/{postId}/comments        // add comment</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- D — DEEP DIVE                                              -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deepdive" aria-labelledby="dd-title">
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive
+          <span class="reshaded-step__letter">15 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <!-- Photo Upload Pipeline -->
+          <h3>1. Photo Upload Pipeline — Client → S3 → Kafka → Processor → CDN</h3>
+          <p>Raw uploads from phones are 5–20MB HEIC/JPEG files. Processing them synchronously would block upload ACKs for 2–10 seconds. The pipeline is fully asynchronous after the S3 write.</p>
+
+          <h4>Five Resized Variants</h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Variant</th><th>Dimensions</th><th>Use Case</th><th>Approx Size</th></tr></thead>
+              <tbody>
+                <tr><td><code>thumbnail</code></td><td>150×150 px (square crop)</td><td>Profile grid, explore grid, comments</td><td>~8KB</td></tr>
+                <tr><td><code>low</code></td><td>320px wide, proportional</td><td>Low-bandwidth 3G preview</td><td>~30KB</td></tr>
+                <tr><td><code>medium</code></td><td>640px wide, proportional</td><td>Default mobile feed</td><td>~80KB</td></tr>
+                <tr><td><code>high</code></td><td>1080px wide, proportional</td><td>Full-res feed view, web</td><td>~200KB</td></tr>
+                <tr><td><code>original</code></td><td>As uploaded (up to 4K)</td><td>Download, archival, future re-processing</td><td>~5MB avg</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p style="margin-top:var(--space-3)">The <code>original</code> variant is stored in a separate S3 bucket with cold-tier storage (Glacier after 30 days). CDN only distributes the four processed variants. The original is never served directly from CDN — it's for archival and potential future re-processing if Instagram adds new sizes.</p>
+
+          <h4>CDN URL Generation</h4>
+          <p>CDN URLs are deterministic and immutable: <code>https://cdn.ig.com/{postId}/{variant}.jpg</code>. Because photos are immutable once processed, CDN TTL is set to 1 year (<code>Cache-Control: max-age=31536000, immutable</code>). Cache invalidation is never needed — if a post is deleted, the app server stops returning the URL; the CDN key becomes unreachable without explicit invalidation.</p>
+          <p>For private account content, URLs include a short-lived HMAC signature parameter: <code>?sig={hmac}&amp;exp={timestamp}</code>. The CDN validates the signature at edge before serving, without hitting origin.</p>
+
+          <h4>Photo Deduplication via Perceptual Hash (pHash)</h4>
+          <p>Users (and spam bots) frequently re-upload the same photo. Instagram uses perceptual hashing to detect near-duplicate images at upload time.</p>
+          <pre><code class="language-java">// Perceptual hash algorithm (simplified):
+// 1. Resize image to 32×32 pixels (removes noise)
+// 2. Convert to grayscale
+// 3. Compute DCT (Discrete Cosine Transform) — keeps low-frequency features
+// 4. Take top-left 8×8 of DCT result (64 values)
+// 5. Compute mean of 64 values
+// 6. Build 64-bit hash: bit[i] = (dct[i] > mean) ? 1 : 0
+//
+// Two images are near-duplicates if Hamming distance between their pHashes &lt; 10
+//
+// Storage: pHash stored in post metadata (8 bytes)
+// Lookup: Redis HSET dedup:{phash} postId  (for fast collision check at upload time)
+// On upload: compute pHash, check Redis, if match found → surface warning to user</code></pre>
+
+          <div class="callout callout--info">
+            <strong>Why pHash and not MD5/SHA?</strong> Cryptographic hashes (MD5, SHA-256) change completely if even one pixel is different. pHash produces similar hash values for visually similar images — a cropped version, a compressed version, and a screenshot of the same photo will all have pHash Hamming distances under 10. This catches spam reposts that are slightly cropped or have minimal edits.
+          </div>
+
+          <!-- Feed Generation -->
+          <h3>2. Feed Generation — Fanout-on-Write vs Fanout-on-Read vs Hybrid</h3>
+
+          <h4>Fanout-on-Write (Push)</h4>
+          <p>When a post is created, the Fanout Service iterates through all of the poster's followers and writes the post_id into each follower's Redis feed sorted set immediately. Feed reads are O(1) — just a Redis ZRANGE.</p>
           <ul>
-            <li><strong>Celebrity problem:</strong> Fanout-on-write for Kylie Jenner (400M followers) = 400M Redis writes per post. Use fanout-on-read: pull from celebrity's post list at feed read time, merge with pre-built fanout feeds.</li>
-            <li><strong>Feed consistency:</strong> Eventual consistency is fine for Instagram. A follower seeing a post 1s late is acceptable.</li>
-            <li><strong>Storage cost:</strong> 3 resolutions × CDN replication across 100+ PoPs is expensive. Mitigate with on-the-fly resizing at CDN edge for rare sizes.</li>
+            <li><strong>Pro:</strong> Feed reads are instant — no computation at read time</li>
+            <li><strong>Pro:</strong> Simple read path</li>
+            <li><strong>Con:</strong> Write amplification — 500 followers = 500 Redis writes per post</li>
+            <li><strong>Con:</strong> Celebrity problem — Kylie Jenner with 380M followers would trigger 380M Redis writes per post, taking ~63 minutes at 100K writes/sec</li>
+            <li><strong>Con:</strong> Wasted writes — feeds for inactive users (who haven't opened the app in months) still get populated</li>
+          </ul>
+
+          <h4>Fanout-on-Read (Pull)</h4>
+          <p>When a user opens their feed, the Feed Service queries: "give me the IDs of everyone I follow", then for each followed user, fetches their latest posts. Merge and sort all results.</p>
+          <ul>
+            <li><strong>Pro:</strong> No write amplification — posting is cheap regardless of follower count</li>
+            <li><strong>Pro:</strong> Feed is always up-to-date (no stale cache)</li>
+            <li><strong>Con:</strong> Feed read is expensive — a user following 500 accounts requires 500 Cassandra queries per feed load, each with its own latency</li>
+            <li><strong>Con:</strong> At 115K feed reads/sec, 500 queries each = 57.5M DB queries/sec — impossible</li>
+          </ul>
+
+          <h4>Hybrid Approach (What Instagram Actually Uses)</h4>
+          <pre><code class="language-java">// Hybrid strategy thresholds (configurable in feature flags):
+// FANOUT_WRITE_THRESHOLD = 1_000_000  // users above this → fanout-on-read
+// ACTIVE_USER_DAYS = 30               // inactive users → skip fanout-on-write
+
+// Fanout Service decision logic (pseudocode):
+void handlePostReady(PostReadyEvent event) {
+    List&lt;Long&gt; followerIds = followerService.getFollowers(event.getUserId());
+
+    for (Long followerId : followerIds) {
+        UserProfile follower = userCache.get(followerId);
+
+        // Skip inactive users — don't waste Redis writes for users who won't open the app
+        if (follower.getLastActiveAt().isBefore(now().minusDays(ACTIVE_USER_DAYS))) {
+            continue;
+        }
+
+        feedCacheService.addToFeed(followerId, event.getPostId(), event.getCreatedAt());
+    }
+}
+
+// Feed Service read path:
+FeedResponse getFeed(Long userId, Long cursor, int limit) {
+    List&lt;Long&gt; feedPostIds = redisClient.zrevrangebyscore("feed:" + userId, cursor, limit);
+
+    // Identify celebrities the user follows
+    List&lt;Long&gt; followedCelebIds = followingCache.getCelebrities(userId);
+
+    if (!followedCelebIds.isEmpty()) {
+        // Pull celebrity posts on-read and merge
+        List&lt;Post&gt; celebPosts = cassandra.getLatestPostsFromUsers(followedCelebIds, limit);
+        feedPostIds = mergeAndDeduplicate(feedPostIds, celebPosts, cursor, limit);
+    }
+
+    return postMetadataService.hydrate(feedPostIds);
+}</code></pre>
+
+          <!-- Feed Ranking -->
+          <h3>3. Feed Ranking — Chronological vs Algorithmic</h3>
+          <p>Early Instagram showed posts in reverse-chronological order. By 2016, they switched to algorithmic ranking because the average user missed 70% of their feed due to volume. Algorithmic ranking surfaces the posts the user is most likely to engage with.</p>
+
+          <h4>Ranking Signal Categories</h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Signal Category</th><th>Examples</th><th>Weight</th></tr></thead>
+              <tbody>
+                <tr><td>Interest / Engagement History</td><td>Past likes, saves, comments on similar content; time spent on similar posts</td><td>High</td></tr>
+                <tr><td>Relationship Strength</td><td>DM frequency, mutual follows, profile visits, tags</td><td>High</td></tr>
+                <tr><td>Post Recency</td><td>Minutes since post was created (decay function)</td><td>Medium</td></tr>
+                <tr><td>Content Type</td><td>Photo vs video; carousel; aspect ratio preference</td><td>Medium</td></tr>
+                <tr><td>Post Popularity</td><td>Like velocity in first 30 minutes; comment rate</td><td>Medium</td></tr>
+                <tr><td>Device / Context</td><td>Mobile vs tablet; time of day; network speed</td><td>Low</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>Ranking Pipeline Architecture</h4>
+          <pre><code class="language-java">// Two-stage ranking pipeline:
+//
+// STAGE 1 — Candidate Generation (retrieve ~500 candidates from feed cache)
+//   Input:  Redis feed sorted set (chronological post_ids)
+//   Output: Top 500 candidates by recency
+//
+// STAGE 2 — ML Ranking (score all 500 candidates, return top 20)
+//   Model: Gradient Boosted Trees (offline training) or two-tower neural net
+//   Features computed per (user, post) pair:
+//     - user_embedding vector (128-dim) from historical engagement
+//     - post_embedding vector (128-dim) from content features
+//     - dot_product(user_embedding, post_embedding) → affinity score
+//     - recency_score: 1 / (1 + hours_since_post)
+//     - relationship_score: from graph features (shared follows, DMs)
+//     - post_velocity: likes_per_hour in past 30 min
+//
+// STAGE 3 — Re-ranking (diversity + freshness rules)
+//   - No more than 3 consecutive posts from same user
+//   - At least 1 post from last 6 hours in top 5
+//   - Inject sponsored content at positions 3, 8, 13
+
+// Online serving: &lt;20ms inference budget for scoring 500 posts
+// Achieved via: pre-computed user embeddings (updated every 1h),
+//               post embeddings pre-computed at upload time,
+//               fast dot product via BLAS</code></pre>
+
+          <!-- Stories -->
+          <h3>4. Stories vs Posts — Different Architecture for Different SLAs</h3>
+          <p>Stories and Posts have fundamentally different access patterns, lifetimes, and fanout requirements. They should not share the same storage layer.</p>
+
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Dimension</th><th>Posts</th><th>Stories</th></tr></thead>
+              <tbody>
+                <tr><td>Lifetime</td><td>Permanent (until deleted)</td><td>24 hours (hard TTL)</td></tr>
+                <tr><td>Primary Storage</td><td>Cassandra (posts table)</td><td>Redis Sorted Set with TTL</td></tr>
+                <tr><td>Media Storage</td><td>S3 Standard → Glacier (30d)</td><td>S3 Standard, deleted after 48h</td></tr>
+                <tr><td>Fanout Strategy</td><td>Hybrid push/pull via Kafka</td><td>Push to story tray list (lighter)</td></tr>
+                <tr><td>Viewer tracking</td><td>Like/comment counts only</td><td>Full viewer list (Redis Set per story)</td></tr>
+                <tr><td>Consistency need</td><td>Eventual (seconds OK)</td><td>Eventual (minutes OK — stories are casual)</td></tr>
+                <tr><td>Ranking</td><td>ML ranking model</td><td>Reverse-chronological, viewer sorted by closeness</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <pre><code class="language-java">// Stories TTL management:
+// When a story is created:
+//   1. Store media in S3 (short-lived bucket with lifecycle rule: delete after 48h)
+//   2. ZADD stories:{userId} {expiryEpochSeconds} {storyId}
+//   3. Fanout Service adds to each follower's story tray:
+//      ZADD story_tray:{followerId} {expiryEpochSeconds} {userId}
+//
+// Story tray fetch (home screen circles):
+//   ZRANGEBYSCORE story_tray:{userId} {now} +inf  // only non-expired
+//   Returns list of userIds → batch fetch their profile pics + unseen count
+//
+// Expiry cleanup (two mechanisms):
+//   1. Redis TTL on individual story keys (automatic)
+//   2. Cron job: ZRANGEBYSCORE stories:{userId} -inf {now-1} → collect expired IDs
+//      → delete from S3 → ZREMRANGEBYSCORE to clean sorted set</code></pre>
+
+          <!-- Explore Tab -->
+          <h3>5. Explore Tab — Graph-Based Recommendation + ANN Search</h3>
+          <p>Explore surfaces posts from accounts the user does not follow. It's a three-stage recommendation pipeline: candidate generation → scoring → diversity re-ranking.</p>
+
+          <h4>Candidate Generation Strategies</h4>
+          <ul>
+            <li><strong>Co-follow graph:</strong> "Users who follow the same accounts as you also engaged with these posts" — classic collaborative filtering on the social graph</li>
+            <li><strong>Content similarity (embedding ANN):</strong> Each post has a 128-dimensional embedding vector computed at upload time (from image features via CNN + caption features via BERT). At query time, find the top-K nearest posts to the user's interest vector using FAISS (Facebook AI Similarity Search). FAISS enables sub-millisecond ANN search over billions of vectors.</li>
+            <li><strong>Trending in your network:</strong> Posts with high like velocity from accounts in your 2-hop social graph</li>
+            <li><strong>Hashtag affinity:</strong> Hashtags you've engaged with in the past → posts tagged with those hashtags</li>
+          </ul>
+
+          <pre><code class="language-java">// Content embedding pipeline:
+// At upload time (Photo Processor Worker also does):
+//   1. Run image through MobileNet CNN → 128-dim visual embedding
+//   2. Run caption through DistilBERT → 128-dim text embedding
+//   3. Concatenate + project to single 128-dim post embedding
+//   4. Insert into FAISS index (approximate nearest neighbor)
+//   5. Store embedding in Cassandra post_embeddings table
+
+// User interest vector (updated every 1 hour by batch job):
+//   Weighted average of embeddings of posts user engaged with in past 30 days
+//   Recency-weighted: engagement from yesterday has 2× weight vs 30 days ago
+
+// ANN query at Explore request time:
+//   1. Fetch user embedding vector
+//   2. FAISS.search(user_vector, k=200) → 200 candidate post_ids
+//   3. Filter out: already seen, from followed accounts, deleted, reported
+//   4. Score remaining with ML ranker (same ranker as feed but different feature weights)
+//   5. Apply diversity: max 3 posts from same author, distribute across categories
+//   6. Return top 50 for explore grid</code></pre>
+
+          <!-- Notifications -->
+          <h3>6. Notifications — APNs / FCM via Event-Driven Pipeline</h3>
+          <pre><code class="language-java">// Event flow:
+// Like event → Kafka topic "engagement-events"
+//   → Notification Aggregation Service
+//     (batches: "Alice and 47 others liked your photo" instead of 48 separate pushes)
+//   → Notification Router
+//     → iOS: APNs (Apple Push Notification Service)
+//     → Android: FCM (Firebase Cloud Messaging)
+//     → Web: Web Push (VAPID)
+
+// Aggregation window: 30 seconds
+// "Alice liked your photo" — if more likes arrive in 30s window:
+//   → upgrade to "Alice and 3 others liked your photo"
+//   → further upgrade to "Alice and 47 others liked your photo"
+
+// User notification preferences stored in Redis:
+//   HSET notif_prefs:{userId} likes 1 comments 1 follows 1 mentions 1
+//   Check before routing — respect user's DND settings
+
+// APNs/FCM token management:
+//   Tokens stored in: notification_tokens table (PostgreSQL)
+//   Columns: user_id, device_id, platform (ios/android/web), token, updated_at
+//   On 410 Gone response from APNs: immediately delete token (device uninstalled app)</code></pre>
+
+          <!-- Graph Storage -->
+          <h3>7. Follow Graph — Adjacency List in Cassandra</h3>
+          <p>The follow relationship is uni-directional (A follows B ≠ B follows A, unlike Facebook's bidirectional friendship). At scale, the graph has billions of edges.</p>
+          <pre><code class="language-java">// Why Cassandra over a dedicated graph DB (Neo4j/JanusGraph)?
+// Instagram's graph queries are simple:
+//   - "Who follows user X?" → single partition scan in followers_of table
+//   - "Who does user X follow?" → single partition scan in following_of table
+//
+// These are O(1) partition reads in Cassandra. Graph DBs are optimized for
+// multi-hop traversals (find friends-of-friends-of-friends) — unnecessary here.
+// Graph DBs at Instagram's scale (100B+ edges) are operationally complex.
+//
+// Cassandra approach:
+// - followers_of partitioned by followee_id → "give me all followers of user X"
+//   for fanout is a single partition scan
+// - following_of partitioned by follower_id → "who does user X follow"
+//   for feed assembly is a single partition scan
+//
+// Write path (follow action):
+// BEGIN BATCH
+//   INSERT INTO followers_of (followee_id, follower_id, created_at) VALUES (...)
+//   INSERT INTO following_of (follower_id, followee_id, created_at) VALUES (...)
+// APPLY BATCH;
+// Note: Cassandra batches are NOT transactions — they're hints for locality.
+// For true atomicity, use application-level retry with idempotency check.
+
+// Follower count:
+// Counter column in users table (denormalized)
+// Increment via: UPDATE users SET follower_count = follower_count + 1 WHERE user_id = ?
+// Periodic reconciliation job checks for drift between counter and actual row count</code></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- E — EVALUATE                                               -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">✅</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
+        <div class="content-section__body">
+          <h3>Does the Design Meet Each Requirement?</h3>
+
+          <h4>Feed load p99 &lt; 500ms</h4>
+          <p>Feed Service reads Redis (sub-millisecond). For celebrity merges: Cassandra read for latest 20 posts per celebrity, typically 3–5 celebrities followed = 3–5 parallel Cassandra reads (~5ms each). Total feed assembly: ~20ms. ML ranking over 500 candidates: ~15ms (pre-computed embeddings, fast dot product). Total p99 well under 500ms. ✓</p>
+
+          <h4>The Celebrity Problem</h4>
+          <p>Resolved by the hybrid strategy: Kylie Jenner (380M followers) is flagged as <code>is_celebrity=true</code>. When she posts, Fanout Service skips write fanout. At feed read time, Feed Service fetches her latest posts from Cassandra and merges them. Cost per user's feed read: one extra Cassandra partition read per celebrity followed, merged in memory. ✓</p>
+
+          <h4>Inactive Users — Wasted Fanout</h4>
+          <p>Fanout Service skips users who haven't been active in 30+ days. When these users return, Feed Service detects the stale/empty Redis cache and triggers a backfill (pull latest posts from all followed accounts, populate Redis). This lazy re-hydration is acceptable since it happens once on re-engagement, not on every post by everyone they follow. ✓</p>
+
+          <h4>Photo Availability 99.99%</h4>
+          <p>S3 provides 99.999999999% durability. CDN provides geographic redundancy. CDN failures fall back to S3 origin (with higher latency). Multi-region CDN PoPs ensure availability even if one region goes down. ✓</p>
+
+          <h4>Stories Expiry</h4>
+          <p>Redis TTL provides automatic expiry of story metadata. S3 bucket lifecycle policy deletes media objects after 48 hours. Two mechanisms ensure no story survives past its TTL. ✓</p>
+
+          <h4>GDPR — Photo Deletion</h4>
+          <p>Delete flow: mark post as DELETED in Cassandra (soft delete, instant). Schedule hard delete job: remove S3 keys for all 5 variants, purge from CDN (explicit invalidation via CloudFront API), remove from all Redis feed caches (<code>ZREM</code>), remove from FAISS index. Entire pipeline must complete within 30 days. ✓</p>
+
+          <h4>Potential Bottlenecks</h4>
+          <ul>
+            <li><strong>Fanout Service throughput:</strong> At 1,160 posts/sec × 500 avg followers = 580K Redis writes/sec. Redis cluster handles ~500K writes/sec per shard. Solution: horizontal sharding of Redis feed caches by user_id range, or use Redis Cluster with consistent hashing.</li>
+            <li><strong>Photo Processor throughput:</strong> 1,160 uploads/sec × 4 resize operations each = 4,640 CPU-intensive operations/sec. Solution: dedicated auto-scaling group of processor workers; Kafka provides backpressure and replay on failure.</li>
+            <li><strong>Cassandra follower list scans for celebrities:</strong> A user with 380M followers has a partition of 380M rows. LIMIT 1000 for the fanout is still a large scan. Solution: since celebrity posts skip write fanout, we never need to scan the full follower list — the celebrity bypass path only needs the user's is_celebrity flag, not their follower list.</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- D — DELIVER                                                -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
         <div class="content-section__body">
-          <p>We designed a photo-sharing system handling 1B MAU, 100M uploads/day, and 10B feed views/day. Key decisions: S3 + CDN for media, async image processing pipeline via SQS, Redis sorted sets for pre-built feeds (fanout-on-write for normal users, fanout-on-read for celebrities), and Cassandra for high-volume like/comment counters.</p>
+          <p>We designed a photo-sharing platform for 2B MAU handling 100M photo uploads/day, 1B Stories/day, and 10B feed reads/day. The five critical architectural decisions:</p>
+          <ol>
+            <li><strong>Pre-signed S3 uploads:</strong> Client uploads directly to S3, bypassing app servers entirely. Upload Service only handles metadata. Eliminates app server as upload bandwidth bottleneck.</li>
+            <li><strong>Async image processing pipeline:</strong> Kafka-driven Photo Processor Workers produce 5 variants per photo. Upload API returns 201 in &lt;2s. Processing completes within 5–30s. Kafka provides durability, backpressure, and replay.</li>
+            <li><strong>Hybrid fanout strategy:</strong> Fanout-on-write for normal users (&lt;1M followers), fanout-on-read for celebrities. Feed reads merge Redis pre-built feed + celebrity latest posts at query time. Eliminates 380M-write celebrity problem while keeping feed reads fast.</li>
+            <li><strong>Stories-as-ephemeral in Redis:</strong> Stories are fundamentally different from posts (24h TTL, lighter access pattern). Redis sorted sets with TTL scores, S3 lifecycle rules, and separate fanout path. No Cassandra overhead for ephemeral content.</li>
+            <li><strong>ML ranking pipeline:</strong> Two-stage (candidate retrieval from Redis + ML scoring). Pre-computed user and post embeddings keep online inference under 20ms. FAISS-based ANN search powers Explore with sub-millisecond candidate retrieval over billions of posts.</li>
+          </ol>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- TRADE-OFFS TABLE                                           -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-offs
+        </h2>
         <div class="content-section__body">
           <div class="table-wrapper">
             <table>
-              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Decision</th>
+                  <th>Option A</th>
+                  <th>Option B</th>
+                  <th>Option C (Chosen)</th>
+                  <th>Why C wins</th>
+                </tr>
+              </thead>
               <tbody>
-                <tr><td>Feed generation</td><td>Hybrid (push normal, pull celebrities)</td><td>Pure push or pure pull</td><td>Pure push can't handle celebrities; pure pull is too slow for high-follower accounts</td></tr>
-                <tr><td>Image storage</td><td>S3 + CDN</td><td>Self-hosted object storage</td><td>S3 durability (11 9s), CDN edge serves 99% of reads without hitting origin</td></tr>
-                <tr><td>Like storage</td><td>Cassandra counters</td><td>Redis atomic increment</td><td>Redis is faster but Cassandra persists counts durably; Redis good as cache layer on top</td></tr>
-                <tr><td>Upload to S3</td><td>Pre-signed URL (direct client → S3)</td><td>Proxy through app server</td><td>Bypasses app servers entirely, reducing upload latency and server load</td></tr>
+                <tr>
+                  <td><strong>Feed Generation Strategy</strong></td>
+                  <td>Fanout-on-write (pure push)<br><em>Pro: fast reads, Con: celebrity problem</em></td>
+                  <td>Fanout-on-read (pure pull)<br><em>Pro: cheap writes, Con: expensive reads — 500 DB queries per feed</em></td>
+                  <td><strong>Hybrid</strong><br>Push for &lt;1M followers, pull for celebrities</td>
+                  <td>Pure push breaks on celebrities. Pure pull is too slow. Hybrid routes each post to the cheapest strategy given the poster's follower count. Threshold is tunable.</td>
+                </tr>
+                <tr>
+                  <td><strong>Feed Ranking</strong></td>
+                  <td>Reverse-chronological<br><em>Pro: simple, predictable. Con: users miss 70% of content</em></td>
+                  <td>Pure ML (all posts ranked, no recency floor)<br><em>Pro: maximum engagement. Con: users feel manipulated, stale content resurfaces</em></td>
+                  <td><strong>Recency-weighted ML</strong><br>ML ranking with recency decay + "posts from past 24h" floor</td>
+                  <td>Pure chronological frustrates users who follow 500 accounts. Pure ML without recency lets old viral posts dominate. Hybrid maximizes engagement while ensuring feed feels fresh.</td>
+                </tr>
+                <tr>
+                  <td><strong>Follow Graph Storage</strong></td>
+                  <td>PostgreSQL<br><em>Pro: ACID, familiar. Con: sharding complex at 100B+ edges</em></td>
+                  <td>Neo4j / graph DB<br><em>Pro: native graph traversal. Con: operationally heavy, overkill for 2-hop queries</em></td>
+                  <td><strong>Cassandra wide partitions</strong><br>followers_of + following_of tables</td>
+                  <td>Instagram's follow graph queries are simple range scans (all followers of X), not multi-hop traversals. Cassandra's partition model makes these O(1) partition reads. Graph DBs add complexity without benefit for this access pattern.</td>
+                </tr>
+                <tr>
+                  <td><strong>Stories Storage</strong></td>
+                  <td>Cassandra (same as posts)<br><em>Pro: unified storage. Con: TTL management complex, wasted storage post-expiry</em></td>
+                  <td>PostgreSQL with cron cleanup<br><em>Pro: simple. Con: TTL at scale requires aggressive indexing on expires_at</em></td>
+                  <td><strong>Redis Sorted Set + S3 lifecycle</strong></td>
+                  <td>Redis natively supports TTL-scored sorted sets. Story tray fetch is a single ZRANGEBYSCORE call. S3 lifecycle handles media deletion automatically. Stories are ephemeral by nature — a durable DB is overkill for 24h content.</td>
+                </tr>
+                <tr>
+                  <td><strong>Explore Candidate Generation</strong></td>
+                  <td>Trending / popularity-based only<br><em>Pro: simple. Con: rich-get-richer, no personalization</em></td>
+                  <td>Collaborative filtering on follow graph<br><em>Pro: personalized. Con: cold-start problem for new users, sparse for niche interests</em></td>
+                  <td><strong>Content embeddings (ANN) + graph signals</strong></td>
+                  <td>Embedding-based ANN handles the cold-start problem (content features don't require interaction history). Graph signals (co-follow network) add social proof. Combining both provides personalized and diverse results.</td>
+                </tr>
+                <tr>
+                  <td><strong>Like Count Storage</strong></td>
+                  <td>PostgreSQL counter with UPDATE<br><em>Pro: ACID. Con: hot rows under heavy write contention</em></td>
+                  <td>Redis INCR (cache-only)<br><em>Pro: fast. Con: durability risk — Redis eviction or restart loses counts</em></td>
+                  <td><strong>Cassandra COUNTER column + Redis cache</strong></td>
+                  <td>Cassandra counters are durable and support atomic increments without read-before-write. Redis cache layer absorbs the read traffic (like_count displayed in feed). On Redis miss, read from Cassandra. Redis persistence (RDB snapshots) provides warm restart protection.</td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- JAVA IMPLEMENTATION                                        -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation
+        </h2>
         <div class="content-section__body">
+
+          <h3>PhotoUploadService — Pre-signed URL generation + Kafka publish</h3>
           <pre><code class="language-java">/**
- * ImageProcessingPipeline — async resize of uploaded photos to multiple resolutions.
- * Triggered by S3 event via SQS. Processes one image per invocation.
+ * @file PhotoUploadService.java
+ * @description Handles phase-1 of photo upload: generates pre-signed S3 PUT URL,
+ *              persists post metadata, and publishes upload event to Kafka.
+ *
+ * @requires S3Presigner (AWS SDK v2), KafkaProducer, CassandraSession
+ *
+ * Public API:
+ *   initiateUpload(userId, caption, location) — returns UploadInitiateResponse
+ *   confirmUpload(postId, s3Key)              — marks upload complete, triggers processing
  */
-public class ImageProcessingPipeline {
+public class PhotoUploadService {
 
-    private static final List&lt;ImageVariant&gt; VARIANTS = List.of(
-        new ImageVariant("thumbnail", 150, 150, true),   // square crop
-        new ImageVariant("mobile",    720, -1, false),   // width=720, height proportional
-        new ImageVariant("full",     1080, -1, false)    // width=1080, height proportional
-    );
+    private static final String ORIGINALS_BUCKET  = "ig-photo-originals";
+    private static final String PHOTO_UPLOADS_TOPIC = "photo-uploads";
+    private static final Duration PRESIGNED_URL_TTL = Duration.ofMinutes(15);
 
-    private final S3Client s3Client;
-    private final String bucketName;
+    private final S3Presigner    s3Presigner;
+    private final KafkaProducer&lt;String, PhotoUploadEvent&gt; kafkaProducer;
+    private final PostRepository postRepository;
+    private final SnowflakeIdGenerator idGenerator;
 
-    public ImageProcessingPipeline(S3Client s3Client, String bucketName) {
-        this.s3Client = s3Client;
-        this.bucketName = bucketName;
+    public PhotoUploadService(S3Presigner s3Presigner,
+                              KafkaProducer&lt;String, PhotoUploadEvent&gt; kafkaProducer,
+                              PostRepository postRepository,
+                              SnowflakeIdGenerator idGenerator) {
+        this.s3Presigner    = s3Presigner;
+        this.kafkaProducer  = kafkaProducer;
+        this.postRepository = postRepository;
+        this.idGenerator    = idGenerator;
     }
 
     /**
-     * Entry point: download original from S3, generate all variants, upload back.
+     * Phase 1: Generate a pre-signed S3 URL so the client can upload directly.
+     * The app server never handles the binary — only this signed token.
      *
-     * @param originalS3Key e.g. "originals/user123/post456.jpg"
-     * @return list of S3 keys for each generated variant
+     * @param userId   authenticated user's ID
+     * @param caption  post caption (stored now; post visible after Phase 2)
+     * @param location optional location string
+     * @return UploadInitiateResponse containing postId and the S3 upload URL
      */
-    public List&lt;String&gt; processImage(String originalS3Key) throws IOException {
-        byte[] originalImageBytes = downloadFromS3(originalS3Key);
-        BufferedImage originalImage = ImageIO.read(new ByteArrayInputStream(originalImageBytes));
+    public UploadInitiateResponse initiateUpload(long userId, String caption, String location) {
+        long postId   = idGenerator.nextId();
+        String s3Key  = buildOriginalS3Key(userId, postId);
+        String uploadUrl = generatePresignedPutUrl(s3Key);
 
-        List&lt;String&gt; generatedKeys = new ArrayList&lt;&gt;();
-        for (ImageVariant variant : VARIANTS) {
-            BufferedImage resizedImage = resizeImage(originalImage, variant);
-            byte[] resizedBytes = encodeAsJpeg(resizedImage);
-            String variantKey = buildVariantKey(originalS3Key, variant.getName());
-            uploadToS3(variantKey, resizedBytes, "image/jpeg");
-            generatedKeys.add(variantKey);
+        postRepository.createPost(new PostDraft(postId, userId, caption, location, s3Key));
+
+        return new UploadInitiateResponse(postId, uploadUrl, Instant.now().plus(PRESIGNED_URL_TTL));
+    }
+
+    /**
+     * Phase 2: Client has finished uploading to S3 and calls to confirm.
+     * Publishes to Kafka to trigger async image processing pipeline.
+     *
+     * @param postId confirmed post ID from Phase 1
+     * @param s3Key  the key the client uploaded to (for verification)
+     */
+    public void confirmUpload(long postId, String s3Key) {
+        postRepository.updateStatus(postId, PostStatus.PROCESSING);
+
+        PhotoUploadEvent uploadEvent = new PhotoUploadEvent(postId, s3Key, Instant.now());
+        ProducerRecord&lt;String, PhotoUploadEvent&gt; record =
+            new ProducerRecord&lt;&gt;(PHOTO_UPLOADS_TOPIC, String.valueOf(postId), uploadEvent);
+
+        kafkaProducer.send(record, (metadata, exception) -&gt; {
+            if (exception != null) {
+                // Kafka publish failure: post stays in PROCESSING state.
+                // A reconciliation job retries posts stuck in PROCESSING for &gt;5 min.
+                System.err.println("[PhotoUploadService.confirmUpload] Kafka publish failed "
+                    + "for postId=" + postId + ": " + exception.getMessage());
+            }
+        });
+    }
+
+    private String generatePresignedPutUrl(String s3Key) {
+        PutObjectPresignRequest presignRequest = PutObjectPresignRequest.builder()
+            .signatureDuration(PRESIGNED_URL_TTL)
+            .putObjectRequest(builder -&gt; builder
+                .bucket(ORIGINALS_BUCKET)
+                .key(s3Key)
+                .contentType("image/jpeg")
+                .build())
+            .build();
+        return s3Presigner.presignPutObject(presignRequest).url().toString();
+    }
+
+    private String buildOriginalS3Key(long userId, long postId) {
+        // originals/{userId}/{postId}.jpg
+        return "originals/" + userId + "/" + postId + ".jpg";
+    }
+
+    public record UploadInitiateResponse(long postId, String uploadUrl, Instant expiresAt) {}
+}</code></pre>
+
+          <h3>PhotoProcessorWorker — Kafka consumer, 5-variant resize, CDN URL generation</h3>
+          <pre><code class="language-java">/**
+ * @file PhotoProcessorWorker.java
+ * @description Kafka consumer that processes uploaded photos.
+ *              Downloads original from S3, resizes to 5 variants using BufferedImage,
+ *              uploads variants back to S3, and emits post-ready event.
+ *
+ * @requires KafkaConsumer, S3Client, BufferedImage (javax.imageio)
+ *
+ * Public API:
+ *   run() — blocking Kafka poll loop; call from worker thread
+ */
+public class PhotoProcessorWorker {
+
+    // ── Constants ────────────────────────────────────────────────────────
+    private static final String ORIGINALS_BUCKET  = "ig-photo-originals";
+    private static final String PROCESSED_BUCKET  = "ig-photo-processed";
+    private static final String POST_READY_TOPIC  = "post-ready";
+    private static final String PHOTO_UPLOADS_TOPIC = "photo-uploads";
+    private static final long   POLL_TIMEOUT_MS   = 1_000;
+    private static final float  JPEG_QUALITY      = 0.85f;  // 85% quality — good balance vs size
+
+    // Five variants: name, targetWidth, squareCrop
+    private static final List&lt;PhotoVariant&gt; VARIANTS = List.of(
+        new PhotoVariant("thumbnail", 150,  true),   // square crop for grids
+        new PhotoVariant("low",       320,  false),  // 3G / data-saver preview
+        new PhotoVariant("medium",    640,  false),  // default mobile feed
+        new PhotoVariant("high",      1080, false),  // full-res mobile / web
+        new PhotoVariant("original",  -1,   false)   // archived as-is (no resize)
+    );
+
+    // ── Dependencies ─────────────────────────────────────────────────────
+    private final KafkaConsumer&lt;String, PhotoUploadEvent&gt;   kafkaConsumer;
+    private final KafkaProducer&lt;String, PostReadyEvent&gt;     kafkaProducer;
+    private final S3Client                                   s3Client;
+    private final PostRepository                             postRepository;
+    private final PostMediaRepository                        mediaRepository;
+    private volatile boolean                                 running = true;
+
+    public PhotoProcessorWorker(KafkaConsumer&lt;String, PhotoUploadEvent&gt; kafkaConsumer,
+                                KafkaProducer&lt;String, PostReadyEvent&gt; kafkaProducer,
+                                S3Client s3Client,
+                                PostRepository postRepository,
+                                PostMediaRepository mediaRepository) {
+        this.kafkaConsumer  = kafkaConsumer;
+        this.kafkaProducer  = kafkaProducer;
+        this.s3Client       = s3Client;
+        this.postRepository = postRepository;
+        this.mediaRepository = mediaRepository;
+    }
+
+    /** Blocking poll loop. Run on a dedicated thread. */
+    public void run() {
+        kafkaConsumer.subscribe(List.of(PHOTO_UPLOADS_TOPIC));
+        while (running) {
+            ConsumerRecords&lt;String, PhotoUploadEvent&gt; records =
+                kafkaConsumer.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+
+            for (ConsumerRecord&lt;String, PhotoUploadEvent&gt; record : records) {
+                processUploadEvent(record.value());
+            }
+            kafkaConsumer.commitSync();
         }
-        return generatedKeys;
     }
 
-    private BufferedImage resizeImage(BufferedImage source, ImageVariant variant) {
-        int targetWidth = variant.getWidth();
-        int targetHeight = variant.isSquareCrop()
-            ? variant.getHeight()
-            : (int) ((double) source.getHeight() / source.getWidth() * targetWidth);
+    /**
+     * Processes a single photo upload event.
+     * Downloads original, generates all variants, updates DB, publishes post-ready.
+     *
+     * @param event the upload event from Kafka
+     */
+    private void processUploadEvent(PhotoUploadEvent event) {
+        try {
+            byte[] originalBytes   = downloadFromS3(ORIGINALS_BUCKET, event.getS3Key());
+            BufferedImage original = decodeImage(originalBytes);
 
-        BufferedImage resized = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
-        Graphics2D graphics = resized.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+            List&lt;MediaVariantRecord&gt; variantRecords = new ArrayList&lt;&gt;();
+
+            for (PhotoVariant variant : VARIANTS) {
+                byte[] variantBytes = generateVariant(original, variant, originalBytes);
+                String variantKey   = buildVariantKey(event.getPostId(), variant.name());
+                uploadToS3(PROCESSED_BUCKET, variantKey, variantBytes);
+
+                String cdnUrl = buildCdnUrl(event.getPostId(), variant.name());
+                variantRecords.add(new MediaVariantRecord(
+                    event.getPostId(), variant.name(), variantKey, cdnUrl,
+                    getVariantWidth(original, variant), getVariantHeight(original, variant),
+                    variantBytes.length
+                ));
+            }
+
+            mediaRepository.saveAll(variantRecords);
+            postRepository.updateStatus(event.getPostId(), PostStatus.READY);
+            publishPostReadyEvent(event.getPostId(), event.getUserId());
+
+        } catch (IOException processingError) {
+            System.err.println("[PhotoProcessorWorker.processUploadEvent] Failed for postId="
+                + event.getPostId() + ": " + processingError.getMessage());
+            postRepository.updateStatus(event.getPostId(), PostStatus.FAILED);
+        }
+    }
+
+    /**
+     * Generates a single variant. For "original", returns the raw bytes unchanged.
+     * For all others, resizes using BilinearInterpolation (quality/speed balance).
+     *
+     * @param original    decoded source image
+     * @param variant     variant specification (name, width, squareCrop flag)
+     * @param rawBytes    original raw bytes (returned unchanged for "original" variant)
+     * @return JPEG-encoded bytes for the variant
+     */
+    private byte[] generateVariant(BufferedImage original, PhotoVariant variant,
+                                   byte[] rawBytes) throws IOException {
+        if (variant.name().equals("original")) {
+            return rawBytes;  // store original as-is, no re-encoding
+        }
+
+        int targetWidth  = variant.targetWidth();
+        int targetHeight = variant.squareCrop()
+            ? targetWidth
+            : (int) ((double) original.getHeight() / original.getWidth() * targetWidth);
+
+        BufferedImage resizedImage = new BufferedImage(
+            targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB
+        );
+        Graphics2D graphics = resizedImage.createGraphics();
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                                  RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        graphics.setRenderingHint(RenderingHints.KEY_RENDERING,
+                                  RenderingHints.VALUE_RENDER_QUALITY);
+
+        if (variant.squareCrop()) {
+            // Center-crop: take the middle square of the source before scaling
+            int cropSize = Math.min(original.getWidth(), original.getHeight());
+            int cropX    = (original.getWidth()  - cropSize) / 2;
+            int cropY    = (original.getHeight() - cropSize) / 2;
+            graphics.drawImage(original, 0, 0, targetWidth, targetHeight,
+                               cropX, cropY, cropX + cropSize, cropY + cropSize, null);
+        } else {
+            graphics.drawImage(original, 0, 0, targetWidth, targetHeight, null);
+        }
         graphics.dispose();
-        return resized;
+
+        return encodeAsJpeg(resizedImage, JPEG_QUALITY);
     }
 
-    private byte[] encodeAsJpeg(BufferedImage image) throws IOException {
+    private byte[] encodeAsJpeg(BufferedImage image, float quality) throws IOException {
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        ImageIO.write(image, "jpeg", outputStream);
+        ImageWriter jpegWriter = ImageIO.getImageWritersByFormatName("jpeg").next();
+        ImageWriteParam writeParam = jpegWriter.getDefaultWriteParam();
+        writeParam.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+        writeParam.setCompressionQuality(quality);
+        jpegWriter.setOutput(ImageIO.createImageOutputStream(outputStream));
+        jpegWriter.write(null, new IIOImage(image, null, null), writeParam);
+        jpegWriter.dispose();
         return outputStream.toByteArray();
     }
 
-    private String buildVariantKey(String originalKey, String variantName) {
-        // originals/user123/post456.jpg → processed/user123/post456_mobile.jpg
-        return originalKey.replace("originals/", "processed/")
-                          .replace(".jpg", "_" + variantName + ".jpg");
+    /**
+     * Generates CDN URL for a variant. Deterministic and immutable.
+     * Format: https://cdn.ig.com/{postId}/{variant}.jpg
+     *
+     * For private account content, a signed URL would append ?sig=&amp;exp= params.
+     * Signature is HMAC-SHA256(secret, postId + variant + expiryEpoch).
+     *
+     * @param postId    Snowflake post ID
+     * @param variantName thumbnail|low|medium|high|original
+     * @return public CDN URL string
+     */
+    private String buildCdnUrl(long postId, String variantName) {
+        return "https://cdn.ig.com/" + postId + "/" + variantName + ".jpg";
     }
 
-    private byte[] downloadFromS3(String key) {
-        return s3Client.getObjectAsBytes(builder -> builder.bucket(bucketName).key(key)).asByteArray();
+    private String buildVariantKey(long postId, String variantName) {
+        return "processed/" + postId + "/" + variantName + ".jpg";
     }
 
-    private void uploadToS3(String key, byte[] data, String contentType) {
+    private byte[] downloadFromS3(String bucket, String key) {
+        return s3Client.getObjectAsBytes(
+            builder -&gt; builder.bucket(bucket).key(key)
+        ).asByteArray();
+    }
+
+    private void uploadToS3(String bucket, String key, byte[] data) {
         s3Client.putObject(
-            builder -> builder.bucket(bucketName).key(key).contentType(contentType),
+            builder -&gt; builder.bucket(bucket).key(key).contentType("image/jpeg"),
             RequestBody.fromBytes(data)
         );
     }
 
-    private record ImageVariant(String name, int width, int height, boolean isSquareCrop) {
-        public String getName() { return name; }
-        public int getWidth() { return width; }
-        public int getHeight() { return height; }
-        public boolean isSquareCrop() { return isSquareCrop; }
+    private BufferedImage decodeImage(byte[] bytes) throws IOException {
+        BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(bytes));
+        if (decoded == null) {
+            throw new IOException("Could not decode image — unsupported format or corrupt data");
+        }
+        return decoded;
+    }
+
+    private void publishPostReadyEvent(long postId, long userId) {
+        PostReadyEvent readyEvent = new PostReadyEvent(postId, userId, Instant.now());
+        kafkaProducer.send(new ProducerRecord&lt;&gt;(POST_READY_TOPIC,
+            String.valueOf(postId), readyEvent));
+    }
+
+    private int getVariantWidth(BufferedImage original, PhotoVariant variant) {
+        return variant.name().equals("original") ? original.getWidth() : variant.targetWidth();
+    }
+
+    private int getVariantHeight(BufferedImage original, PhotoVariant variant) {
+        if (variant.name().equals("original")) return original.getHeight();
+        if (variant.squareCrop()) return variant.targetWidth();
+        return (int) ((double) original.getHeight() / original.getWidth() * variant.targetWidth());
+    }
+
+    public void stop() { running = false; }
+
+    /** Value record for a photo variant specification */
+    private record PhotoVariant(String name, int targetWidth, boolean squareCrop) {}
+}</code></pre>
+
+          <h3>FanoutService — Hybrid push/pull routing</h3>
+          <pre><code class="language-java">/**
+ * @file FanoutService.java
+ * @description Consumes post-ready events and distributes posts to follower feed caches.
+ *              Implements the hybrid fanout strategy: write-fanout for normal users,
+ *              skip for celebrities (handled at read time by FeedService).
+ *
+ * @requires KafkaConsumer, FollowerRepository, FeedCacheRepository, UserRepository
+ *
+ * Public API:
+ *   run() — blocking Kafka consumer loop
+ */
+public class FanoutService {
+
+    // ── Constants ─────────────────────────────────────────────────────────
+    private static final int  CELEBRITY_FOLLOWER_THRESHOLD = 1_000_000;
+    private static final int  INACTIVE_USER_DAYS           = 30;
+    private static final int  MAX_FEED_SIZE                = 300;   // trim Redis sorted set to this
+    private static final int  FANOUT_BATCH_SIZE            = 1_000; // process followers in batches
+
+    // ── Dependencies ─────────────────────────────────────────────────────
+    private final KafkaConsumer&lt;String, PostReadyEvent&gt; kafkaConsumer;
+    private final FollowerRepository                     followerRepository;
+    private final FeedCacheRepository                    feedCacheRepository;
+    private final UserRepository                         userRepository;
+
+    public FanoutService(KafkaConsumer&lt;String, PostReadyEvent&gt; kafkaConsumer,
+                         FollowerRepository followerRepository,
+                         FeedCacheRepository feedCacheRepository,
+                         UserRepository userRepository) {
+        this.kafkaConsumer       = kafkaConsumer;
+        this.followerRepository  = followerRepository;
+        this.feedCacheRepository = feedCacheRepository;
+        this.userRepository      = userRepository;
+    }
+
+    public void run() {
+        kafkaConsumer.subscribe(List.of("post-ready"));
+        while (true) {
+            ConsumerRecords&lt;String, PostReadyEvent&gt; records =
+                kafkaConsumer.poll(Duration.ofSeconds(1));
+            for (ConsumerRecord&lt;String, PostReadyEvent&gt; record : records) {
+                handlePostReadyEvent(record.value());
+            }
+            kafkaConsumer.commitSync();
+        }
+    }
+
+    /**
+     * Routes a new post through the appropriate fanout strategy.
+     * Celebrity accounts bypass write-fanout entirely to avoid write amplification.
+     *
+     * @param event post-ready event from Kafka
+     */
+    private void handlePostReadyEvent(PostReadyEvent event) {
+        UserProfile poster = userRepository.getById(event.getUserId());
+
+        if (poster.isCelebrity()) {
+            // Celebrity bypass: no write-fanout.
+            // FeedService will fetch their latest posts at read time via Cassandra.
+            return;
+        }
+
+        distributeToActiveFollowers(event.getPostId(), event.getUserId(),
+                                    event.getCreatedAt().toEpochMilli());
+    }
+
+    /**
+     * Iterates follower list in batches, skipping inactive users, and writes post_id
+     * into each active follower's Redis feed sorted set.
+     *
+     * @param postId        the post to distribute
+     * @param posterId      user who created the post
+     * @param scoreEpochMs  Unix timestamp ms — used as sorted set score for ordering
+     */
+    private void distributeToActiveFollowers(long postId, long posterId, long scoreEpochMs) {
+        String paginationCursor = null;
+        Instant inactiveCutoff  = Instant.now().minus(INACTIVE_USER_DAYS, ChronoUnit.DAYS);
+
+        do {
+            FollowerPage followerPage =
+                followerRepository.getFollowers(posterId, FANOUT_BATCH_SIZE, paginationCursor);
+
+            for (long followerId : followerPage.followerIds()) {
+                UserProfile follower = userRepository.getById(followerId);
+                if (follower.getLastActiveAt().isBefore(inactiveCutoff)) {
+                    continue;  // skip inactive users — save Redis writes
+                }
+                feedCacheRepository.addToFeed(followerId, postId, scoreEpochMs);
+                feedCacheRepository.trimFeed(followerId, MAX_FEED_SIZE);
+            }
+
+            paginationCursor = followerPage.nextCursor();
+        } while (paginationCursor != null);
+    }
+}</code></pre>
+
+          <h3>FeedCacheRepository — Redis sorted set operations</h3>
+          <pre><code class="language-java">/**
+ * @file FeedCacheRepository.java
+ * @description Redis-backed feed cache using sorted sets.
+ *              Score = post creation timestamp (epoch ms) for ordering.
+ *
+ * @requires Jedis or Lettuce Redis client
+ *
+ * Public API:
+ *   addToFeed(userId, postId, scoreEpochMs) — add post to user's feed sorted set
+ *   trimFeed(userId, maxSize)               — keep only the most recent N posts
+ *   getFeedPage(userId, beforeScore, limit) — paginated feed read
+ */
+public class FeedCacheRepository {
+
+    private static final String FEED_KEY_PREFIX = "feed:";
+    private static final int    FEED_TTL_DAYS   = 7;
+
+    private final JedisPool jedisPool;
+
+    public FeedCacheRepository(JedisPool jedisPool) {
+        this.jedisPool = jedisPool;
+    }
+
+    /**
+     * Adds a post to the user's feed sorted set.
+     * Score is the post's creation timestamp in epoch milliseconds — ensures ordering.
+     *
+     * @param userId       recipient user
+     * @param postId       Snowflake post ID to add
+     * @param scoreEpochMs post creation time (used as sort score)
+     */
+    public void addToFeed(long userId, long postId, long scoreEpochMs) {
+        String feedKey = FEED_KEY_PREFIX + userId;
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.zadd(feedKey, (double) scoreEpochMs, String.valueOf(postId));
+            // Refresh TTL on every write so active users never have their cache expire
+            jedis.expire(feedKey, (long) FEED_TTL_DAYS * 24 * 3600);
+        }
+    }
+
+    /**
+     * Trims the feed sorted set to maxSize entries, removing the oldest posts.
+     * Prevents unbounded memory growth — a user following 1000 active accounts
+     * would accumulate thousands of posts without this trim.
+     *
+     * @param userId  user whose feed to trim
+     * @param maxSize maximum number of entries to retain
+     */
+    public void trimFeed(long userId, int maxSize) {
+        String feedKey = FEED_KEY_PREFIX + userId;
+        try (Jedis jedis = jedisPool.getResource()) {
+            // ZREMRANGEBYRANK removes by rank (0 = lowest score = oldest)
+            // Keeps elements from rank (-(maxSize)) to -1 (newest maxSize entries)
+            long currentSize = jedis.zcard(feedKey);
+            if (currentSize &gt; maxSize) {
+                jedis.zremrangeByRank(feedKey, 0, currentSize - maxSize - 1);
+            }
+        }
+    }
+
+    /**
+     * Returns paginated post IDs for the user's feed, ordered newest-first.
+     * Uses cursor-based pagination via score: "posts with score &lt; beforeScore".
+     *
+     * @param userId       user requesting their feed
+     * @param beforeScore  epoch ms cursor (posts older than this); Long.MAX_VALUE for first page
+     * @param limit        number of posts to return (typically 20)
+     * @return list of post IDs ordered newest-first
+     */
+    public List&lt;Long&gt; getFeedPage(long userId, long beforeScore, int limit) {
+        String feedKey = FEED_KEY_PREFIX + userId;
+        try (Jedis jedis = jedisPool.getResource()) {
+            // ZREVRANGEBYSCORE: newest first, exclude the cursor score itself (&lt; not &lt;=)
+            Set&lt;String&gt; postIdStrings = jedis.zrevrangeByScore(
+                feedKey,
+                "(" + beforeScore,  // exclusive upper bound
+                "-inf",
+                0, limit
+            );
+            return postIdStrings.stream()
+                .map(Long::parseLong)
+                .collect(Collectors.toList());
+        }
     }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- QUIZ                                                       -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
         <div class="quiz" data-quiz-id="p-instagram-quiz" role="region" aria-label="Problem quiz">
           <div class="quiz__header">
             <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Why does Instagram use pre-signed S3 URLs for photo uploads instead of routing uploads through app servers?" data-options='["App servers cannot handle binary data","Pre-signed URLs allow direct client-to-S3 upload, bypassing app servers entirely — reducing latency and eliminating app servers as upload bottleneck","S3 requires pre-signed URLs; there is no alternative","Pre-signed URLs provide stronger encryption than app server proxies"]' data-correct="1" data-explanation="Pre-signed URLs are a signed token that grants the client temporary permission to upload directly to S3. The app server never sees the binary data — it only generates the token. This eliminates app server CPU/bandwidth as a bottleneck for large file uploads." style="display:none"></div>
-          <div data-question="Why is image processing done asynchronously via a queue rather than synchronously during upload?" data-options='["S3 cannot process images synchronously","Resizing images takes 100ms–2s per image. Doing this synchronously would block the upload API response and degrade user experience","Asynchronous processing is required for GDPR compliance","Queue-based processing allows lower AWS costs"]' data-correct="1" data-explanation="Image processing is CPU-intensive and variable-latency. By returning 201 Created immediately and processing via SQS, the upload API is fast and resilient — even if the processing service is slow or temporarily down, uploads still succeed and process when capacity is available." style="display:none"></div>
-          <div data-question="What is the 'celebrity problem' in Instagram's feed system, and how is it solved?" data-options='["Celebrities post too frequently and flood the database","Fanout-on-write for a user with 400M followers would require 400M Redis writes per post — solved by using fanout-on-read (pull) for accounts above a follower threshold","Celebrities require blue checkmarks which require a separate database table","High-profile accounts have higher read QPS so they need separate CDN nodes"]' data-correct="1" data-explanation="For normal users (500 followers), fanout-on-write is fine. For celebrities (millions of followers), writing to every follower's feed on every post creates write amplification that can't scale. The hybrid approach: push for normal users, pull (merge at feed-read time) for accounts above ~1M followers." style="display:none"></div>
-          <div data-question="Why is CDN TTL set to 1 year (immutable) for Instagram photos?" data-options='["Instagram photos are frequently updated so long TTLs ensure freshness","Photos are immutable — once uploaded they never change. Long TTLs maximize CDN hit rate and minimize origin load. Deleted photos use URL revocation not cache invalidation","A 1-year TTL is the HTTP standard for media files","Long TTLs are required for HTTPS certificates"]' data-correct="1" data-explanation="Immutable content (photos that are never edited) is a perfect fit for max-age TTLs. A CDN hit rate of 99%+ keeps origin load minimal. If content must be 'deleted', the URL is deactivated at the application layer — the CDN key becomes unreachable, not invalidated." style="display:none"></div>
+
+          <div data-question="Kylie Jenner has 380M followers. Why does fanout-on-write fail for celebrity accounts, and what does the hybrid approach do differently?"
+               data-options='["Celebrity accounts have a special VIP cache that bypasses Redis entirely","Fanout-on-write would require 380M Redis writes per post, taking ~63 minutes at 100K writes/sec. The hybrid approach skips write-fanout for celebrities and instead fetches their latest posts from Cassandra at feed-read time, merging with the user pre-built Redis cache","Celebrities use a separate data center so writes are asynchronous by default","Write-fanout works fine for celebrities — the celebrity problem only applies to read fanout"]'
+               data-correct="1"
+               data-explanation="At 100K Redis writes/sec, 380M writes = 63 minutes of lag before all followers' feeds are updated. This violates the near-real-time expectation. The hybrid fix: skip write-fanout for accounts above ~1M followers. At feed read time, FeedService detects the user follows celebrities, fetches their latest posts from Cassandra (cheap — just their user partition), and merges them with the pre-built Redis feed cache in memory."
+               style="display:none"></div>
+
+          <div data-question="Why does Instagram use a two-step upload process (pre-signed URL + confirm) instead of routing photo bytes through the app server?"
+               data-options='["S3 requires pre-signed URLs — there is no way to upload without them","Pre-signed URLs allow the client to upload binary data directly to S3, bypassing app servers entirely. App servers never handle the bytes, eliminating them as a bandwidth and CPU bottleneck for large file uploads","Pre-signed URLs provide stronger encryption than HTTPS proxies","App servers cannot handle multipart/form-data"]'
+               data-correct="1"
+               data-explanation="At 1,160 uploads/sec × 5MB avg = 5.8 GB/sec of upload bandwidth. If all that traffic routed through app servers, you would need massive server fleets just for proxying. Pre-signed URLs let clients upload directly to S3. The app server only generates a 200-byte token — not the binary. This pattern also makes app servers horizontally scalable without worrying about upload bandwidth."
+               style="display:none"></div>
+
+          <div data-question="Instagram stores Stories in Redis sorted sets with TTL scores rather than in Cassandra like Posts. What is the architectural reason for this difference?"
+               data-options='["Redis is faster than Cassandra for all use cases — Stories just exposed this","Stories are ephemeral (24h TTL) and their primary access pattern is the Story Tray fetch (ZRANGEBYSCORE to get non-expired stories). Redis sorted set scores as expiry timestamps enable O(log N) TTL-based queries natively. Cassandra requires explicit TTL columns and separate cleanup jobs — more operational overhead for content that is gone in 24 hours","Instagram runs Redis on the same hardware as Cassandra to save cost","Redis sorted sets support full-text search which Cassandra does not"]'
+               data-correct="1"
+               data-explanation="Redis sorted set with expiry-timestamp as score makes story tray fetch a single ZRANGEBYSCORE(userId, now, +inf) call — natively returns only non-expired stories in O(log N + M). In Cassandra you'd need a TTL column plus a scheduled cleanup job plus application-level filtering. For content that expires in 24h and needs fast tray assembly, Redis is architecturally correct. Cassandra's strengths (durability, large partition storage) are overkill for ephemeral content."
+               style="display:none"></div>
+
+          <div data-question="What is perceptual hashing (pHash) and why does Instagram use it at upload time instead of a standard cryptographic hash like SHA-256?"
+               data-options='["pHash is faster to compute than SHA-256 — that is the only reason","SHA-256 changes completely with one pixel difference. pHash produces similar hash values for visually similar images — a cropped, compressed, or lightly edited version of the same photo has a pHash Hamming distance under 10. This catches spam reposts that are slightly modified to evade exact-match dedup","pHash complies with GDPR requirements that SHA-256 does not satisfy","pHash provides stronger collision resistance for the 64-bit hash space"]'
+               data-correct="1"
+               data-explanation="SHA-256 is a cryptographic hash — even a 1-pixel change produces a completely different hash. pHash uses DCT (Discrete Cosine Transform) on a downscaled grayscale image to extract low-frequency visual features, producing a 64-bit hash where similar images have small Hamming distances. A cropped screenshot and the original photo will have pHash Hamming distance under 10, but SHA-256 hashes that differ by all 256 bits. Instagram uses pHash to detect and warn about near-duplicate reposts, which SHA-256 would completely miss."
+               style="display:none"></div>
+
+          <div data-question="The Explore tab uses FAISS (Facebook AI Similarity Search) for ANN (Approximate Nearest Neighbor) search over post embeddings. Why approximate — why not exact nearest neighbor search?"
+               data-options='["FAISS cannot do exact search — it only supports approximate methods","Exact nearest neighbor search (brute-force cosine similarity) over 50B posts would require scanning all 50B vectors per query — at 128 dimensions and 4 bytes per float that is 25.6 TB of data per query. ANN search trades a small accuracy loss (missing ~5-10% of truly closest posts) for sub-millisecond retrieval by using index structures (IVF, HNSW) that partition the vector space and skip irrelevant regions","Exact search requires more GPU memory than ANN search","ANN is only used for video embeddings — photo embeddings use exact search"]'
+               data-correct="1"
+               data-explanation="Exact k-NN over 50 billion posts requires O(N×D) operations per query where D=128 dimensions. At 50B posts, that's 50B × 128 = 6.4 trillion floating-point operations — milliseconds per query on GPU but completely infeasible at 115K queries/sec. FAISS IVF (Inverted File Index) partitions the vector space into clusters, searching only the top-K most relevant clusters per query. This reduces the search space from 50B to ~50K vectors, achieving sub-millisecond retrieval with ~95% recall — the 5% miss rate is imperceptible in a recommendation context."
+               style="display:none"></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

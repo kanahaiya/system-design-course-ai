@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Design Ad Click Aggregator — RESHADED walkthrough covering click ingestion, stream processing with Kafka and Flink, windowed aggregation, and deduplication for MAANG interviews.">
+  <meta name="description" content="Design Ad Click Aggregator — L6-depth RESHADED walkthrough: exactly-once semantics, Flink windowed aggregation, Kafka transactions, Lambda vs Kappa, ClickHouse vs Druid, click fraud detection.">
   <title>Design Ad Click Aggregator — MAANG System Design</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -64,250 +64,1404 @@
           <span class="tag tag--blue">Tier 2 — Should Know</span>
           <span class="tag">45 min</span>
           <span class="tag">Stream processing</span>
+          <span class="tag">Exactly-once</span>
         </div>
         <h1 class="module-header__title">Design Ad Click Aggregator</h1>
-        <p class="module-header__desc">Ad systems generate billions of click events daily. You can't store raw clicks forever — you aggregate them. The key tradeoff: stream processing (fast but approximate) vs batch (accurate but slow). Click fraud requires deduplication at scale.</p>
+        <p class="module-header__desc">Ad systems generate 10 billion click events daily. The hard part is not counting clicks — it is counting them <em>exactly once</em>. Billing accuracy requires exactly-once semantics. Fraud prevention requires real-time deduplication. Reporting latency must be under 1 minute. This is why Kafka transactions, Flink checkpoints, and Lambda architecture exist.</p>
         <div class="module-header__meta">
-          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Meta, Twitter</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">🏢</span> Google, Meta, Twitter, Amazon</div>
           <div class="module-header__meta-item"><span aria-hidden="true">⏱️</span> 45 min interview</div>
-          <div class="module-header__meta-item"><span aria-hidden="true">📊</span> 10B clicks/day</div>
+          <div class="module-header__meta-item"><span aria-hidden="true">📊</span> 10B clicks/day, 115K/sec</div>
         </div>
       </header>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           R — REQUIREMENTS
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="requirements" aria-labelledby="req-title">
-        <h2 class="content-section__title" id="req-title"><span class="content-section__title-icon">❓</span>R — Requirements<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="req-title">
+          <span class="content-section__title-icon" aria-hidden="true">❓</span>
+          R — Requirements
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <div class="insight-box insight-box--danger">
+            <div class="insight-box__icon" aria-hidden="true">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">L6 Opening Move — Clarify the Billing Constraint Immediately</div>
+              <div class="insight-box__text">Before designing anything, ask: "Are these click counts used for billing advertisers?" If yes, the entire architecture shifts. An approximate count (Bloom filter, HyperLogLog) is not acceptable for financial reporting. You need exactly-once semantics — and that forces specific choices in Kafka, Flink, and your reconciliation layer. Most candidates never ask this. Asking it signals senior engineering judgment.</div>
+            </div>
+          </div>
+
           <h3>Functional Requirements</h3>
           <ul>
-            <li>Ingest click events: {ad_id, user_id, timestamp, ip_address, device}</li>
-            <li>Aggregate click counts per ad per time window (1-min, 1-hour, 1-day)</li>
-            <li>Query API: "how many clicks did ad X get in the last 5 minutes?"</li>
-            <li>Click deduplication: same user clicking same ad within 5 minutes = 1 click</li>
-            <li>Top-N ads by click count in time window</li>
+            <li>Ingest click events from ad servers: <code>{click_id, ad_id, campaign_id, user_id, timestamp, ip_address, user_agent, page_url, device_type}</code></li>
+            <li>Deduplicate clicks: same <code>click_id</code> arriving multiple times (Kafka at-least-once) must be counted exactly once</li>
+            <li>Deduplicate fraudulent double-clicks: same <code>(user_id, ad_id)</code> within a 5-minute window counts as one click</li>
+            <li>Aggregate click counts per ad per time window: 1-minute, 1-hour, 1-day granularity</li>
+            <li>Query API: "how many clicks did ad X get between 14:00 and 15:00?"</li>
+            <li>Top-N ads by click count in a given time window</li>
+            <li>Real-time fraud detection: flag ads with abnormal click rates (bot traffic)</li>
+            <li>Billing report: exact click counts per campaign per day (used to charge advertisers)</li>
           </ul>
+
           <h3>Non-Functional Requirements</h3>
           <ul>
-            <li><strong>Scale:</strong> 10B clicks/day = ~115K clicks/sec average; peak 500K/sec</li>
-            <li><strong>Latency:</strong> Aggregations available within 1 minute of click (near-real-time)</li>
-            <li><strong>Accuracy:</strong> &lt;1% error in click counts acceptable; billing reports need exact counts (batch)</li>
+            <li><strong>Scale:</strong> 10B clicks/day = ~115K clicks/sec average; 500K/sec peak (during Black Friday, viral campaigns)</li>
+            <li><strong>Impressions:</strong> 100B impressions/day (click-through rate ~10%); 1M active ad campaigns</li>
+            <li><strong>Reporting latency:</strong> Aggregations visible within &lt;1 minute of click event (near-real-time dashboard)</li>
+            <li><strong>Billing accuracy:</strong> Exact counts — zero tolerance for over-billing or under-billing advertisers</li>
+            <li><strong>Availability:</strong> Click ingestion at 99.99% (missing clicks = lost revenue); reporting at 99.9%</li>
+            <li><strong>Durability:</strong> No click event may be permanently lost — Kafka retention 7 days, archive to S3 forever</li>
+            <li><strong>Fraud tolerance:</strong> Bot detection must run in &lt;5 seconds of click arrival to block invalid clicks in near-real-time</li>
+          </ul>
+
+          <h3>Out of Scope</h3>
+          <ul>
+            <li>Ad serving and targeting (which ad to show)</li>
+            <li>Impression tracking (separate pipeline, similar design)</li>
+            <li>User identity resolution (cross-device tracking)</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           E — ESTIMATION
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="estimation" aria-labelledby="est-title">
-        <h2 class="content-section__title" id="est-title"><span class="content-section__title-icon">🔢</span>E — Estimation<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="est-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔢</span>
+          E — Estimation
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Throughput</h3>
           <ul>
-            <li>10B clicks/day × 100 bytes/click = 1TB/day raw click data → too expensive to store long-term</li>
-            <li>Aggregate to 1-min buckets: 10M ads × 1440 min/day × 8 bytes = 115GB/day (100× smaller)</li>
-            <li>Kafka: 115K events/sec across 100 partitions = 1,150 events/sec/partition → manageable</li>
-            <li>Dedup window: 5 min × 115K clicks/sec = 34M in-flight dedup checks → Bloom filter in Redis: 34M bits = 4MB</li>
+            <li><strong>Click events:</strong> 10B/day ÷ 86,400 sec = <strong>~115K clicks/sec average</strong></li>
+            <li><strong>Peak:</strong> 4× average = <strong>~500K clicks/sec</strong> (holiday sales, viral events)</li>
+            <li><strong>Kafka partitions needed:</strong> 500K clicks/sec ÷ 5K events/sec/partition = <strong>100 partitions</strong></li>
+          </ul>
+
+          <h3>Storage</h3>
+          <ul>
+            <li><strong>Raw click events (Kafka, 7-day retention):</strong> 10B/day × 200 bytes/click = 2TB/day raw → 14TB in Kafka ring. Compressed ~5×: 2.8TB in Kafka.</li>
+            <li><strong>Raw archive (S3, forever):</strong> 2TB/day × 365 = 730TB/year. Use Parquet + Snappy: 200GB/day. Cost: ~$5/TB/month on S3 → ~$1K/month at steady state.</li>
+            <li><strong>Aggregated counts (ClickHouse):</strong> 1M ads × 1,440 min/day × 16 bytes/row = <strong>~23GB/day</strong>. 365 days = 8TB/year. With compression (5×): 1.6TB/year — trivial to store.</li>
+            <li><strong>Dedup index (Redis):</strong> Per-click dedup: 10B click_ids/day at 36 bytes UUID = 360GB if stored naively. We use a Bloom filter: 10B elements at 0.01% false positive = ~20GB Bloom filter per day window. Far too large — we use 5-minute windows instead (see Deep Dive).</li>
+          </ul>
+
+          <h3>Deduplication Window Math</h3>
+          <ul>
+            <li><strong>5-minute dedup window:</strong> 115K clicks/sec × 300 sec = <strong>34.5M unique click events in-flight</strong></li>
+            <li><strong>Bloom filter (0.1% FP):</strong> 34.5M elements → m = -n×ln(p)/ln(2)² = ~470M bits = <strong>~59MB per 5-min window</strong></li>
+            <li><strong>Redis SET (exact):</strong> 34.5M keys × 64 bytes = 2.2GB RAM. Bloom filter is <strong>37× more memory-efficient</strong> at the cost of 0.1% false positive rate.</li>
+            <li><strong>Flink checkpoint state per operator:</strong> ~100MB per task manager node (state = in-progress window counts + dedup filters).</li>
+          </ul>
+
+          <h3>Bandwidth</h3>
+          <ul>
+            <li>Ingest API: 500K clicks/sec × 200 bytes = <strong>100MB/sec inbound</strong> → needs 1Gbps NIC on load balancers</li>
+            <li>Kafka replication (3× factor): 100MB/sec × 3 = 300MB/sec internal cluster traffic</li>
+            <li>ClickHouse query layer: p99 query scans 1M rows → 16MB → &lt;50ms response with columnar storage</li>
           </ul>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           S — SCHEMA
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="schema" aria-labelledby="schema-title">
-        <h2 class="content-section__title" id="schema-title"><span class="content-section__title-icon">🗄️</span>S — Schema<span class="reshaded-step__letter">3–5 min</span></h2>
+        <h2 class="content-section__title" id="schema-title">
+          <span class="content-section__title-icon" aria-hidden="true">🗄️</span>
+          S — Schema
+          <span class="reshaded-step__letter">3–5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">// Raw click events (Kafka — ephemeral, 7-day retention)
-// Also archived to S3 for batch reprocessing
-click_event: { click_id: UUID, ad_id, user_id, ip, device, timestamp, page_url }
 
-// Aggregated counts (ClickHouse / TimeSeries DB)
-// Partition by ad_id; cluster by window_start for time-range queries
-ad_click_agg:
-    ad_id          UUID,
-    window_start   TIMESTAMP,  -- truncated to minute
-    window_end     TIMESTAMP,
-    click_count    BIGINT,
-    unique_users   BIGINT,     -- HyperLogLog approximation
-    PRIMARY KEY (ad_id, window_start)
+          <h3>Kafka Topic: <code>ad-clicks-raw</code></h3>
+          <pre><code class="language-java">// Partition key: ad_id (ensures all clicks for the same ad go to the same partition
+// → enables stateful per-ad aggregation in Flink without cross-partition coordination)
+//
+// Schema (Avro with Schema Registry — enables schema evolution without breaking consumers):
+{
+  "type": "record",
+  "name": "ClickEvent",
+  "fields": [
+    { "name": "click_id",    "type": "string"  },  // UUID v4 — dedup key
+    { "name": "ad_id",       "type": "string"  },  // FK to ad catalog
+    { "name": "campaign_id", "type": "string"  },  // FK to campaign (billing unit)
+    { "name": "user_id",     "type": "string"  },  // hashed (GDPR-compliant)
+    { "name": "event_time",  "type": "long"    },  // epoch millis — event time (not ingestion time)
+    { "name": "ip_address",  "type": "string"  },  // for fraud detection
+    { "name": "user_agent",  "type": "string"  },  // for bot detection
+    { "name": "page_url",    "type": "string"  },  // where the ad was shown
+    { "name": "device_type", "type": "string"  },  // mobile | desktop | tablet
+    { "name": "country",     "type": "string"  }   // geo-based billing rates
+  ]
+}</code></pre>
 
-// Top-N cache (Redis Sorted Set)
-// Key: top_ads:{window_minute}  Score: click_count  Member: ad_id
-// TTL: 2 hours (only recent top-N matters)</code></pre>
+          <h3>ClickHouse: <code>ad_click_aggregations</code></h3>
+          <pre><code class="language-sql">-- ReplicatedSummingMergeTree: automatically sums click_count on merge.
+-- Enables idempotent upserts: Flink can write the same window row twice
+-- (after crash recovery) and ClickHouse will sum correctly.
+CREATE TABLE ad_click_aggregations (
+    ad_id          String,
+    campaign_id    String,
+    window_start   DateTime,          -- truncated to minute
+    window_end     DateTime,
+    click_count    UInt64,
+    unique_users   UInt64,            -- HyperLogLog approximation (±2%)
+    device_mobile  UInt64,            -- breakdown by device
+    device_desktop UInt64,
+    country_top5   String,            -- JSON: top 5 countries by click
+    is_reconciled  UInt8 DEFAULT 0    -- 0=stream estimate, 1=batch-verified
+) ENGINE = ReplicatedSummingMergeTree('/clickhouse/tables/{shard}/ad_click_agg', '{replica}')
+PARTITION BY toYYYYMM(window_start)   -- monthly partitions for TTL management
+ORDER BY (ad_id, window_start)        -- cluster key: all windows for one ad are contiguous
+TTL window_start + INTERVAL 2 YEAR;  -- auto-delete data older than 2 years</code></pre>
+
+          <h3>Redis: Top-N Cache</h3>
+          <pre><code class="language-java">// Sorted Set per time window:
+// Key:   "top_ads:2024-01-15T14:00"
+// Score: click_count (updated by Flink every 30 seconds)
+// Member: ad_id
+// TTL:   2 hours (only recent top-N matters)
+//
+// Flink writes:  ZADD top_ads:{window_key} {click_count} {ad_id}
+// API reads:     ZREVRANGEBYSCORE top_ads:{window_key} +inf -inf LIMIT 0 10
+//
+// Dedup state (per 5-minute window):
+// Key:   "dedup:{window_5min_bucket}"
+// Type:  Redis Bloom filter (RedisBloom module) — probabilistic, 59MB per window
+// TTL:   6 minutes (1 min buffer past window close)
+// Command: BF.ADD dedup:{bucket} {click_id}    → 1 (new) | 0 (duplicate)
+//          BF.EXISTS dedup:{bucket} {click_id} → 1 (possibly seen) | 0 (definitely new)</code></pre>
+
+          <h3>PostgreSQL: Campaign / Billing Metadata</h3>
+          <pre><code class="language-sql">-- Source of truth for campaign budgets and billing.
+-- Read-heavy; write-once when campaign is created.
+CREATE TABLE campaigns (
+    campaign_id   UUID PRIMARY KEY,
+    advertiser_id UUID NOT NULL,
+    budget_cents  BIGINT NOT NULL,        -- total campaign budget
+    cpc_cents     INT NOT NULL,           -- cost per click in cents
+    start_date    DATE NOT NULL,
+    end_date      DATE,
+    status        VARCHAR(20) DEFAULT 'active'
+);
+
+-- Billing records: written by nightly batch job (exact counts from S3)
+CREATE TABLE billing_records (
+    billing_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id   UUID REFERENCES campaigns(campaign_id),
+    billing_date  DATE NOT NULL,
+    click_count   BIGINT NOT NULL,        -- exact count from batch reconciliation
+    charge_cents  BIGINT NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (campaign_id, billing_date)
+);</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           H — HIGH-LEVEL DESIGN
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="hld" aria-labelledby="hld-title">
-        <h2 class="content-section__title" id="hld-title"><span class="content-section__title-icon">🏗️</span>H — High-level Design<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="hld-title">
+          <span class="content-section__title-icon" aria-hidden="true">🏗️</span>
+          H — High-level Design
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
+
+          <h3>Full Pipeline Architecture</h3>
+
+          <!-- SVG Pipeline Diagram -->
+          <div style="background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;overflow-x:auto;">
+            <svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ad Click Aggregation Pipeline: Ad Server to Kafka to Flink to ClickHouse to Reporting API to Dashboard" style="width:100%;max-width:920px;display:block;margin:0 auto;font-family:Inter,sans-serif;">
+              <defs>
+                <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#6366f1"/>
+                </marker>
+                <marker id="arrowhead-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+                </marker>
+                <marker id="arrowhead-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#22c55e"/>
+                </marker>
+              </defs>
+
+              <!-- Row 1: Main pipeline -->
+              <!-- Ad Server -->
+              <rect x="10" y="40" width="120" height="70" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="70" y="68" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">Ad Server</text>
+              <text x="70" y="84" text-anchor="middle" fill="#6366f1" font-size="9">POST /v1/clicks</text>
+              <text x="70" y="98" text-anchor="middle" fill="#6366f1" font-size="9">115K req/sec</text>
+
+              <!-- Arrow Ad Server → Kafka -->
+              <line x1="130" y1="75" x2="168" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <text x="149" y="68" text-anchor="middle" fill="#94a3b8" font-size="8">Avro</text>
+
+              <!-- Kafka -->
+              <rect x="170" y="30" width="130" height="90" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="235" y="58" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">Kafka</text>
+              <text x="235" y="74" text-anchor="middle" fill="#6366f1" font-size="9">ad-clicks-raw</text>
+              <text x="235" y="89" text-anchor="middle" fill="#6366f1" font-size="9">100 partitions</text>
+              <text x="235" y="104" text-anchor="middle" fill="#6366f1" font-size="9">key=ad_id</text>
+
+              <!-- Arrow Kafka → Flink -->
+              <line x1="300" y1="75" x2="338" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <text x="319" y="68" text-anchor="middle" fill="#94a3b8" font-size="8">consume</text>
+
+              <!-- Flink -->
+              <rect x="340" y="30" width="140" height="90" rx="8" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+              <text x="410" y="55" text-anchor="middle" fill="#86efac" font-size="11" font-weight="600">Flink</text>
+              <text x="410" y="71" text-anchor="middle" fill="#22c55e" font-size="9">Dedup (Bloom)</text>
+              <text x="410" y="86" text-anchor="middle" fill="#22c55e" font-size="9">1-min tumbling</text>
+              <text x="410" y="101" text-anchor="middle" fill="#22c55e" font-size="9">keyBy(adId)</text>
+
+              <!-- Arrow Flink → ClickHouse -->
+              <line x1="480" y1="75" x2="518" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <text x="499" y="68" text-anchor="middle" fill="#94a3b8" font-size="8">upsert</text>
+
+              <!-- ClickHouse -->
+              <rect x="520" y="30" width="130" height="90" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="585" y="55" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">ClickHouse</text>
+              <text x="585" y="71" text-anchor="middle" fill="#6366f1" font-size="9">Aggregated counts</text>
+              <text x="585" y="86" text-anchor="middle" fill="#6366f1" font-size="9">Columnar OLAP</text>
+              <text x="585" y="101" text-anchor="middle" fill="#6366f1" font-size="9">23GB/day</text>
+
+              <!-- Arrow ClickHouse → Reporting API -->
+              <line x1="650" y1="75" x2="688" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+              <text x="669" y="68" text-anchor="middle" fill="#94a3b8" font-size="8">SQL</text>
+
+              <!-- Reporting API -->
+              <rect x="690" y="30" width="120" height="90" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="750" y="55" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">Reporting</text>
+              <text x="750" y="69" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">API</text>
+              <text x="750" y="86" text-anchor="middle" fill="#6366f1" font-size="9">GET /clicks</text>
+              <text x="750" y="101" text-anchor="middle" fill="#6366f1" font-size="9">REST + GraphQL</text>
+
+              <!-- Arrow Reporting API → Dashboard -->
+              <line x1="810" y1="75" x2="848" y2="75" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+              <!-- Dashboard -->
+              <rect x="850" y="40" width="60" height="70" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+              <text x="880" y="68" text-anchor="middle" fill="#a5b4fc" font-size="10" font-weight="600">Dash</text>
+              <text x="880" y="83" text-anchor="middle" fill="#6366f1" font-size="9">board</text>
+
+              <!-- Row 2: Redis dedup side-channel -->
+              <!-- Arrow Flink → Redis (dedup check) -->
+              <line x1="410" y1="120" x2="410" y2="165" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="4,3"/>
+              <text x="430" y="148" fill="#fbbf24" font-size="8">BF.EXISTS</text>
+
+              <!-- Redis -->
+              <rect x="340" y="167" width="140" height="60" rx="8" fill="#3b1f00" stroke="#fbbf24" stroke-width="1.5"/>
+              <text x="410" y="190" text-anchor="middle" fill="#fde68a" font-size="11" font-weight="600">Redis</text>
+              <text x="410" y="206" text-anchor="middle" fill="#fbbf24" font-size="9">Bloom filter dedup</text>
+              <text x="410" y="220" text-anchor="middle" fill="#fbbf24" font-size="9">Top-N sorted sets</text>
+
+              <!-- Row 3: Batch path -->
+              <!-- Arrow Kafka → S3 (archive) -->
+              <line x1="235" y1="120" x2="235" y2="215" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4,3"/>
+              <text x="170" y="165" fill="#94a3b8" font-size="8">archive</text>
+              <text x="170" y="176" fill="#94a3b8" font-size="8">(Kafka→S3</text>
+              <text x="170" y="187" fill="#94a3b8" font-size="8">connector)</text>
+
+              <!-- S3 -->
+              <rect x="160" y="217" width="150" height="60" rx="8" fill="#1c1917" stroke="#94a3b8" stroke-width="1.5"/>
+              <text x="235" y="242" text-anchor="middle" fill="#d1d5db" font-size="11" font-weight="600">S3 / Data Lake</text>
+              <text x="235" y="258" text-anchor="middle" fill="#94a3b8" font-size="9">Parquet + Snappy</text>
+              <text x="235" y="273" text-anchor="middle" fill="#94a3b8" font-size="9">200GB/day archive</text>
+
+              <!-- Arrow S3 → Spark (batch) -->
+              <line x1="310" y1="247" x2="348" y2="285" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4,3"/>
+
+              <!-- Spark Batch -->
+              <rect x="350" y="287" width="150" height="60" rx="8" fill="#1c1917" stroke="#94a3b8" stroke-width="1.5"/>
+              <text x="425" y="312" text-anchor="middle" fill="#d1d5db" font-size="11" font-weight="600">Spark Batch</text>
+              <text x="425" y="328" text-anchor="middle" fill="#94a3b8" font-size="9">Nightly — exact counts</text>
+              <text x="425" y="343" text-anchor="middle" fill="#94a3b8" font-size="9">Billing reconciliation</text>
+
+              <!-- Arrow Spark → ClickHouse (reconciliation) -->
+              <line x1="500" y1="317" x2="585" y2="122" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowhead-red)"/>
+              <text x="570" y="220" fill="#ef4444" font-size="8">reconcile</text>
+              <text x="570" y="232" fill="#ef4444" font-size="8">(is_reconciled=1)</text>
+
+              <!-- Fraud Detector side channel -->
+              <rect x="690" y="217" width="130" height="60" rx="8" fill="#3b0000" stroke="#ef4444" stroke-width="1.5"/>
+              <text x="755" y="242" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="600">Fraud Detector</text>
+              <text x="755" y="258" text-anchor="middle" fill="#ef4444" font-size="9">Sliding 5-min window</text>
+              <text x="755" y="273" text-anchor="middle" fill="#ef4444" font-size="9">Rate anomaly detection</text>
+
+              <!-- Arrow Flink → Fraud -->
+              <line x1="480" y1="95" x2="690" y2="230" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowhead-red)"/>
+              <text x="600" y="170" fill="#ef4444" font-size="8">suspicious clicks</text>
+
+              <!-- Legend -->
+              <rect x="10" y="340" width="880" height="30" rx="4" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+              <line x1="30" y1="355" x2="60" y2="355" stroke="#6366f1" stroke-width="2"/>
+              <text x="65" y="359" fill="#94a3b8" font-size="9">Real-time (stream) path</text>
+              <line x1="200" y1="355" x2="230" y2="355" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <text x="235" y="359" fill="#94a3b8" font-size="9">Batch path (nightly)</text>
+              <line x1="380" y1="355" x2="410" y2="355" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <text x="415" y="359" fill="#94a3b8" font-size="9">Dedup side-channel</text>
+              <line x1="555" y1="355" x2="585" y2="355" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,2"/>
+              <text x="590" y="359" fill="#94a3b8" font-size="9">Fraud detection</text>
+            </svg>
+          </div>
+
+          <h3>Component Responsibilities</h3>
+
+          <h4>1. Click Ingestion API (stateless, horizontal scaling)</h4>
+          <p>Lightweight HTTP service running on every ad server. Responsibilities: (a) validate the click schema, (b) attach server-side timestamp as <code>ingest_time</code> for watermark debugging, (c) publish to Kafka using the <strong>idempotent producer</strong> API (prevents duplicate Kafka messages on producer retry). Returns HTTP 200 immediately — fire-and-forget. The API never waits for aggregation.</p>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon" aria-hidden="true">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Why idempotent producer matters here</div>
+              <div class="insight-box__text">Without <code>enable.idempotence=true</code>, a producer retry (after a network blip) can write the same click event twice to Kafka. This is Kafka's at-least-once guarantee. With idempotent producers, Kafka assigns each record a producer ID + sequence number. If the broker receives the same sequence number twice, it deduplicates at the broker level. This is the first dedup layer — before even reaching Flink.</div>
+            </div>
+          </div>
+
+          <h4>2. Kafka (durable event bus)</h4>
+          <p>Partitioned by <code>ad_id</code>. This is a deliberate choice: all clicks for the same ad land on the same partition, which means a single Flink operator instance handles all clicks for that ad — no cross-partition joins or coordination needed for per-ad aggregation. Retention: 7 days. Every Kafka message is simultaneously mirrored to S3 via the Kafka S3 sink connector for the batch layer.</p>
+
+          <h4>3. Flink Stream Processor (the heart of the system)</h4>
           <ul>
-            <li><strong>Click Ingestion API:</strong> Lightweight HTTP endpoint. Validates click, publishes to Kafka. Returns 200 immediately (fire-and-forget semantics).</li>
-            <li><strong>Kafka:</strong> Click events partitioned by ad_id (so all clicks for an ad go to the same partition → no cross-partition aggregation needed).</li>
-            <li><strong>Stream Processor (Flink):</strong> Consumes Kafka. Deduplicates clicks (Bloom filter). Aggregates per ad_id per 1-min tumbling window. Writes to ClickHouse.</li>
-            <li><strong>Batch Reconciliation (Spark):</strong> Nightly. Reads raw clicks from S3. Produces exact counts. Reconciles with stream counts. Used for billing.</li>
-            <li><strong>Query API:</strong> Reads from ClickHouse for time-range queries. Reads from Redis for top-N queries.</li>
+            <li><strong>Deduplication:</strong> Check <code>click_id</code> against Redis Bloom filter. If present, discard. If absent, add and count.</li>
+            <li><strong>Windowed aggregation:</strong> TumblingEventTimeWindows of 1 minute, keyed by <code>(ad_id, campaign_id)</code>. Counts clicks per window.</li>
+            <li><strong>Watermarks:</strong> Allow up to 5 minutes of late event arrival (mobile clicks on spotty connections). Events arriving after the watermark deadline go to a side output for batch reprocessing.</li>
+            <li><strong>Checkpointing:</strong> Every 30 seconds. State (in-progress window counts + Bloom filter) is snapshotted to S3. On crash, Flink restores to the last checkpoint — guaranteeing exactly-once processing of every click.</li>
+            <li><strong>Output:</strong> Writes to ClickHouse (<code>SummingMergeTree</code> handles idempotent duplicate writes) and updates Redis sorted sets for Top-N.</li>
           </ul>
+
+          <h4>4. ClickHouse (real-time analytical store)</h4>
+          <p>Columnar OLAP database optimized for aggregation queries over time ranges. A query like "total clicks for campaign X in the last 24 hours" scans only two columns (<code>campaign_id</code>, <code>click_count</code>) across 1,440 rows — sub-millisecond. <code>ReplicatedSummingMergeTree</code> engine automatically sums <code>click_count</code> on merge operations, making Flink's idempotent writes safe.</p>
+
+          <h4>5. Batch Reconciliation Layer (Spark, nightly)</h4>
+          <p>Reads raw Parquet files from S3. Performs exact deduplication using SQL <code>COUNT(DISTINCT click_id)</code>. Writes exact counts back to ClickHouse with <code>is_reconciled=1</code>. This is the source of truth for billing. Advertisers are charged based on batch counts, not stream counts.</p>
+
+          <div class="insight-box insight-box--danger">
+            <div class="insight-box__icon" aria-hidden="true">⚠️</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">The billing requirement changes everything</div>
+              <div class="insight-box__text">An approximate count is not acceptable for charging advertisers. If your Bloom filter has a 0.1% false-positive rate and you process 10B clicks/day, you're under-counting by 10M clicks — potentially millions of dollars in lost revenue or inaccurate invoices. This is why we maintain two separate pipelines: the stream pipeline for speed (dashboards, real-time bidding decisions) and the batch pipeline for accuracy (billing). This dual architecture is not over-engineering — it is the industry-standard Lambda architecture for exactly this reason.</div>
+            </div>
+          </div>
+
+          <h4>6. Reporting API</h4>
+          <p>Read-only service. Routes time-range queries to ClickHouse. Routes Top-N queries to Redis sorted sets (sub-millisecond). Applies cache-control headers — dashboard widgets poll every 30 seconds, so query results are cached in Varnish for 30 seconds to prevent thundering-herd against ClickHouse.</p>
+
+          <h4>7. Fraud Detection (parallel stream)</h4>
+          <p>Flink sends a copy of every raw click to a parallel fraud detection job. This job maintains a 5-minute sliding window per <code>(ip_address, user_agent)</code>. If click rate exceeds 10 clicks/5-min from the same IP to the same ad, the clicks are flagged as suspicious and sent to a human review queue. Invalid clicks are excluded from billing.</p>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           A — APIs
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="apis" aria-labelledby="api-title">
-        <h2 class="content-section__title" id="api-title"><span class="content-section__title-icon">🔌</span>A — APIs<span class="reshaded-step__letter">5 min</span></h2>
+        <h2 class="content-section__title" id="api-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔌</span>
+          A — APIs
+          <span class="reshaded-step__letter">5 min</span>
+        </h2>
         <div class="content-section__body">
-          <pre><code class="language-java">POST /v1/clicks                    // record a click event
-  Body: { adId, userId, pageUrl, device }
-  Returns: 200 OK (fire-and-forget)
 
-GET  /v1/ads/{adId}/clicks?start={}&end={}&granularity=1min
-  // Returns: [{ windowStart, clickCount, uniqueUsers }]
+          <h3>Click Ingestion (Write Path)</h3>
+          <pre><code class="language-java">// POST /v1/clicks
+// Called by ad servers on every ad click.
+// Idempotent: click_id ensures safe retries (network failures).
+// Returns 202 Accepted immediately — never blocks on Kafka ack.
+Request:
+{
+  "click_id":    "550e8400-e29b-41d4-a716-446655440000",  // client-generated UUID
+  "ad_id":       "ad_8f3b2a1c",
+  "campaign_id": "camp_9d4e1f7a",
+  "user_id":     "usr_hashed_a1b2c3",                     // SHA-256 of real user ID
+  "event_time":  1705312800000,                           // epoch millis (event time)
+  "ip_address":  "192.168.1.100",
+  "user_agent":  "Mozilla/5.0 ...",
+  "page_url":    "https://example.com/article/123",
+  "device_type": "mobile",
+  "country":     "US"
+}
+Response: HTTP 202 Accepted
+{ "status": "accepted", "click_id": "550e8400-e29b-41d4-a716-446655440000" }
 
-GET  /v1/ads/top?window=1h&limit=10
-  // Returns: [{ adId, clickCount }] — top 10 by clicks in last hour</code></pre>
+// Error cases:
+// 400 Bad Request — missing required fields, invalid UUID format
+// 429 Too Many Requests — rate limit exceeded (per ad server)
+// 503 Service Unavailable — Kafka cluster unhealthy (circuit breaker open)</code></pre>
+
+          <h3>Click Aggregation Query (Read Path)</h3>
+          <pre><code class="language-java">// GET /v1/ads/{adId}/clicks?start={isoDateTime}&end={isoDateTime}&granularity={1min|1h|1d}
+// Returns windowed aggregation from ClickHouse.
+// Cache-Control: max-age=30 (Varnish caches for 30 seconds)
+Response: HTTP 200 OK
+{
+  "ad_id": "ad_8f3b2a1c",
+  "granularity": "1min",
+  "windows": [
+    {
+      "window_start": "2024-01-15T14:00:00Z",
+      "window_end":   "2024-01-15T14:01:00Z",
+      "click_count":  18423,
+      "unique_users": 17981,       // HyperLogLog estimate (±2%)
+      "is_reconciled": false       // true = batch-verified exact count
+    },
+    ...
+  ],
+  "total_clicks": 1102450
+}
+
+// GET /v1/campaigns/{campaignId}/billing?date={isoDate}
+// Returns billing-grade exact count (is_reconciled=true only).
+// Used by billing service to charge advertisers.
+Response:
+{
+  "campaign_id":   "camp_9d4e1f7a",
+  "date":          "2024-01-15",
+  "click_count":   892341,          // exact count from Spark batch
+  "invalid_clicks": 1247,           // detected fraud, excluded from billing
+  "billable_clicks": 891094,
+  "charge_cents":   89109400,       // at $0.10 CPC
+  "is_reconciled":  true
+}
+
+// GET /v1/ads/top?window=1h&limit=10&country=US
+// Returns top-N ads by click count. Served from Redis sorted set.
+// Sub-millisecond latency.
+Response:
+{
+  "window": "1h",
+  "as_of": "2024-01-15T14:52:00Z",
+  "top_ads": [
+    { "ad_id": "ad_viral_001", "click_count": 4820341 },
+    { "ad_id": "ad_promo_007", "click_count": 2103992 },
+    ...
+  ]
+}</code></pre>
+
+          <h3>Internal Admin APIs</h3>
+          <pre><code class="language-java">// POST /internal/v1/fraud/invalidate
+// Called by fraud detection system to mark clicks as invalid.
+// Triggers recount in ClickHouse and Spark batch re-run for the date.
+{ "campaign_id": "camp_9d4e1f7a", "date": "2024-01-15", "reason": "bot_traffic" }
+
+// GET /internal/v1/pipeline/health
+// Flink job status, Kafka consumer lag, ClickHouse insert rate.
+{
+  "flink_job_status": "RUNNING",
+  "kafka_consumer_lag": 142,    // events behind — should stay under 10K
+  "clickhouse_insert_rate": 1840, // rows/sec
+  "last_checkpoint_age_sec": 18
+}</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DEEP DIVE
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="deepdive" aria-labelledby="dd-title">
-        <h2 class="content-section__title" id="dd-title"><span class="content-section__title-icon">🔬</span>D — Deep Dive: Windowed Aggregation + Deduplication<span class="reshaded-step__letter">10 min</span></h2>
+        <h2 class="content-section__title" id="dd-title">
+          <span class="content-section__title-icon" aria-hidden="true">🔬</span>
+          D — Deep Dive
+          <span class="reshaded-step__letter">10 min</span>
+        </h2>
         <div class="content-section__body">
-          <p><strong>Tumbling windows:</strong> Non-overlapping fixed-time buckets. 00:00–01:00, 01:00–02:00, etc. Every click in the 1-minute window is counted together. Simple aggregation; query by truncating timestamp to minute.</p>
-          <p><strong>Sliding windows:</strong> Overlapping. "Last 5 minutes" = window slides with every new event. More complex; requires maintaining counts for multiple overlapping windows.</p>
-          <p><strong>Click deduplication with Bloom filter:</strong></p>
-          <ul>
-            <li>Key: <code>hash(user_id + ad_id + 5-min-bucket)</code></li>
-            <li>Bloom filter: probabilistic set membership. False positives (deduplicate a genuine click) ≤0.1%. No false negatives (a duplicate is never missed).</li>
-            <li>4MB per 5-min window; expire old windows.</li>
-            <li>For exact deduplication: Redis SET with TTL — but 34M keys at 64 bytes each = 2GB RAM. Bloom filter is 500× more memory-efficient.</li>
-          </ul>
-          <p><strong>Late data handling:</strong> Network delays mean clicks arrive up to 5 min late. Flink's watermark mechanism: process events up to W minutes late before closing a window. Reprocess late events via batch job.</p>
-        </div>
-      </section>
 
-      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
-        <h2 class="content-section__title" id="eval-title"><span class="content-section__title-icon">✅</span>E — Evaluate<span class="reshaded-step__letter">3 min</span></h2>
-        <div class="content-section__body">
-          <ul>
-            <li><strong>Billing accuracy:</strong> Stream counts have &lt;1% error (Bloom filter false positives). For billing, use nightly Spark batch on raw S3 data for exact counts. Advertisers see stream counts in real-time, billed on batch counts.</li>
-            <li><strong>Hot ad problem:</strong> A viral ad gets 1M clicks/min. Single Kafka partition for that ad_id becomes a bottleneck. Solution: sub-partition by (ad_id, random_shard), aggregate per shard, then sum shards at query time.</li>
-          </ul>
-        </div>
-      </section>
+          <!-- DEEP DIVE 1: Exactly-once semantics -->
+          <h3>1. Exactly-Once Semantics: The Full Picture</h3>
+          <p>Achieving exactly-once processing requires coordination at three layers. Miss any layer and you either over-count or under-count.</p>
 
-      <section class="content-section" id="deliver" aria-labelledby="del-title">
-        <h2 class="content-section__title" id="del-title"><span class="content-section__title-icon">🚀</span>D — Deliver<span class="reshaded-step__letter">2 min</span></h2>
-        <div class="content-section__body">
-          <p>We designed an ad click aggregator handling 10B clicks/day. Key decisions: Kafka partitioned by ad_id for ordered aggregation, Flink for stream processing with tumbling windows, Bloom filter for memory-efficient click deduplication, ClickHouse for time-series storage, and nightly Spark batch for billing-accurate exact counts.</p>
-        </div>
-      </section>
-
-      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
-        <h2 class="content-section__title" id="tradeoffs-title"><span class="content-section__title-icon">⚖️</span>Trade-offs</h2>
-        <div class="content-section__body">
           <div class="table-wrapper">
             <table>
-              <thead><tr><th>Decision</th><th>Chosen</th><th>Alternative</th><th>Why Chosen</th></tr></thead>
+              <thead>
+                <tr><th>Layer</th><th>Failure mode without protection</th><th>Solution</th><th>Mechanism</th></tr>
+              </thead>
               <tbody>
-                <tr><td>Deduplication</td><td>Bloom filter (probabilistic)</td><td>Redis SET (exact)</td><td>34M unique (user,ad,window) combos. Bloom = 4MB; Redis SET = 2GB. &lt;0.1% false positive rate is acceptable for ad analytics (not billing).</td></tr>
-                <tr><td>Stream vs batch</td><td>Both (Lambda architecture)</td><td>Stream-only (Kappa)</td><td>Stream for real-time dashboard; batch for billing accuracy. Trade-off: operational complexity of two pipelines vs guaranteed accuracy for financial reporting.</td></tr>
-                <tr><td>Aggregation storage</td><td>ClickHouse</td><td>PostgreSQL</td><td>ClickHouse is columnar, optimized for time-series aggregation queries (SUM over millions of rows in ms). PostgreSQL would be too slow for ad-hoc time range queries at this scale.</td></tr>
-                <tr><td>Kafka partition key</td><td>ad_id</td><td>Random / round-robin</td><td>Partitioning by ad_id co-locates all clicks for an ad to one partition — enables stateful per-ad aggregation without cross-partition joins.</td></tr>
+                <tr>
+                  <td>Kafka Producer</td>
+                  <td>Network timeout causes producer to retry → duplicate message in Kafka</td>
+                  <td>Idempotent producer</td>
+                  <td><code>enable.idempotence=true</code>: broker assigns producer ID + sequence number. Duplicate sequence → discard.</td>
+                </tr>
+                <tr>
+                  <td>Flink Processing</td>
+                  <td>Flink crashes mid-window → partial counts lost or duplicated</td>
+                  <td>Checkpointing + at-least-once consumer, exactly-once via state</td>
+                  <td>Flink snapshots window state + Kafka consumer offsets atomically every 30s. On restart, replays from last checkpoint offset. Window state ensures no double-counting.</td>
+                </tr>
+                <tr>
+                  <td>Flink → ClickHouse Write</td>
+                  <td>Flink writes window result, then crashes before committing Kafka offset → same window written twice on restart</td>
+                  <td>Idempotent sink (SummingMergeTree)</td>
+                  <td>ClickHouse <code>SummingMergeTree</code> sums on merge. If Flink writes the same <code>(ad_id, window_start)</code> row twice, ClickHouse sums both values. Flink must write <em>incremental deltas</em> (not cumulative totals) for this to work correctly.</td>
+                </tr>
+                <tr>
+                  <td>Kafka Transactions (alternative)</td>
+                  <td>Cross-topic writes need atomic commit</td>
+                  <td>Kafka transactional API</td>
+                  <td><code>initTransactions()</code>, <code>beginTransaction()</code>, write to output topic + commit consumer offset atomically. If broker fails, transaction is aborted — consumer sees no partial state. Flink's Kafka sink uses this internally when <code>semantic=EXACTLY_ONCE</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="insight-box insight-box--warning">
+            <div class="insight-box__icon" aria-hidden="true">⚠️</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">What happens when Flink crashes mid-window?</div>
+              <div class="insight-box__text">Scenario: Flink is 45 seconds into aggregating a 1-minute window for ad_X when it crashes. It has counted 8,400 clicks. On restart, it reads its last checkpoint (taken 30 seconds ago), which has 6,200 clicks for that window. It resets Kafka offset to the checkpoint offset and replays the last 15 seconds of events. The final window total is correct — no events are missed, no events are double-counted. This is Flink's core value proposition: stateful exactly-once stream processing with millisecond-granularity checkpointing.</div>
+            </div>
+          </div>
+
+          <!-- DEEP DIVE 2: Window types -->
+          <h3>2. Window Types and When to Use Each</h3>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Window Type</th><th>Description</th><th>Use Case in Ad System</th><th>Memory Cost</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Tumbling (fixed)</strong></td>
+                  <td>Non-overlapping, fixed-size buckets. 00:00–01:00, 01:00–02:00. Each event belongs to exactly one window.</td>
+                  <td>Billing aggregation (clicks per minute), dashboard charts, storage in ClickHouse</td>
+                  <td>Low — one window state per key at a time</td>
+                </tr>
+                <tr>
+                  <td><strong>Sliding (hopping)</strong></td>
+                  <td>Overlapping windows. "Last 5 minutes" = new window every 1 minute, each 5 minutes wide. One event belongs to up to 5 windows.</td>
+                  <td>Fraud detection (clicks per 5 minutes, updated every minute), real-time anomaly dashboards</td>
+                  <td>Higher — slide/hop_size windows active per key. 5 windows × state = 5× memory vs tumbling.</td>
+                </tr>
+                <tr>
+                  <td><strong>Session</strong></td>
+                  <td>Gap-based. Window closes when no events arrive for X minutes. Variable size.</td>
+                  <td>User engagement sessions (not click counting per se), A/B test session analysis</td>
+                  <td>Variable — state grows until gap is detected</td>
+                </tr>
+                <tr>
+                  <td><strong>Global</strong></td>
+                  <td>Unbounded — never closes. Triggered manually.</td>
+                  <td>Running total campaign click count (for budget cap checks)</td>
+                  <td>Grows indefinitely — use only with manual triggers</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>3. Flink Watermarks and Late Event Handling</h3>
+          <p>Flink uses <strong>event time</strong> (the timestamp embedded in the click event) not <strong>processing time</strong> (when Flink receives it). This is critical: a click on a mobile app may be generated at 14:00:30 but only reach Kafka at 14:05:45 due to spotty connectivity. If we used processing time, this click would be counted in the wrong minute.</p>
+          <p>Watermarks tell Flink "I'm confident all events up to time T have arrived." Flink closes and emits a window when the watermark passes the window's end time. A <strong>5-minute watermark delay</strong> means Flink waits 5 extra minutes before closing each 1-minute tumbling window, accommodating network delays. Events arriving after the watermark (more than 5 minutes late) go to a <strong>side output</strong> for separate batch reprocessing.</p>
+
+          <pre><code class="language-java">// Flink watermark strategy: allow up to 5 minutes of late events
+WatermarkStrategy&lt;ClickEvent&gt; watermarkStrategy = WatermarkStrategy
+    .&lt;ClickEvent&gt;forBoundedOutOfOrderness(Duration.ofMinutes(5))
+    .withTimestampAssigner((clickEvent, recordTimestamp) -> clickEvent.getEventTime());
+
+// Side output for events arriving more than 5 minutes late
+OutputTag&lt;ClickEvent&gt; lateEventsTag = new OutputTag&lt;&gt;("late-clicks") {};
+
+// Late events → separate Kafka topic → batch reprocessing picks them up nightly
+SingleOutputStreamOperator&lt;ClickAggregation&gt; mainStream = clickStream
+    .assignTimestampsAndWatermarks(watermarkStrategy)
+    .keyBy(click -> new Tuple2&lt;&gt;(click.getAdId(), click.getCampaignId()))
+    .window(TumblingEventTimeWindows.of(Time.minutes(1)))
+    .allowedLateness(Duration.ofMinutes(5))  // reopen closed window for late events
+    .sideOutputLateData(lateEventsTag)
+    .aggregate(new ClickCountAggregator());
+
+DataStream&lt;ClickEvent&gt; lateEvents = mainStream.getSideOutput(lateEventsTag);</code></pre>
+
+          <!-- DEEP DIVE 3: Deduplication -->
+          <h3>4. Click Deduplication: Three Layers</h3>
+          <p>Deduplication happens at multiple layers because no single mechanism is sufficient at this scale.</p>
+
+          <h4>Layer 1 — Kafka Idempotent Producer (infrastructure-level)</h4>
+          <p>Prevents the same click event from being written to Kafka twice due to producer retries. Zero application-level cost. Enabled with <code>enable.idempotence=true</code>. This handles the "network retry duplicate" case.</p>
+
+          <h4>Layer 2 — Redis Bloom Filter (near-real-time, probabilistic)</h4>
+          <p>For deduplicating the same <code>click_id</code> that arrives from multiple sources (e.g., click was recorded by two different ad servers simultaneously). Key insight: a Bloom filter never has false negatives. If a <code>click_id</code> is a genuine duplicate, the Bloom filter will always catch it. The 0.1% false positive rate means 1 in 1,000 genuine new clicks might be incorrectly flagged as duplicates — acceptable for real-time dashboards, not for billing.</p>
+          <pre><code class="language-java">// Redis RedisBloom module — BF.ADD returns 1 if new, 0 if already seen
+// Window: 5 minutes (one Bloom filter per 5-minute bucket, TTL=6 min)
+private boolean isNewClick(String clickId, long eventTimeMs) {
+    long bucketKey = eventTimeMs / (5 * 60 * 1000L);  // 5-min bucket
+    String redisKey = "dedup:" + bucketKey;
+    // BF.ADD returns 1 if added (new click), 0 if already present (duplicate)
+    Long addResult = redisBloomCommands.bfAdd(redisKey, clickId);
+    return addResult != null && addResult == 1L;
+}</code></pre>
+
+          <h4>Layer 3 — Batch Exact Dedup (billing-grade)</h4>
+          <p>Nightly Spark job on S3 Parquet files. Uses SQL <code>SELECT ad_id, campaign_id, date, COUNT(DISTINCT click_id) AS exact_click_count</code>. Exact deduplication using shuffle-based GROUP BY. Slow (hours), but 100% accurate. This is the number that appears on the advertiser's invoice.</p>
+
+          <!-- DEEP DIVE 4: Lambda vs Kappa -->
+          <h3>5. Lambda Architecture vs Kappa Architecture</h3>
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon" aria-hidden="true">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">Why Kappa is now preferred at most companies — but we still use Lambda here</div>
+              <div class="insight-box__text">Kappa architecture eliminates the batch layer entirely. Historical reprocessing is done by replaying Kafka (or archived events) through the same stream processor. This is operationally simpler — one codebase, one pipeline to monitor. Companies like LinkedIn and Confluent advocate Kappa. However, for ad billing specifically, the regulatory and financial audit requirements make a separate, human-auditable batch pipeline easier to certify. The exact Spark SQL that produces billing numbers is simpler to audit than "what did our Flink checkpoints contain at 2AM?"</div>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th></th><th>Lambda Architecture</th><th>Kappa Architecture</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Speed layer</strong></td><td>Stream (Flink) — approximate, fast</td><td>Stream (Flink) — primary path</td></tr>
+                <tr><td><strong>Batch layer</strong></td><td>Spark on S3 — exact, slow</td><td>No batch layer. Replay Kafka for reprocessing.</td></tr>
+                <tr><td><strong>Serving layer</strong></td><td>Merge stream + batch results</td><td>Stream results only (exact if exactly-once)</td></tr>
+                <tr><td><strong>Code complexity</strong></td><td>High — two separate pipelines, two codebases</td><td>Low — one stream pipeline</td></tr>
+                <tr><td><strong>Reprocessing</strong></td><td>Re-run Spark job on S3</td><td>Replay Kafka (requires long retention or S3 archive)</td></tr>
+                <tr><td><strong>Data freshness</strong></td><td>Stream: &lt;1 min. Batch: 24h lag.</td><td>Always stream — &lt;1 min latency</td></tr>
+                <tr><td><strong>Audit trail</strong></td><td>Clear: batch job run logs + Spark SQL</td><td>Harder: checkpoint state audit</td></tr>
+                <tr><td><strong>Best for</strong></td><td>Billing, financial, regulatory compliance</td><td>General analytics, ML feature pipelines, recommendation systems</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- DEEP DIVE 5: Hot Ad Problem -->
+          <h3>6. Hot Ad Problem: Skewed Partitions</h3>
+          <p>A viral ad or a major brand campaign can receive 1M clicks per minute — 100× the average. Because we partition by <code>ad_id</code>, one Kafka partition receives all these clicks. That partition's Flink operator becomes a bottleneck. One operator processing 100K events/sec while all others process 1K events/sec.</p>
+
+          <p><strong>Solution: Two-phase aggregation (map-reduce for streams)</strong></p>
+          <pre><code class="language-java">// Phase 1: Add random suffix to ad_id for sharding (map phase)
+// "ad_viral_001" → "ad_viral_001#3" (randomly 0-9)
+// Kafka partition key becomes the sharded ad_id
+// 10 partitions instead of 1 — 10 Flink operators share the load
+
+// Phase 2: Aggregate per shard (partial aggregation in stream)
+// Each shard produces partial count: "ad_viral_001#3" → 42,000 clicks in this minute
+
+// Phase 3: Sum the shards at query time (reduce phase)
+// SELECT SUM(click_count) FROM ad_click_agg
+// WHERE ad_id LIKE 'ad_viral_001%' AND window_start = '2024-01-15T14:00:00'
+// ClickHouse columnar scan: trivially fast
+
+// Alternative: Write shards as separate rows, query-time SUM
+// Or: Flink union step after Phase 2 (extra latency vs extra storage)</code></pre>
+
+          <!-- DEEP DIVE 6: Click Fraud Detection -->
+          <h3>7. Click Fraud Detection</h3>
+          <p>Click fraud costs the digital ad industry ~$100B annually. The system must detect and exclude fraudulent clicks before billing. Real-time detection (within 5 seconds) prevents billing advertisers for bot traffic.</p>
+
+          <h4>Signal types:</h4>
+          <ul>
+            <li><strong>IP-based rate:</strong> More than 20 clicks/5-min from the same IP to the same ad → bot. Use Flink sliding window keyed by <code>(ip_address, ad_id)</code>.</li>
+            <li><strong>User agent:</strong> Headless browser signatures (<code>HeadlessChrome</code>, <code>PhantomJS</code>) → immediate rejection before Kafka publish.</li>
+            <li><strong>Abnormal CTR:</strong> An ad with 0.1% normal CTR suddenly seeing 15% CTR → campaign-level anomaly. Compared against historical baseline using a 7-day rolling average.</li>
+            <li><strong>Click timing patterns:</strong> Regular interval clicks (every 3.7 seconds exactly) → bot. Humans click irregularly. Detect using coefficient of variation of inter-click intervals.</li>
+            <li><strong>Geographic impossibility:</strong> Same user_id clicking from New York and Tokyo within 10 minutes → account compromise or bot.</li>
+          </ul>
+
+          <pre><code class="language-java">// Flink fraud detection: 5-minute sliding window, 1-minute slide
+// Keyed by (ip_address, ad_id) to detect IP-level click stuffing
+DataStream&lt;FraudAlert&gt; fraudAlerts = clickStream
+    .keyBy(click -> click.getIpAddress() + "|" + click.getAdId())
+    .window(SlidingEventTimeWindows.of(Time.minutes(5), Time.minutes(1)))
+    .process(new FraudDetectionProcessWindowFunction());
+
+// In FraudDetectionProcessWindowFunction:
+// - Count clicks in window
+// - If count > IP_CLICK_THRESHOLD (20): emit FraudAlert
+// - Compute inter-click interval variance — low variance = bot
+// - Emit to fraud-alerts Kafka topic for human review + billing exclusion</code></pre>
+
+          <!-- DEEP DIVE 7: Storage Comparison -->
+          <h3>8. Why ClickHouse Over PostgreSQL / Cassandra</h3>
+          <p>A query like "sum of clicks for campaign X across all ads, grouped by hour, over the last 30 days" touches 43,200 rows and needs to aggregate across many ad IDs. This is an <em>analytical</em> query pattern, not a transactional one.</p>
+
+          <ul>
+            <li><strong>PostgreSQL:</strong> Row-oriented. To compute SUM(click_count), it reads entire rows including all columns. At 43,200 rows × 200 bytes/row = 8.6MB of I/O for a query that only needs 2 columns. Also lacks pre-aggregation materialized views at ClickHouse's scale.</li>
+            <li><strong>Cassandra:</strong> Excellent for high-write, key-value reads. Not designed for ad-hoc range scans across millions of rows. Would require materialized views per query shape — operationally expensive.</li>
+            <li><strong>ClickHouse:</strong> Columnar. Same query reads only <code>click_count</code> and <code>window_start</code> columns — 43,200 × 16 bytes = 691KB of I/O. 12× less I/O. Additionally, <code>SummingMergeTree</code> pre-aggregates in the background — many queries complete in single-digit milliseconds.</li>
+            <li><strong>Apache Druid:</strong> Also columnar, OLAP-optimized. Better at sub-second queries on streaming data (native Kafka ingestion). Better UI ecosystem. Higher operational complexity. Good alternative to ClickHouse for real-time analytics.</li>
+            <li><strong>Apache Pinot:</strong> LinkedIn's choice. Designed for user-facing analytics (direct query from end-users). Very low p99 latency. Supports upserts natively. Good when advertisers query their own dashboards directly.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           E — EVALUATE
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="evaluate" aria-labelledby="eval-title">
+        <h2 class="content-section__title" id="eval-title">
+          <span class="content-section__title-icon" aria-hidden="true">✅</span>
+          E — Evaluate
+          <span class="reshaded-step__letter">3 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <h3>Does the Design Meet Requirements?</h3>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Requirement</th><th>Design Decision</th><th>Gap / Risk</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>10B clicks/day, 500K/sec peak</td>
+                  <td>Kafka with 100 partitions (handles 500K/sec). Flink scales horizontally (add task managers). ClickHouse handles 1M rows/sec insert rate.</td>
+                  <td>Hot ad partition skew. Mitigated by two-phase aggregation with random shard suffix.</td>
+                </tr>
+                <tr>
+                  <td>&lt;1 min reporting latency</td>
+                  <td>Flink tumbling 1-min windows emit within 60 seconds of window close (+5 min watermark delay). Real data visible within ~6 minutes of click. Near-real-time streaming wins over batch.</td>
+                  <td>Watermark delay means very recent data (last 5 min) may not yet appear. Acceptable for dashboards. Documented in API response.</td>
+                </tr>
+                <tr>
+                  <td>Exact billing accuracy</td>
+                  <td>Nightly Spark batch on immutable S3 archive. COUNT(DISTINCT click_id). Writes is_reconciled=true results back to ClickHouse.</td>
+                  <td>24-hour delay before billing numbers are finalized. Industry standard — no advertiser expects same-day invoices.</td>
+                </tr>
+                <tr>
+                  <td>Click deduplication</td>
+                  <td>Three layers: Kafka idempotent producer, Redis Bloom filter (0.1% FP), batch exact dedup.</td>
+                  <td>0.1% false positive rate in stream. Batch layer corrects this for billing. Acceptable.</td>
+                </tr>
+                <tr>
+                  <td>Fraud detection &lt;5s</td>
+                  <td>Parallel Flink fraud job with 5-min sliding windows, 1-min slides. IP-based, user-agent, CTR anomaly signals.</td>
+                  <td>Sophisticated coordinated bot attacks (rotating IPs, multiple user agents) require ML model, not rule-based detection. Escalation path: send suspicious campaigns to ML scoring service.</td>
+                </tr>
+                <tr>
+                  <td>99.99% click ingestion availability</td>
+                  <td>Stateless ingestion API behind load balancer. Kafka multi-AZ replication (RF=3). Circuit breaker on Kafka unavailability.</td>
+                  <td>Kafka outage: ingestion API buffers to local disk (bounded buffer, 10-second burst). Beyond that: clicks dropped. Acceptable — a 10-second Kafka outage is rare.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Failure Modes and Mitigations</h3>
+          <ul>
+            <li><strong>Flink job failure:</strong> Checkpoint restores in ~2 minutes. Kafka consumer lag accumulates but is bounded. No data loss. Duplicate prevention via checkpoint + idempotent ClickHouse sink.</li>
+            <li><strong>ClickHouse node failure:</strong> Replication factor=2. Read from replica. Background replication catches up. &lt;1s write latency impact.</li>
+            <li><strong>Redis failure:</strong> Bloom filter is best-effort. On Redis failure, Flink can bypass dedup (slightly over-count) or fail-closed (drop all clicks until Redis recovers). Policy decision for product team: fail-open is safer for revenue.</li>
+            <li><strong>Kafka partition leader failure:</strong> Controller re-election takes ~30 seconds. During this window, producers buffer (at-most 30 seconds of data in producer buffer). After re-election, all buffered events publish. Zero data loss.</li>
+            <li><strong>S3 unavailability:</strong> Kafka S3 sink connector buffers in memory / local disk. S3 writes are eventually consistent — no data loss as long as Kafka retains the messages (7-day window).</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           D — DELIVER
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="deliver" aria-labelledby="del-title">
+        <h2 class="content-section__title" id="del-title">
+          <span class="content-section__title-icon" aria-hidden="true">🚀</span>
+          D — Deliver
+          <span class="reshaded-step__letter">2 min</span>
+        </h2>
+        <div class="content-section__body">
+
+          <p>We designed an ad click aggregator handling 10B clicks/day with two distinct accuracy tiers:</p>
+
+          <ul>
+            <li><strong>Real-time tier (stream):</strong> Kafka (100 partitions, keyed by ad_id) → Flink (1-min tumbling windows, 5-min watermark tolerance, Redis Bloom filter dedup) → ClickHouse (columnar, SummingMergeTree). Latency: &lt;6 minutes. Accuracy: ~99.9% (0.1% Bloom filter false positive). Used for: advertiser dashboards, real-time bidding decisions, fraud alerting.</li>
+            <li><strong>Batch tier (billing):</strong> Kafka → S3 Parquet archive → nightly Spark batch (exact COUNT DISTINCT) → ClickHouse (is_reconciled=true). Latency: 24 hours. Accuracy: 100% (exact). Used for: advertiser billing, regulatory compliance, revenue recognition.</li>
+          </ul>
+
+          <p>Key architectural decisions: (1) Partition by ad_id for stateful aggregation locality; (2) Lambda architecture because billing correctness overrides operational simplicity; (3) Three-layer deduplication (Kafka idempotent → Bloom filter → batch exact); (4) Two-phase aggregation for hot ads; (5) ClickHouse SummingMergeTree for safe idempotent stream writes.</p>
+
+          <div class="insight-box insight-box--success">
+            <div class="insight-box__icon" aria-hidden="true">✅</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">What L6 delivery sounds like</div>
+              <div class="insight-box__text">End your design with the trade-off you consciously accepted: "We chose Lambda over Kappa architecture. This doubles our operational surface (two pipelines, two codebases, two monitoring systems). The justification is that billing accuracy requirements — specifically the auditability of a batch Spark SQL job vs a Flink checkpoint state — made Lambda the defensible choice for financial reporting. In a purely analytics context with no billing, I would choose Kappa."</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           TRADE-OFFS TABLE
+      ═══════════════════════════════════════════════════════════ -->
+      <section class="content-section" id="tradeoffs" aria-labelledby="tradeoffs-title">
+        <h2 class="content-section__title" id="tradeoffs-title">
+          <span class="content-section__title-icon" aria-hidden="true">⚖️</span>
+          Trade-offs
+        </h2>
+        <div class="content-section__body">
+
+          <h3>Architecture: Lambda vs Kappa</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Dimension</th><th>Lambda (our choice)</th><th>Kappa</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Operational complexity</td><td>High — two separate pipelines to monitor, debug, deploy</td><td>Low — one stream pipeline</td></tr>
+                <tr><td>Billing auditability</td><td>Excellent — Spark SQL is easy to audit, re-run, version</td><td>Harder — need to audit Flink checkpoint state</td></tr>
+                <tr><td>Reprocessing</td><td>Re-run batch job on S3 (simple, well-understood)</td><td>Replay Kafka events through stream job (requires long retention)</td></tr>
+                <tr><td>Data freshness</td><td>Batch layer: 24h lag</td><td>Always fresh (&lt;1 min)</td></tr>
+                <tr><td>When to use Lambda</td><td colspan="2">Financial data, regulatory compliance, billing — any context where auditability matters more than simplicity.</td></tr>
+                <tr><td>When to use Kappa</td><td colspan="2">ML feature pipelines, recommendation systems, general analytics — where stream accuracy is sufficient and simplicity is valued.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Stream Processor: Flink vs Spark Streaming</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Dimension</th><th>Flink (our choice)</th><th>Spark Streaming</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Processing model</td><td>True streaming — processes each event as it arrives</td><td>Micro-batch — accumulates events for 0.5–5 sec intervals before processing</td></tr>
+                <tr><td>Latency</td><td>Sub-second event processing</td><td>0.5–5 seconds minimum (micro-batch interval)</td></tr>
+                <tr><td>Exactly-once</td><td>Native — via Chandy-Lamport distributed snapshots</td><td>Via WAL (write-ahead log) — higher overhead</td></tr>
+                <tr><td>State management</td><td>First-class — RocksDB-backed, S3-checkpointed, queryable</td><td>Stateful streaming is harder; DStream API is being deprecated</td></tr>
+                <tr><td>SQL support</td><td>Flink SQL — growing fast, not yet at Spark SQL maturity</td><td>Spark SQL — mature, widely used, enormous ecosystem</td></tr>
+                <tr><td>Ecosystem</td><td>Kafka-native, ClickHouse connector, Redis connector</td><td>Massive — Delta Lake, Hive, virtually every data store</td></tr>
+                <tr><td>When to choose Flink</td><td colspan="2">Sub-second latency requirements, complex stateful processing, exactly-once guarantees are critical.</td></tr>
+                <tr><td>When to choose Spark</td><td colspan="2">Micro-batch latency is acceptable, need rich SQL + ML library integration, existing Spark infrastructure.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>OLAP Store: ClickHouse vs Druid vs Pinot</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Dimension</th><th>ClickHouse (our choice)</th><th>Apache Druid</th><th>Apache Pinot</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Kafka ingestion</td><td>Via Kafka engine / external Flink sink</td><td>Native Kafka supervisor</td><td>Native Kafka consumer</td></tr>
+                <tr><td>Query latency (p99)</td><td>10–100ms for simple aggregations</td><td>10–50ms with pre-aggregation</td><td>&lt;10ms for user-facing analytics</td></tr>
+                <tr><td>Upsert support</td><td>Via SummingMergeTree / ReplacingMergeTree</td><td>Limited (segment replace)</td><td>Native upsert (good for our use case)</td></tr>
+                <tr><td>SQL dialect</td><td>Full SQL + extensions</td><td>Druid SQL (subset)</td><td>SQL-like (PQL)</td></tr>
+                <tr><td>Operations</td><td>Low — single binary, ZooKeeper optional</td><td>Higher — Coordinator, Broker, Historical, MiddleManager, Overlord</td><td>Higher — Controller, Server, Minion</td></tr>
+                <tr><td>Best for</td><td>General time-series analytics, ad-hoc queries, medium scale</td><td>Sub-second queries on streaming data with Kafka native ingestion</td><td>User-facing analytics where p99 matters (direct advertiser queries)</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Deduplication: Bloom Filter vs Redis SET</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Dimension</th><th>Bloom Filter (our choice for stream)</th><th>Redis SET (exact)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Memory (34.5M items, 5-min window)</td><td>~59MB</td><td>~2.2GB</td></tr>
+                <tr><td>Memory ratio</td><td>1×</td><td>37× more</td></tr>
+                <tr><td>False positives</td><td>0.1% — genuine clicks may be dropped</td><td>None — exact</td></tr>
+                <tr><td>False negatives</td><td>None — duplicates are always caught</td><td>None</td></tr>
+                <tr><td>Lookup complexity</td><td>O(k) hash functions, k=7 for this config</td><td>O(1) hash lookup</td></tr>
+                <tr><td>When to use Bloom</td><td colspan="2">Real-time dedup where 0.1% miss rate is acceptable. Billing corrected by batch anyway.</td></tr>
+                <tr><td>When to use SET</td><td colspan="2">Smaller windows, exact real-time counting is required, memory cost is acceptable.</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           JAVA IMPLEMENTATION
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="implementation" aria-labelledby="impl-title">
-        <h2 class="content-section__title" id="impl-title"><span class="content-section__title-icon">☕</span>Java Implementation</h2>
+        <h2 class="content-section__title" id="impl-title">
+          <span class="content-section__title-icon" aria-hidden="true">☕</span>
+          Java Implementation — Flink Windowed Click Aggregator
+        </h2>
         <div class="content-section__body">
+
+          <div class="insight-box insight-box--info">
+            <div class="insight-box__icon" aria-hidden="true">💡</div>
+            <div class="insight-box__body">
+              <div class="insight-box__title">What this code demonstrates</div>
+              <div class="insight-box__text">This is a production-representative Flink job: TumblingEventTimeWindows of 1 minute, keyed by (adId, campaignId), Bloom filter deduplication per window, Redis Sorted Set updates for Top-N, and ClickHouse sink output. The checkpoint and watermark configuration matches what you would use in production at this scale.</div>
+            </div>
+          </div>
+
+          <h3>Data Classes</h3>
           <pre><code class="language-java">/**
- * ClickAggregator — sliding window click counter with Bloom filter deduplication.
- * Uses a circular buffer of fixed-size buckets (one per minute).
- * Memory: O(WINDOW_MINUTES × BUCKET_SIZE) regardless of click volume.
+ * ClickEvent — deserialized from Kafka Avro message.
+ * Immutable value object; all fields set at construction.
  */
-public class ClickAggregator {
+public final class ClickEvent {
+    private final String clickId;      // UUID — dedup key
+    private final String adId;
+    private final String campaignId;   // billing unit
+    private final String userId;       // hashed
+    private final long eventTime;      // epoch millis — used as Flink event time
+    private final String ipAddress;
+    private final String userAgent;
+    private final String deviceType;
+    private final String country;
 
-    private static final int WINDOW_MINUTES = 5;
-    private static final int BLOOM_FILTER_BITS = 4_000_000; // 4MB per window
-    private static final double BLOOM_FALSE_POSITIVE_RATE = 0.001;
+    // Constructor, getters omitted for brevity
+}
 
-    // Circular buffer: one bucket per minute, WINDOW_MINUTES buckets total
-    private final long[] clickBuckets = new long[WINDOW_MINUTES];
-    private final BloomFilter[] deduplicationFilters = new BloomFilter[WINDOW_MINUTES];
-    private int currentBucketIndex = 0;
-    private long currentWindowMinute = 0;
+/**
+ * ClickAggregation — output of one 1-minute tumbling window.
+ * Written to ClickHouse and Redis.
+ */
+public final class ClickAggregation {
+    private final String adId;
+    private final String campaignId;
+    private final long windowStartMs;   // epoch millis, truncated to minute
+    private final long windowEndMs;
+    private final long clickCount;      // deduplicated click count
+    private final long uniqueUserCount; // HyperLogLog estimate
 
-    public ClickAggregator() {
-        for (int bucketIndex = 0; bucketIndex &lt; WINDOW_MINUTES; bucketIndex++) {
-            deduplicationFilters[bucketIndex] = BloomFilter.create(
-                Funnels.stringFunnel(), BLOOM_FILTER_BITS, BLOOM_FALSE_POSITIVE_RATE
+    // Constructor, getters omitted for brevity
+}</code></pre>
+
+          <h3>Main Flink Job</h3>
+          <pre><code class="language-java">/**
+ * AdClickAggregationJob — main Flink streaming job.
+ *
+ * Pipeline:
+ *   Kafka source (ClickEvent, Avro)
+ *   → deduplicate via Redis Bloom filter
+ *   → keyBy (adId, campaignId)
+ *   → TumblingEventTimeWindows(1 minute)
+ *   → aggregate click counts + HyperLogLog unique users
+ *   → sink to ClickHouse + Redis sorted set for Top-N
+ *
+ * Exactly-once guarantee:
+ *   Kafka source: reads committed offsets (checkpoint-aligned)
+ *   Bloom filter: stored in Flink operator state — checkpointed with job
+ *   ClickHouse sink: SummingMergeTree handles idempotent duplicate writes
+ *   Checkpoint interval: 30 seconds to S3
+ */
+public class AdClickAggregationJob {
+
+    private static final String KAFKA_BOOTSTRAP_SERVERS = "kafka:9092";
+    private static final String KAFKA_TOPIC = "ad-clicks-raw";
+    private static final String KAFKA_CONSUMER_GROUP = "flink-click-aggregator";
+    private static final Duration WATERMARK_DELAY = Duration.ofMinutes(5);
+    private static final Duration WINDOW_SIZE = Duration.ofMinutes(1);
+    private static final Duration CHECKPOINT_INTERVAL = Duration.ofSeconds(30);
+
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment environment = buildStreamExecutionEnvironment();
+
+        DataStream&lt;ClickEvent&gt; rawClickStream = buildKafkaSource(environment);
+
+        OutputTag&lt;ClickEvent&gt; lateEventsOutputTag =
+            new OutputTag&lt;ClickEvent&gt;("late-clicks") {};
+
+        SingleOutputStreamOperator&lt;ClickAggregation&gt; aggregatedStream =
+            rawClickStream
+                .assignTimestampsAndWatermarks(buildWatermarkStrategy())
+                .process(new RedisBloomDeduplicationFunction())
+                .keyBy(click -> click.getAdId() + "|" + click.getCampaignId())
+                .window(TumblingEventTimeWindows.of(Time.minutes(1)))
+                .allowedLateness(Duration.ofMinutes(5))
+                .sideOutputLateData(lateEventsOutputTag)
+                .aggregate(
+                    new ClickCountAggregateFunction(),
+                    new ClickAggregationWindowFunction()
+                );
+
+        // Main output: write aggregations to ClickHouse
+        aggregatedStream.addSink(new ClickHouseSink());
+
+        // Side effect: update Redis Top-N sorted set on each window close
+        aggregatedStream.addSink(new RedisTopNSink());
+
+        // Late events: write to separate Kafka topic for batch reprocessing
+        aggregatedStream
+            .getSideOutput(lateEventsOutputTag)
+            .addSink(new KafkaLateEventSink("ad-clicks-late"));
+
+        environment.execute("Ad Click Aggregation Job");
+    }
+
+    private static StreamExecutionEnvironment buildStreamExecutionEnvironment() {
+        StreamExecutionEnvironment environment =
+            StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Checkpoint every 30 seconds to S3. Exactly-once mode:
+        // Flink aligns barriers across all parallel operators before snapshotting.
+        environment.enableCheckpointing(
+            CHECKPOINT_INTERVAL.toMillis(),
+            CheckpointingMode.EXACTLY_ONCE
+        );
+
+        CheckpointConfig checkpointConfig = environment.getCheckpointConfig();
+        // Keep last 3 checkpoints for recovery (rolling)
+        checkpointConfig.setMaxConcurrentCheckpoints(1);
+        checkpointConfig.setCheckpointStorage("s3://my-bucket/flink-checkpoints/");
+        // Do not discard checkpoints on job cancellation — needed for restart
+        checkpointConfig.setExternalizedCheckpointCleanup(
+            CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION
+        );
+
+        return environment;
+    }
+
+    private static DataStream&lt;ClickEvent&gt; buildKafkaSource(
+        StreamExecutionEnvironment environment
+    ) {
+        KafkaSource&lt;ClickEvent&gt; kafkaSource = KafkaSource.&lt;ClickEvent&gt;builder()
+            .setBootstrapServers(KAFKA_BOOTSTRAP_SERVERS)
+            .setTopics(KAFKA_TOPIC)
+            .setGroupId(KAFKA_CONSUMER_GROUP)
+            // Start from committed offset (checkpoint-aligned);
+            // on first run, start from earliest.
+            .setStartingOffsets(OffsetsInitializer.committedOffsets(
+                OffsetResetStrategy.EARLIEST
+            ))
+            .setValueOnlyDeserializer(new ClickEventAvroDeserializer())
+            .build();
+
+        return environment.fromSource(
+            kafkaSource,
+            WatermarkStrategy.noWatermarks(),  // watermarks added downstream
+            "Kafka Click Source"
+        );
+    }
+
+    private static WatermarkStrategy&lt;ClickEvent&gt; buildWatermarkStrategy() {
+        // Allow events up to 5 minutes late before closing windows.
+        // Mobile clicks on spotty connections can arrive significantly delayed.
+        return WatermarkStrategy
+            .&lt;ClickEvent&gt;forBoundedOutOfOrderness(WATERMARK_DELAY)
+            .withTimestampAssigner(
+                (clickEvent, recordTimestamp) -> clickEvent.getEventTime()
+            )
+            // Idle timeout: if a partition receives no events for 30s,
+            // advance watermark anyway (prevents other partitions stalling).
+            .withIdleness(Duration.ofSeconds(30));
+    }
+}</code></pre>
+
+          <h3>Deduplication with Keyed Process Function</h3>
+          <pre><code class="language-java">/**
+ * RedisBloomDeduplicationFunction — Flink ProcessFunction that deduplicates
+ * clicks using Redis RedisBloom before they enter the aggregation window.
+ *
+ * Design choice: Redis (not Flink state) for the Bloom filter because:
+ * 1. The dedup window (5 min) is different from the aggregation window (1 min).
+ * 2. Flink restarts should not lose the Bloom filter — Redis persists independently.
+ * 3. Multiple Flink operator instances share one Bloom filter (same click_id
+ *    could arrive on different Kafka partitions if producer used round-robin
+ *    for a brief moment during rebalance).
+ */
+public class RedisBloomDeduplicationFunction
+    extends ProcessFunction&lt;ClickEvent, ClickEvent&gt; {
+
+    private static final String REDIS_HOST = "redis-cluster:6379";
+    private static final long DEDUP_WINDOW_MINUTES = 5L;
+    private static final long DEDUP_TTL_MINUTES = DEDUP_WINDOW_MINUTES + 1L;
+
+    private transient JedisBloomCommands bloomCommands;
+
+    @Override
+    public void open(Configuration configuration) {
+        JedisPool jedisPool = new JedisPool(REDIS_HOST);
+        bloomCommands = new JedisBloom(jedisPool);
+    }
+
+    /**
+     * Checks click_id against Redis Bloom filter.
+     * Emits the event only if it is genuinely new (not a duplicate).
+     * Duplicate events are silently dropped — they were already counted.
+     */
+    @Override
+    public void processElement(
+        ClickEvent clickEvent,
+        Context context,
+        Collector&lt;ClickEvent&gt; collector
+    ) {
+        String bucketKey = buildDedupBucketKey(clickEvent.getEventTime());
+        String redisKey = "dedup:" + bucketKey;
+
+        // BF.ADD returns 1 if item is new (added), 0 if already present (duplicate).
+        // This is an atomic Redis operation — safe under concurrent access.
+        boolean isNewClick = bloomCommands.bfAdd(redisKey, clickEvent.getClickId());
+
+        if (isNewClick) {
+            // Set TTL on first use; subsequent BF.ADDs don't reset TTL
+            bloomCommands.expire(redisKey, DEDUP_TTL_MINUTES * 60L);
+            collector.collect(clickEvent);
+        }
+        // Duplicates are dropped silently — no output, no error
+    }
+
+    /**
+     * Computes the 5-minute bucket key for a given event timestamp.
+     * All events within the same 5-minute bucket share a Bloom filter.
+     * Example: event at 14:03:45 → bucket key "2024-01-15T14:00" (floor to 5-min)
+     */
+    private String buildDedupBucketKey(long eventTimeMs) {
+        long bucketBoundaryMs = (eventTimeMs / (DEDUP_WINDOW_MINUTES * 60_000L))
+                                * (DEDUP_WINDOW_MINUTES * 60_000L);
+        return new SimpleDateFormat("yyyy-MM-dd'T'HH:mm")
+            .format(new Date(bucketBoundaryMs));
+    }
+}</code></pre>
+
+          <h3>Aggregation Functions</h3>
+          <pre><code class="language-java">/**
+ * ClickCountAggregateFunction — incremental aggregation function.
+ * Flink calls add() for each event in the window. The accumulator
+ * holds running totals. getResult() is called once per window close.
+ *
+ * Using AggregateFunction (incremental) rather than ProcessWindowFunction
+ * (buffering all events) because we only need a count — no need to buffer
+ * 115K raw click events per window per key in memory.
+ */
+public class ClickCountAggregateFunction
+    implements AggregateFunction&lt;ClickEvent, ClickCountAccumulator, ClickCountAccumulator&gt; {
+
+    @Override
+    public ClickCountAccumulator createAccumulator() {
+        return new ClickCountAccumulator();
+    }
+
+    @Override
+    public ClickCountAccumulator add(
+        ClickEvent clickEvent,
+        ClickCountAccumulator accumulator
+    ) {
+        accumulator.incrementClickCount();
+        // HyperLogLog: approximate unique user count (±2% error, 12KB per counter)
+        accumulator.addUserToHyperLogLog(clickEvent.getUserId());
+        return accumulator;
+    }
+
+    @Override
+    public ClickCountAccumulator getResult(ClickCountAccumulator accumulator) {
+        return accumulator;
+    }
+
+    @Override
+    public ClickCountAccumulator merge(
+        ClickCountAccumulator first,
+        ClickCountAccumulator second
+    ) {
+        // Merge is called when combining partial results (e.g., session windows,
+        // or when re-joining after task failure). Counts are additive;
+        // HyperLogLog registers are merged using max-register algorithm.
+        first.mergeWith(second);
+        return first;
+    }
+}
+
+/**
+ * ClickAggregationWindowFunction — wraps the aggregation result with
+ * window timing metadata (window_start, window_end) for ClickHouse.
+ * This is called once per window, after ClickCountAggregateFunction.getResult().
+ */
+public class ClickAggregationWindowFunction
+    implements WindowFunction&lt;ClickCountAccumulator, ClickAggregation, String, TimeWindow&gt; {
+
+    @Override
+    public void apply(
+        String adAndCampaignKey,               // "ad_8f3b2a1c|camp_9d4e1f7a"
+        TimeWindow timeWindow,
+        Iterable&lt;ClickCountAccumulator&gt; accumulatorIterable,
+        Collector&lt;ClickAggregation&gt; collector
+    ) {
+        ClickCountAccumulator accumulator = accumulatorIterable.iterator().next();
+        String[] keyParts = adAndCampaignKey.split("\\|");
+
+        collector.collect(new ClickAggregation(
+            keyParts[0],                         // adId
+            keyParts[1],                         // campaignId
+            timeWindow.getStart(),               // window_start millis
+            timeWindow.getEnd(),                 // window_end millis
+            accumulator.getClickCount(),
+            accumulator.getUniqueUserCount()     // from HyperLogLog
+        ));
+    }
+}
+
+/**
+ * Accumulator state for one window.
+ * HyperLogLog provides ~2% error on unique user count in 12KB vs exact
+ * counting which would require a full HashSet (unbounded memory growth).
+ */
+public class ClickCountAccumulator {
+    private long clickCount = 0L;
+    private final HyperLogLog hyperLogLog = new HyperLogLog(0.02);  // 2% error
+
+    public void incrementClickCount() { clickCount++; }
+
+    public void addUserToHyperLogLog(String userId) {
+        hyperLogLog.offer(userId);
+    }
+
+    public long getClickCount() { return clickCount; }
+
+    public long getUniqueUserCount() { return hyperLogLog.cardinality(); }
+
+    public void mergeWith(ClickCountAccumulator other) {
+        this.clickCount += other.clickCount;
+        this.hyperLogLog.addAll(other.hyperLogLog);
+    }
+}</code></pre>
+
+          <h3>ClickHouse Sink</h3>
+          <pre><code class="language-java">/**
+ * ClickHouseSink — writes ClickAggregation records to ClickHouse.
+ *
+ * Uses batch inserts (buffer 1,000 rows or 5 seconds, whichever comes first)
+ * to minimize round-trips. SummingMergeTree on the ClickHouse side handles
+ * idempotent writes: if Flink writes the same (ad_id, window_start) twice
+ * (after crash recovery), ClickHouse sums both click_count values.
+ * Flink must write incremental deltas (not cumulative totals) for this to work.
+ */
+public class ClickHouseSink extends RichSinkFunction&lt;ClickAggregation&gt; {
+
+    private static final String CLICKHOUSE_URL = "jdbc:clickhouse://clickhouse:8123/ads";
+    private static final int BATCH_SIZE = 1_000;
+    private static final long FLUSH_INTERVAL_MS = 5_000L;
+
+    private static final String INSERT_SQL =
+        "INSERT INTO ad_click_aggregations " +
+        "(ad_id, campaign_id, window_start, window_end, click_count, unique_users) " +
+        "VALUES (?, ?, ?, ?, ?, ?)";
+
+    private transient Connection connection;
+    private transient PreparedStatement preparedStatement;
+    private transient List&lt;ClickAggregation&gt; pendingBatch;
+    private transient ScheduledFuture&lt;?&gt; flushSchedule;
+
+    @Override
+    public void open(Configuration configuration) throws Exception {
+        connection = DriverManager.getConnection(CLICKHOUSE_URL);
+        preparedStatement = connection.prepareStatement(INSERT_SQL);
+        pendingBatch = new ArrayList&lt;&gt;(BATCH_SIZE);
+
+        ScheduledExecutorService flushExecutor = Executors.newSingleThreadScheduledExecutor();
+        flushSchedule = flushExecutor.scheduleAtFixedRate(
+            this::flushBatch,
+            FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS
+        );
+    }
+
+    @Override
+    public void invoke(ClickAggregation aggregation, Context context) throws Exception {
+        pendingBatch.add(aggregation);
+        if (pendingBatch.size() >= BATCH_SIZE) {
+            flushBatch();
+        }
+    }
+
+    private synchronized void flushBatch() {
+        if (pendingBatch.isEmpty()) {
+            return;
+        }
+        try {
+            for (ClickAggregation aggregation : pendingBatch) {
+                preparedStatement.setString(1, aggregation.getAdId());
+                preparedStatement.setString(2, aggregation.getCampaignId());
+                preparedStatement.setTimestamp(3, new Timestamp(aggregation.getWindowStartMs()));
+                preparedStatement.setTimestamp(4, new Timestamp(aggregation.getWindowEndMs()));
+                preparedStatement.setLong(5, aggregation.getClickCount());
+                preparedStatement.setLong(6, aggregation.getUniqueUserCount());
+                preparedStatement.addBatch();
+            }
+            preparedStatement.executeBatch();
+            pendingBatch.clear();
+        } catch (SQLException sqlException) {
+            // Log with full context — never swallow silently
+            throw new RuntimeException(
+                "[ClickHouseSink.flushBatch] Batch insert failed. " +
+                "Batch size: " + pendingBatch.size() +
+                ". Flink will retry from last checkpoint.",
+                sqlException
             );
         }
     }
 
-    /**
-     * Records a click event if it passes deduplication check.
-     * Thread-safe: synchronized to protect circular buffer rotation.
-     *
-     * @param adId    the ad that was clicked
-     * @param userId  the user who clicked
-     */
-    public synchronized void recordClick(String adId, String userId) {
-        long nowMinute = System.currentTimeMillis() / 60_000;
-        advanceWindowIfNeeded(nowMinute);
-
-        // Deduplication key: same user clicking same ad within 5-min window = one click
-        String deduplicationKey = userId + ":" + adId;
-        if (!deduplicationFilters[currentBucketIndex].mightContain(deduplicationKey)) {
-            deduplicationFilters[currentBucketIndex].put(deduplicationKey);
-            clickBuckets[currentBucketIndex]++;
+    @Override
+    public void close() throws Exception {
+        flushBatch();
+        if (flushSchedule != null) {
+            flushSchedule.cancel(true);
         }
-        // Bloom filter may report false positive (mightContain=true for new click)
-        // This means we occasionally miss a genuine click — acceptable at &lt;0.1% rate
-    }
-
-    /**
-     * Returns total click count for the sliding window (last WINDOW_MINUTES minutes).
-     */
-    public synchronized long getWindowClickCount() {
-        long total = 0;
-        for (long bucketCount : clickBuckets) {
-            total += bucketCount;
+        if (connection != null) {
+            connection.close();
         }
-        return total;
-    }
-
-    /**
-     * Advances the circular buffer when the current minute has changed.
-     * Clears the bucket that's being overwritten (it's now older than the window).
-     */
-    private void advanceWindowIfNeeded(long nowMinute) {
-        long minutesElapsed = nowMinute - currentWindowMinute;
-        if (minutesElapsed &lt;= 0) {
-            return; // Still in the same minute
-        }
-
-        long bucketsToAdvance = Math.min(minutesElapsed, WINDOW_MINUTES);
-        for (long advancement = 0; advancement &lt; bucketsToAdvance; advancement++) {
-            currentBucketIndex = (currentBucketIndex + 1) % WINDOW_MINUTES;
-            clickBuckets[currentBucketIndex] = 0; // clear expired bucket
-            deduplicationFilters[currentBucketIndex] = BloomFilter.create(
-                Funnels.stringFunnel(), BLOOM_FILTER_BITS, BLOOM_FALSE_POSITIVE_RATE
-            );
-        }
-        currentWindowMinute = nowMinute;
     }
 }</code></pre>
         </div>
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════════
+           QUIZ
+      ═══════════════════════════════════════════════════════════ -->
       <section class="content-section" id="quiz" aria-labelledby="quiz-title">
-        <h2 class="content-section__title" id="quiz-title"><span class="content-section__title-icon">🧠</span>Knowledge Check</h2>
-        <div class="quiz" data-quiz-id="p-ad-click-quiz" role="region" aria-label="Problem quiz">
+        <h2 class="content-section__title" id="quiz-title">
+          <span class="content-section__title-icon" aria-hidden="true">🧠</span>
+          Knowledge Check
+        </h2>
+        <div class="quiz" data-quiz-id="p-ad-click-quiz" role="region" aria-label="Ad Click Aggregator quiz">
           <div class="quiz__header">
             <div class="quiz__title"><span aria-hidden="true">🧠</span> Knowledge Check</div>
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
-            <div class="quiz__question-number">Question 1 of 4</div>
+            <div class="quiz__question-number">Question 1 of 5</div>
             <div class="quiz__question-text"></div>
             <div class="quiz__options" role="group" aria-label="Answer options"></div>
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
-          <div data-question="Why partition Kafka clicks by ad_id rather than using random round-robin partitioning?" data-options='["Round-robin causes uneven partition sizes","Partitioning by ad_id co-locates all clicks for the same ad on one partition — enabling stateful aggregation (maintaining a running count per ad) without cross-partition coordination or network shuffles","ad_id is a UUID which distributes evenly without the clustering problems of user_id","Kafka requires numeric partition keys"]' data-correct="1" data-explanation="Stream aggregation requires all events for the same key to reach the same Flink operator instance. If clicks for ad_X are scattered across 100 partitions, you'd need a global reduce — expensive and slow. Partitioning by ad_id ensures locality: one Flink operator owns all clicks for a given ad." style="display:none"></div>
-          <div data-question="A Bloom filter for click deduplication may return a false positive. What does this mean in practice?" data-options='["A duplicate click is incorrectly counted (worst case)","A genuine new click is incorrectly identified as a duplicate and not counted — slightly under-counting clicks. This is acceptable for real-time dashboards but not for billing, which uses exact batch counts.","The Bloom filter crashes with an out-of-memory error","A Bloom filter never returns false positives by definition"]' data-correct="1" data-explanation="Bloom filters have no false negatives (a true duplicate is always caught) but can have false positives (a genuine click incorrectly flagged as duplicate). At 0.1% rate with 10B clicks/day = 10M missed genuine clicks — about 0.1% undercounting. Acceptable for analytics; for billing, use exact batch processing." style="display:none"></div>
-          <div data-question="What is the difference between a tumbling window and a sliding window in stream processing?" data-options='["Tumbling windows are real-time; sliding windows are batch","Tumbling windows are non-overlapping (00:00-01:00, 01:00-02:00); sliding windows overlap and advance continuously ('last 5 minutes' updates every second). Tumbling is simpler to implement; sliding gives smoother rolling metrics.","Tumbling windows are only supported in Kafka; sliding only in Flink","They are the same concept with different names"]' data-correct="1" data-explanation="Tumbling: fixed, non-overlapping buckets. Simple aggregation: each event belongs to exactly one window. Sliding: overlapping windows that move continuously. An event can belong to multiple windows. Use tumbling for 'clicks per minute'; use sliding for 'clicks in the last 5 minutes' that updates smoothly." style="display:none"></div>
-          <div data-question="Why does the ad click system use both a stream pipeline and a batch pipeline (Lambda architecture)?" data-options='["Batch pipelines are required by ad industry regulations","Stream processing is fast (~1 min latency) but slightly inaccurate (Bloom filter deduplication, late events). Batch processing is accurate but slow (~hours). Lambda architecture uses stream for real-time dashboards and batch for billing — getting both speed and accuracy, at the cost of operational complexity.","The stream pipeline only handles mobile clicks; batch handles desktop","A single pipeline cannot handle 10B clicks/day"]' data-correct="1" data-explanation="This is the fundamental Lambda architecture trade-off: speed vs accuracy. Stream = fast, approximate (good for monitoring, real-time bidding decisions). Batch = slow, exact (required for billing advertisers — charging $100.10 instead of $100.00 due to stream overcounting would be a serious issue)." style="display:none"></div>
+
+          <!-- Question 1 -->
+          <div
+            data-question="Your Flink job is processing ad clicks and crashes halfway through a 1-minute window. It has counted 42,000 clicks for ad_X so far. When it restarts from its last checkpoint (taken 30 seconds ago, which had 28,000 clicks), what happens?"
+            data-options='["The 42,000 count is lost. The window restarts at zero — clicks that arrived between the crash and restart are lost permanently.","Flink restores to the checkpoint state (28,000 clicks) and resets its Kafka consumer offset to the checkpoint offset. It replays the last 30 seconds of events and recomputes from 28,000 — producing the correct final count with exactly-once semantics.","Flink merges the pre-crash state (42,000) with the recomputed state — double-counting the last 30 seconds.","The window is discarded entirely and excluded from billing as a data quality measure."]'
+            data-correct="1"
+            data-explanation="This is Flink's core exactly-once guarantee via Chandy-Lamport distributed snapshots. The checkpoint atomically captures: (1) the window state for every key, and (2) the Kafka consumer offsets. On restart, Flink resets both to the checkpoint state. It then replays from the checkpointed Kafka offset, not from the current Kafka offset. This replays the last 30 seconds of events from Kafka. The window state starts at 28,000 and accumulates correctly from there — no data loss, no double-counting."
+            style="display:none"
+          ></div>
+
+          <!-- Question 2 -->
+          <div
+            data-question="A Bloom filter is used to deduplicate click_ids in the stream pipeline. It has a 0.1% false positive rate. With 10 billion clicks per day, what is the practical consequence for the billing system?"
+            data-options='["10 million genuine clicks are incorrectly flagged as duplicates and dropped — under-counting clicks by 0.1%. This is acceptable for real-time dashboards but would cause incorrect advertiser invoices. The batch pipeline with exact COUNT(DISTINCT click_id) on S3 data corrects this for billing.","10 million duplicate clicks are missed — over-counting clicks by 0.1%. Advertisers are slightly over-billed.","0.1% of duplicate clicks are not caught — they pass through as genuine. Tiny over-count in stream; corrected in batch.","The consequence is negligible — 0.1% on 10 billion events is only 10 million events, which is an acceptable rounding error in ad billing."]'
+            data-correct="0"
+            data-explanation="Bloom filters have false positives (genuine new items incorrectly flagged as already-seen) but never false negatives (duplicates always caught). At 0.1% false positive rate over 10B clicks/day, 10 million genuine clicks are dropped. This under-counts real clicks in the stream pipeline. For billing, this is unacceptable — you'd charge advertisers less than they owe. The Lambda architecture batch layer fixes this: Spark on S3 uses COUNT(DISTINCT click_id) which is exact. Real-time dashboards use stream estimates; invoices use batch exact counts."
+            style="display:none"
+          ></div>
+
+          <!-- Question 3 -->
+          <div
+            data-question="Why is Kafka partitioned by ad_id for click events, and what problem does this create when a viral ad receives 1 million clicks per minute?"
+            data-options='["Partitioning by ad_id is an anti-pattern — clicks should always use random round-robin to balance load across partitions.","Partitioning by ad_id ensures all clicks for the same ad land on the same Kafka partition, enabling stateful per-ad aggregation in a single Flink operator without cross-partition coordination. The hot-ad problem: a viral ad saturates one partition (1M clicks/min = 16K/sec) while others are nearly idle. Fix: two-phase aggregation — add a random shard suffix to ad_id (ad_viral#0 through ad_viral#9), aggregate per shard in 10 parallel operators, sum the shards at query time.","Partitioning by ad_id allows Kafka to compress click events more efficiently since similar events are co-located.","The hot-ad problem requires increasing the number of Kafka partitions for that specific topic to 10,000."]'
+            data-correct="1"
+            data-explanation="The partition key choice is fundamental to the stream processing design. Co-locating clicks by ad_id eliminates cross-partition joins and enables stateful aggregation (each Flink operator owns its partition's ads). The hot-ad skew is a classic stream processing challenge. The two-phase aggregation pattern (add random suffix → aggregate shards → query-time SUM) is the standard solution. An alternative is to use a global aggregation step in Flink after the sharded step, but this adds latency and complexity."
+            style="display:none"
+          ></div>
+
+          <!-- Question 4 -->
+          <div
+            data-question="An interviewer asks: 'Why use Lambda architecture (stream + batch) instead of just the Kappa architecture (stream-only)? Wouldn't Kappa be simpler?' How do you respond?"
+            data-options='["Kappa cannot handle 10 billion clicks per day — it lacks the throughput of a batch system.","Kappa architecture is simpler but sacrifices auditability. For a billing system, the exact Spark SQL that produces invoice numbers must be auditable, reproducible, and certifiable by finance and legal teams. A Flink checkpoint-based reprocessing is harder to audit than a deterministic SQL query on immutable S3 data. If I were building an analytics-only system (ML features, dashboards, recommendations), I would choose Kappa. Billing requirements justify the operational cost of maintaining two pipelines.","Lambda architecture has lower latency than Kappa because the batch layer pre-computes results.","Kappa architecture requires Kafka to retain data forever, which is cost-prohibitive at 10 billion clicks per day."]'
+            data-correct="1"
+            data-explanation="This is a nuanced L6 answer. Both Kappa (stream + replay) and Lambda (stream + batch) are valid architectures at this scale. The key differentiator is the billing/auditability requirement. Kappa's reprocessing (replaying Kafka through Flink) is harder to certify as exactly-equivalent to the original computation — it depends on Flink version, parallelism, checkpoint state interpretation. Lambda's batch layer is a separate, deterministic SQL job on immutable data — easy to version-control, audit, and reproduce independently of the stream system. For general analytics, Kappa wins on simplicity. For billing, Lambda wins on auditability."
+            style="display:none"
+          ></div>
+
+          <!-- Question 5 -->
+          <div
+            data-question="Why is ClickHouse chosen as the aggregation store instead of PostgreSQL or Cassandra? A senior interviewer challenges you: 'Can't PostgreSQL just use a time-series extension and index on (ad_id, window_start)?'"
+            data-options='["PostgreSQL is not open-source and has licensing costs at scale.","ClickHouse is a columnar OLAP database. The query pattern — SUM(click_count) for all windows of a campaign over 30 days — scans only two columns across 43,200 rows. Columnar storage reads only 691KB of I/O. PostgreSQL is row-oriented: the same query reads entire rows including all columns — 8.6MB of I/O. At 1M campaigns × hundreds of queries/second, this 12× I/O difference translates to 12× more disk bandwidth required. Additionally, SummingMergeTree enables idempotent duplicate writes from Flink — no equivalent in PostgreSQL without triggers.","Cassandra would work as well as ClickHouse for this exact use case.","The PostgreSQL extension TimescaleDB would perform identically to ClickHouse for this query pattern."]'
+            data-correct="1"
+            data-explanation="The PostgreSQL-with-index argument is reasonable for small scale — at thousands of QPS with millions of ad campaigns, it would fall over. The root cause is the access pattern: OLAP (analytical) queries read a few columns across many rows; OLTP (transactional) databases are optimized for reading many columns across a few rows. Columnar storage (ClickHouse, Druid, Pinot) is architected for the OLAP pattern. TimescaleDB does help PostgreSQL with time-series but is still row-oriented internally for individual row access. For ad analytics at 115K inserts/sec and hundreds of analytical queries/sec simultaneously, a purpose-built columnar store is the right tool."
+            style="display:none"
+          ></div>
+
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>
@@ -339,6 +1493,7 @@ public class ClickAggregator {
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
   <script src="../../assets/js/shared.js" type="module"></script>
 </body>
 </html>
