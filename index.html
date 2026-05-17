@@ -10,6 +10,27 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/css/main.css">
+  <style>
+    .visually-hidden {
+      position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0
+    }
+    .filter-btn {
+      display:inline-flex;align-items:center;padding:var(--space-1) var(--space-3);
+      font-size:var(--text-xs);font-weight:500;font-family:inherit;
+      background:var(--color-bg-surface);border:1px solid var(--color-border);
+      border-radius:var(--radius-full);color:var(--color-text-secondary);
+      cursor:pointer;transition:all 0.15s ease;white-space:nowrap;line-height:1.5
+    }
+    .filter-btn:hover { border-color:var(--color-primary);color:var(--color-primary) }
+    .filter-btn--active {
+      background:var(--color-primary);border-color:var(--color-primary);
+      color:#fff
+    }
+    .filter-btn--active:hover { background:var(--color-primary-dark, #4f46e5);color:#fff }
+    .problem-card.is-hidden { display:none }
+    #js-problem-search:focus { outline:none }
+    .tier-heading { margin-bottom:var(--space-4) }
+  </style>
 </head>
 <body>
 
@@ -306,8 +327,64 @@
           </p>
         </div>
 
+        <!-- Search + Filter Bar -->
+        <div id="js-problem-filter" style="margin-bottom:var(--space-8)">
+          <!-- Search input -->
+          <div style="position:relative;margin-bottom:var(--space-5)">
+            <svg aria-hidden="true" style="position:absolute;left:var(--space-4);top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--color-text-muted);pointer-events:none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <label for="js-problem-search" class="visually-hidden">Search problems by name, company, or topic</label>
+            <input
+              id="js-problem-search"
+              type="search"
+              placeholder="Search problems, companies, or topics…"
+              autocomplete="off"
+              style="width:100%;padding:var(--space-3) var(--space-4) var(--space-3) var(--space-10);background:var(--color-bg-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);color:var(--color-text-primary);font-size:var(--text-sm);font-family:inherit;outline:none;transition:border-color 0.2s,box-shadow 0.2s;box-sizing:border-box"
+              onfocus="this.style.borderColor='var(--color-primary)';this.style.boxShadow='0 0 0 3px rgba(99,102,241,0.15)'"
+              onblur="this.style.borderColor='var(--color-border)';this.style.boxShadow='none'"
+            >
+          </div>
+
+          <!-- Company filters -->
+          <div style="margin-bottom:var(--space-4)">
+            <div style="font-size:var(--text-xs);font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-2)">By Company</div>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--space-2)" role="group" aria-label="Filter by company">
+              <button class="js-filter-btn filter-btn filter-btn--active" data-filter-type="company" data-filter-value="all" type="button">All</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="amazon" type="button">Amazon</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="google" type="button">Google</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="meta" type="button">Meta</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="netflix" type="button">Netflix</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="microsoft" type="button">Microsoft</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="stripe" type="button">Stripe</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="uber" type="button">Uber</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="company" data-filter-value="twitter" type="button">Twitter/X</button>
+            </div>
+          </div>
+
+          <!-- Tag filters -->
+          <div style="margin-bottom:var(--space-5)">
+            <div style="font-size:var(--text-xs);font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-2)">By Topic</div>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--space-2)" role="group" aria-label="Filter by topic">
+              <button class="js-filter-btn filter-btn filter-btn--active" data-filter-type="tag" data-filter-value="all" type="button">All Topics</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="caching" type="button">Caching</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="kafka" type="button">Kafka</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="geo" type="button">Geo / Location</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="realtime" type="button">Real-time</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="cdn" type="button">CDN / Storage</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="sql" type="button">SQL / ACID</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="distributed" type="button">Distributed</button>
+              <button class="js-filter-btn filter-btn" data-filter-type="tag" data-filter-value="ml" type="button">ML / Search</button>
+            </div>
+          </div>
+
+          <!-- Active filter summary + clear -->
+          <div id="js-filter-summary" style="display:none;font-size:var(--text-sm);color:var(--color-text-muted)">
+            Showing <strong id="js-filter-count">0</strong> problems
+            <button id="js-filter-clear" type="button" style="margin-left:var(--space-3);color:var(--color-primary);background:none;border:none;cursor:pointer;font-size:inherit;padding:0;text-decoration:underline">Clear filters</button>
+          </div>
+        </div>
+
         <!-- Tier Legend -->
-        <div style="display:flex;gap:var(--space-6);margin-bottom:var(--space-8);flex-wrap:wrap">
+        <div id="js-tier-legend" style="display:flex;gap:var(--space-6);margin-bottom:var(--space-8);flex-wrap:wrap">
           <div style="display:flex;align-items:center;gap:var(--space-2)">
             <div style="width:10px;height:10px;border-radius:50%;background:var(--color-tier1);box-shadow:0 0 6px var(--color-tier1)"></div>
             <span style="font-size:var(--text-sm);color:var(--color-text-secondary)"><strong style="color:var(--color-tier1)">Tier 1</strong> — Asked at every MAANG company</span>
@@ -322,212 +399,86 @@
           </div>
         </div>
 
+        <!-- No results message -->
+        <div id="js-no-results" style="display:none;text-align:center;padding:var(--space-12);color:var(--color-text-muted)">
+          <div style="font-size:2rem;margin-bottom:var(--space-3)">🔍</div>
+          <div style="font-size:var(--text-lg);font-weight:600;margin-bottom:var(--space-2)">No problems match your filters</div>
+          <div style="font-size:var(--text-sm)">Try a different company, topic, or clear the search.</div>
+        </div>
+
+        <div id="js-tier1-group">
         <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
           <span style="color:var(--color-tier1)">●</span> Tier 1 — Must Know
         </h3>
-        <div class="problem-grid" style="margin-bottom:var(--space-10)">
-          <a href="problems/tier1/url-shortener.html" class="problem-card" data-lesson-id="p-url-shortener">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon • Google • Meta</div>
-            <div class="problem-card__title">Design a URL Shortener (like bit.ly)</div>
-            <div class="problem-card__meta">
-              <span class="tag">Hashing</span><span class="tag">Caching</span><span class="tag">NoSQL</span>
-            </div>
-            <div class="problem-card__complete">
-              <div class="problem-card__complete-icon"></div>
-              <span>Mark complete</span>
-            </div>
-          </a>
-          <a href="problems/tier1/twitter-feed.html" class="problem-card" data-lesson-id="p-twitter-feed">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Meta • Twitter • LinkedIn</div>
-            <div class="problem-card__title">Design Twitter / News Feed</div>
-            <div class="problem-card__meta">
-              <span class="tag">Fanout</span><span class="tag">Caching</span><span class="tag">Kafka</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/youtube.html" class="problem-card" data-lesson-id="p-youtube">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google • Netflix • Meta</div>
-            <div class="problem-card__title">Design YouTube / Video Streaming</div>
-            <div class="problem-card__meta">
-              <span class="tag">CDN</span><span class="tag">Object Storage</span><span class="tag">Transcoding</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/whatsapp.html" class="problem-card" data-lesson-id="p-whatsapp">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Meta • Apple • Google</div>
-            <div class="problem-card__title">Design WhatsApp / Messaging System</div>
-            <div class="problem-card__meta">
-              <span class="tag">WebSocket</span><span class="tag">Presence</span><span class="tag">E2E Encryption</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/rate-limiter.html" class="problem-card" data-lesson-id="p-rate-limiter">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google • Amazon • Stripe</div>
-            <div class="problem-card__title">Design a Rate Limiter</div>
-            <div class="problem-card__meta">
-              <span class="tag">Token Bucket</span><span class="tag">Redis</span><span class="tag">Distributed</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/distributed-cache.html" class="problem-card" data-lesson-id="p-distributed-cache">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon • Meta • Google</div>
-            <div class="problem-card__title">Design a Distributed Cache (like Memcached)</div>
-            <div class="problem-card__meta">
-              <span class="tag">Consistent Hashing</span><span class="tag">LRU</span><span class="tag">Replication</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/search-autocomplete.html" class="problem-card" data-lesson-id="p-search-autocomplete">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google • Amazon • Meta</div>
-            <div class="problem-card__title">Design Search Autocomplete</div>
-            <div class="problem-card__meta">
-              <span class="tag">Trie</span><span class="tag">Caching</span><span class="tag">Analytics</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/notification-system.html" class="problem-card" data-lesson-id="p-notification">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Meta • Amazon • Netflix</div>
-            <div class="problem-card__title">Design a Notification System</div>
-            <div class="problem-card__meta">
-              <span class="tag">Push</span><span class="tag">Kafka</span><span class="tag">Fanout</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/uber.html" class="problem-card" data-lesson-id="p-uber">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google Maps • Lyft • Amazon</div>
-            <div class="problem-card__title">Design Uber / Ride Sharing</div>
-            <div class="problem-card__meta">
-              <span class="tag">Geo-Index</span><span class="tag">WebSocket</span><span class="tag">Matching</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/web-crawler.html" class="problem-card" data-lesson-id="p-web-crawler">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google • Bing • Amazon</div>
-            <div class="problem-card__title">Design a Web Crawler</div>
-            <div class="problem-card__meta">
-              <span class="tag">BFS</span><span class="tag">Deduplication</span><span class="tag">Distributed</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/pastebin.html" class="problem-card" data-lesson-id="p-pastebin">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon • Google</div>
-            <div class="problem-card__title">Design Pastebin</div>
-            <div class="problem-card__meta">
-              <span class="tag">Object Storage</span><span class="tag">CDN</span><span class="tag">Hashing</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/key-value-store.html" class="problem-card" data-lesson-id="p-key-value">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon • Google • Meta</div>
-            <div class="problem-card__title">Design a Key-Value Store (like DynamoDB)</div>
-            <div class="problem-card__meta">
-              <span class="tag">Consistent Hashing</span><span class="tag">Replication</span><span class="tag">Quorum</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/message-queue.html" class="problem-card" data-lesson-id="p-message-queue">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon SQS • Google Pub/Sub</div>
-            <div class="problem-card__title">Design a Distributed Message Queue</div>
-            <div class="problem-card__meta">
-              <span class="tag">Durability</span><span class="tag">At-least-once</span><span class="tag">Partitioning</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/news-feed.html" class="problem-card" data-lesson-id="p-news-feed">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Meta • LinkedIn • Twitter</div>
-            <div class="problem-card__title">Design a Social Media News Feed</div>
-            <div class="problem-card__meta">
-              <span class="tag">Fanout on Write</span><span class="tag">Fanout on Read</span><span class="tag">Celebrity</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/dropbox.html" class="problem-card" data-lesson-id="p-dropbox">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google Drive • Amazon S3</div>
-            <div class="problem-card__title">Design Dropbox / File Storage</div>
-            <div class="problem-card__meta">
-              <span class="tag">Chunking</span><span class="tag">Delta Sync</span><span class="tag">Object Storage</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/lru-cache.html" class="problem-card" data-lesson-id="p-lru-cache">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Amazon • Google • Meta • Microsoft</div>
-            <div class="problem-card__title">Design an LRU Cache</div>
-            <div class="problem-card__meta">
-              <span class="tag">HashMap + DLL</span><span class="tag">Thread-safe</span><span class="tag">TTL</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
-          <a href="problems/tier1/yelp.html" class="problem-card" data-lesson-id="p-yelp">
-            <div class="problem-card__tier problem-card__tier--1"></div>
-            <div class="problem-card__company">Google • Amazon • Yelp • Uber</div>
-            <div class="problem-card__title">Design Yelp / Proximity Service</div>
-            <div class="problem-card__meta">
-              <span class="tag">Geohash</span><span class="tag">Geo-Index</span><span class="tag">Redis GEO</span>
-            </div>
-            <div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div>
-          </a>
+        <div class="problem-grid" style="margin-bottom:var(--space-4)" id="js-grid-tier1">
+          <a href="problems/tier1/url-shortener.html" class="problem-card" data-lesson-id="p-url-shortener" data-companies="amazon google meta" data-tags="caching distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon • Google • Meta</div><div class="problem-card__title">Design a URL Shortener (like bit.ly)</div><div class="problem-card__meta"><span class="tag">Hashing</span><span class="tag">Caching</span><span class="tag">NoSQL</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/twitter-feed.html" class="problem-card" data-lesson-id="p-twitter-feed" data-companies="meta twitter" data-tags="kafka caching realtime"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Meta • Twitter • LinkedIn</div><div class="problem-card__title">Design Twitter / News Feed</div><div class="problem-card__meta"><span class="tag">Fanout</span><span class="tag">Caching</span><span class="tag">Kafka</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/youtube.html" class="problem-card" data-lesson-id="p-youtube" data-companies="google netflix meta" data-tags="cdn distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google • Netflix • Meta</div><div class="problem-card__title">Design YouTube / Video Streaming</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Object Storage</span><span class="tag">Transcoding</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/whatsapp.html" class="problem-card" data-lesson-id="p-whatsapp" data-companies="meta google" data-tags="realtime distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Meta • Apple • Google</div><div class="problem-card__title">Design WhatsApp / Messaging System</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Presence</span><span class="tag">E2E Encryption</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/rate-limiter.html" class="problem-card" data-lesson-id="p-rate-limiter" data-companies="google amazon stripe" data-tags="distributed caching"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google • Amazon • Stripe</div><div class="problem-card__title">Design a Rate Limiter</div><div class="problem-card__meta"><span class="tag">Token Bucket</span><span class="tag">Redis</span><span class="tag">Distributed</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/distributed-cache.html" class="problem-card" data-lesson-id="p-distributed-cache" data-companies="amazon meta google" data-tags="caching distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon • Meta • Google</div><div class="problem-card__title">Design a Distributed Cache (like Memcached)</div><div class="problem-card__meta"><span class="tag">Consistent Hashing</span><span class="tag">LRU</span><span class="tag">Replication</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/search-autocomplete.html" class="problem-card" data-lesson-id="p-search-autocomplete" data-companies="google amazon meta" data-tags="caching ml"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google • Amazon • Meta</div><div class="problem-card__title">Design Search Autocomplete</div><div class="problem-card__meta"><span class="tag">Trie</span><span class="tag">Caching</span><span class="tag">Analytics</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/notification-system.html" class="problem-card" data-lesson-id="p-notification" data-companies="meta amazon netflix" data-tags="kafka realtime distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Meta • Amazon • Netflix</div><div class="problem-card__title">Design a Notification System</div><div class="problem-card__meta"><span class="tag">Push</span><span class="tag">Kafka</span><span class="tag">Fanout</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/uber.html" class="problem-card" data-lesson-id="p-uber" data-companies="google amazon uber" data-tags="geo realtime distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google Maps • Lyft • Amazon</div><div class="problem-card__title">Design Uber / Ride Sharing</div><div class="problem-card__meta"><span class="tag">Geo-Index</span><span class="tag">WebSocket</span><span class="tag">Matching</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/web-crawler.html" class="problem-card" data-lesson-id="p-web-crawler" data-companies="google amazon" data-tags="distributed ml"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google • Bing • Amazon</div><div class="problem-card__title">Design a Web Crawler</div><div class="problem-card__meta"><span class="tag">BFS</span><span class="tag">Deduplication</span><span class="tag">Distributed</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/pastebin.html" class="problem-card" data-lesson-id="p-pastebin" data-companies="amazon google" data-tags="cdn distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon • Google</div><div class="problem-card__title">Design Pastebin</div><div class="problem-card__meta"><span class="tag">Object Storage</span><span class="tag">CDN</span><span class="tag">Hashing</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/key-value-store.html" class="problem-card" data-lesson-id="p-key-value" data-companies="amazon google meta" data-tags="distributed caching"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon • Google • Meta</div><div class="problem-card__title">Design a Key-Value Store (like DynamoDB)</div><div class="problem-card__meta"><span class="tag">Consistent Hashing</span><span class="tag">Replication</span><span class="tag">Quorum</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/message-queue.html" class="problem-card" data-lesson-id="p-message-queue" data-companies="amazon google" data-tags="kafka distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon SQS • Google Pub/Sub</div><div class="problem-card__title">Design a Distributed Message Queue</div><div class="problem-card__meta"><span class="tag">Durability</span><span class="tag">At-least-once</span><span class="tag">Partitioning</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/news-feed.html" class="problem-card" data-lesson-id="p-news-feed" data-companies="meta twitter" data-tags="caching kafka distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Meta • LinkedIn • Twitter</div><div class="problem-card__title">Design a Social Media News Feed</div><div class="problem-card__meta"><span class="tag">Fanout on Write</span><span class="tag">Fanout on Read</span><span class="tag">Celebrity</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/dropbox.html" class="problem-card" data-lesson-id="p-dropbox" data-companies="google amazon" data-tags="cdn distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google Drive • Amazon S3</div><div class="problem-card__title">Design Dropbox / File Storage</div><div class="problem-card__meta"><span class="tag">Chunking</span><span class="tag">Delta Sync</span><span class="tag">Object Storage</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/lru-cache.html" class="problem-card" data-lesson-id="p-lru-cache" data-companies="amazon google meta microsoft" data-tags="caching distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Amazon • Google • Meta • Microsoft</div><div class="problem-card__title">Design an LRU Cache</div><div class="problem-card__meta"><span class="tag">HashMap + DLL</span><span class="tag">Thread-safe</span><span class="tag">TTL</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
+          <a href="problems/tier1/yelp.html" class="problem-card" data-lesson-id="p-yelp" data-companies="google amazon uber" data-tags="geo distributed"><div class="problem-card__tier problem-card__tier--1"></div><div class="problem-card__company">Google • Amazon • Yelp • Uber</div><div class="problem-card__title">Design Yelp / Proximity Service</div><div class="problem-card__meta"><span class="tag">Geohash</span><span class="tag">Geo-Index</span><span class="tag">Redis GEO</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div><span>Mark complete</span></div></a>
         </div>
+        </div><!-- end #js-tier1-group -->
 
+        <div id="js-tier2-group">
         <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
           <span style="color:var(--color-tier2)">●</span> Tier 2 — Common at Senior Levels
         </h3>
-        <div class="problem-grid" style="margin-bottom:var(--space-10)">
-          <a href="problems/tier2/slack.html" class="problem-card" data-lesson-id="p-slack"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Slack • Discord</div><div class="problem-card__title">Design Slack / Real-time Chat</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Channels</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/instagram.html" class="problem-card" data-lesson-id="p-instagram"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Meta • TikTok</div><div class="problem-card__title">Design Instagram</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Feed</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/netflix.html" class="problem-card" data-lesson-id="p-netflix"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Netflix • Disney+</div><div class="problem-card__title">Design Netflix</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Adaptive Streaming</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/google-maps.html" class="problem-card" data-lesson-id="p-google-maps"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Apple</div><div class="problem-card__title">Design Google Maps</div><div class="problem-card__meta"><span class="tag">Geo-Encoding</span><span class="tag">Graph</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/payment-system.html" class="problem-card" data-lesson-id="p-payment"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Stripe • Amazon • PayPal</div><div class="problem-card__title">Design a Payment System</div><div class="problem-card__meta"><span class="tag">Idempotency</span><span class="tag">ACID</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/code-judge.html" class="problem-card" data-lesson-id="p-code-judge"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Amazon</div><div class="problem-card__title">Design Online Code Judge (LeetCode)</div><div class="problem-card__meta"><span class="tag">Sandboxing</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/hotel-booking.html" class="problem-card" data-lesson-id="p-hotel"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Booking.com • Airbnb</div><div class="problem-card__title">Design Hotel Booking System</div><div class="problem-card__meta"><span class="tag">Concurrency</span><span class="tag">Locking</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/stock-exchange.html" class="problem-card" data-lesson-id="p-stock"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Goldman • Robinhood</div><div class="problem-card__title">Design a Stock Exchange</div><div class="problem-card__meta"><span class="tag">Order Book</span><span class="tag">Low Latency</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/ad-click.html" class="problem-card" data-lesson-id="p-ad-click"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Meta • Amazon</div><div class="problem-card__title">Design Ad Click Aggregator</div><div class="problem-card__meta"><span class="tag">Stream Processing</span><span class="tag">Kafka</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/task-scheduler.html" class="problem-card" data-lesson-id="p-scheduler"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Google</div><div class="problem-card__title">Design a Distributed Task Scheduler</div><div class="problem-card__meta"><span class="tag">Cron</span><span class="tag">Leader Election</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/live-streaming.html" class="problem-card" data-lesson-id="p-live"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Twitch • YouTube Live</div><div class="problem-card__title">Design Live Video Streaming</div><div class="problem-card__meta"><span class="tag">RTMP</span><span class="tag">HLS</span><span class="tag">CDN</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/flash-sale.html" class="problem-card" data-lesson-id="p-flash"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba</div><div class="problem-card__title">Design E-commerce Flash Sale</div><div class="problem-card__meta"><span class="tag">Rate Limiting</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/google-docs.html" class="problem-card" data-lesson-id="p-google-docs"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Notion • Figma</div><div class="problem-card__title">Design Google Docs (Collaborative Editing)</div><div class="problem-card__meta"><span class="tag">OT / CRDT</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/metrics-dashboard.html" class="problem-card" data-lesson-id="p-metrics"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Datadog • New Relic</div><div class="problem-card__title">Design Metrics Dashboard</div><div class="problem-card__meta"><span class="tag">Time Series</span><span class="tag">Aggregation</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/leaderboard.html" class="problem-card" data-lesson-id="p-leaderboard"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Gaming • Gamification</div><div class="problem-card__title">Design a Gaming Leaderboard</div><div class="problem-card__meta"><span class="tag">Redis Sorted Set</span><span class="tag">Sharding</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/live-comments.html" class="problem-card" data-lesson-id="p-live-comments"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">YouTube • Twitch • Meta • TikTok</div><div class="problem-card__title">Design Live Comments System</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Kafka Fan-out</span><span class="tag">Cassandra</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/ecommerce-cart.html" class="problem-card" data-lesson-id="p-ecommerce-cart"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba • Shopify</div><div class="problem-card__title">Design E-commerce Cart & Checkout</div><div class="problem-card__meta"><span class="tag">Optimistic Lock</span><span class="tag">Idempotency</span><span class="tag">Saga</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/search-engine.html" class="problem-card" data-lesson-id="p-search-engine"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Microsoft Bing • Amazon</div><div class="problem-card__title">Design a Search Engine (like Google)</div><div class="problem-card__meta"><span class="tag">Inverted Index</span><span class="tag">TF-IDF</span><span class="tag">PageRank</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/spotify.html" class="problem-card" data-lesson-id="p-spotify"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Spotify • Apple Music • YouTube Music</div><div class="problem-card__title">Design Spotify / Music Streaming</div><div class="problem-card__meta"><span class="tag">CDN Audio</span><span class="tag">Collab Filtering</span><span class="tag">DRM</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/ticket-booking.html" class="problem-card" data-lesson-id="p-ticket-booking"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">BookMyShow • Ticketmaster • Amazon</div><div class="problem-card__title">Design Ticket Booking System</div><div class="problem-card__meta"><span class="tag">Seat Locking</span><span class="tag">Redis SETNX</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/zoom.html" class="problem-card" data-lesson-id="p-zoom"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Zoom • Google Meet • Microsoft Teams</div><div class="problem-card__title">Design Zoom / Video Conferencing</div><div class="problem-card__meta"><span class="tag">SFU</span><span class="tag">WebRTC</span><span class="tag">Simulcast</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/trending-topics.html" class="problem-card" data-lesson-id="p-trending-topics"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Twitter/X • Google • TikTok • Meta</div><div class="problem-card__title">Design Trending Topics / Top-K System</div><div class="problem-card__meta"><span class="tag">Count-Min Sketch</span><span class="tag">Flink</span><span class="tag">Redis ZSet</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier2/facebook-messenger.html" class="problem-card" data-lesson-id="p-fb-messenger"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Meta • Telegram • Signal</div><div class="problem-card__title">Design Facebook Messenger</div><div class="problem-card__meta"><span class="tag">Group Fan-out</span><span class="tag">Read Receipts</span><span class="tag">Presence</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+        <div class="problem-grid" style="margin-bottom:var(--space-4)" id="js-grid-tier2">
+          <a href="problems/tier2/slack.html" class="problem-card" data-lesson-id="p-slack" data-companies="meta" data-tags="realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Slack • Discord</div><div class="problem-card__title">Design Slack / Real-time Chat</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Channels</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/instagram.html" class="problem-card" data-lesson-id="p-instagram" data-companies="meta" data-tags="cdn caching"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Meta • TikTok</div><div class="problem-card__title">Design Instagram</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Feed</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/netflix.html" class="problem-card" data-lesson-id="p-netflix" data-companies="netflix" data-tags="cdn distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Netflix • Disney+</div><div class="problem-card__title">Design Netflix</div><div class="problem-card__meta"><span class="tag">CDN</span><span class="tag">Adaptive Streaming</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/google-maps.html" class="problem-card" data-lesson-id="p-google-maps" data-companies="google" data-tags="geo distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Apple</div><div class="problem-card__title">Design Google Maps</div><div class="problem-card__meta"><span class="tag">Geo-Encoding</span><span class="tag">Graph</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/payment-system.html" class="problem-card" data-lesson-id="p-payment" data-companies="stripe amazon" data-tags="sql distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Stripe • Amazon • PayPal</div><div class="problem-card__title">Design a Payment System</div><div class="problem-card__meta"><span class="tag">Idempotency</span><span class="tag">ACID</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/code-judge.html" class="problem-card" data-lesson-id="p-code-judge" data-companies="google amazon" data-tags="distributed kafka"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Amazon</div><div class="problem-card__title">Design Online Code Judge (LeetCode)</div><div class="problem-card__meta"><span class="tag">Sandboxing</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/hotel-booking.html" class="problem-card" data-lesson-id="p-hotel" data-companies="amazon" data-tags="sql distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Booking.com • Airbnb</div><div class="problem-card__title">Design Hotel Booking System</div><div class="problem-card__meta"><span class="tag">Concurrency</span><span class="tag">Locking</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/stock-exchange.html" class="problem-card" data-lesson-id="p-stock" data-companies="amazon" data-tags="sql realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Goldman • Robinhood</div><div class="problem-card__title">Design a Stock Exchange</div><div class="problem-card__meta"><span class="tag">Order Book</span><span class="tag">Low Latency</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/ad-click.html" class="problem-card" data-lesson-id="p-ad-click" data-companies="google meta amazon" data-tags="kafka distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Meta • Amazon</div><div class="problem-card__title">Design Ad Click Aggregator</div><div class="problem-card__meta"><span class="tag">Stream Processing</span><span class="tag">Kafka</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/task-scheduler.html" class="problem-card" data-lesson-id="p-scheduler" data-companies="amazon google" data-tags="distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Google</div><div class="problem-card__title">Design a Distributed Task Scheduler</div><div class="problem-card__meta"><span class="tag">Cron</span><span class="tag">Leader Election</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/live-streaming.html" class="problem-card" data-lesson-id="p-live" data-companies="google" data-tags="cdn realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Twitch • YouTube Live</div><div class="problem-card__title">Design Live Video Streaming</div><div class="problem-card__meta"><span class="tag">RTMP</span><span class="tag">HLS</span><span class="tag">CDN</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/flash-sale.html" class="problem-card" data-lesson-id="p-flash" data-companies="amazon" data-tags="caching distributed sql"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba</div><div class="problem-card__title">Design E-commerce Flash Sale</div><div class="problem-card__meta"><span class="tag">Rate Limiting</span><span class="tag">Queue</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/google-docs.html" class="problem-card" data-lesson-id="p-google-docs" data-companies="google" data-tags="realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Notion • Figma</div><div class="problem-card__title">Design Google Docs (Collaborative Editing)</div><div class="problem-card__meta"><span class="tag">OT / CRDT</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/metrics-dashboard.html" class="problem-card" data-lesson-id="p-metrics" data-companies="google amazon" data-tags="distributed kafka"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Datadog • New Relic</div><div class="problem-card__title">Design Metrics Dashboard</div><div class="problem-card__meta"><span class="tag">Time Series</span><span class="tag">Aggregation</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/leaderboard.html" class="problem-card" data-lesson-id="p-leaderboard" data-companies="amazon" data-tags="caching distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Gaming • Gamification</div><div class="problem-card__title">Design a Gaming Leaderboard</div><div class="problem-card__meta"><span class="tag">Redis Sorted Set</span><span class="tag">Sharding</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/live-comments.html" class="problem-card" data-lesson-id="p-live-comments" data-companies="meta google" data-tags="realtime kafka distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">YouTube • Twitch • Meta • TikTok</div><div class="problem-card__title">Design Live Comments System</div><div class="problem-card__meta"><span class="tag">WebSocket</span><span class="tag">Kafka Fan-out</span><span class="tag">Cassandra</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/ecommerce-cart.html" class="problem-card" data-lesson-id="p-ecommerce-cart" data-companies="amazon" data-tags="sql distributed caching"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Amazon • Alibaba • Shopify</div><div class="problem-card__title">Design E-commerce Cart &amp; Checkout</div><div class="problem-card__meta"><span class="tag">Optimistic Lock</span><span class="tag">Idempotency</span><span class="tag">Saga</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/search-engine.html" class="problem-card" data-lesson-id="p-search-engine" data-companies="google amazon microsoft" data-tags="ml distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Google • Microsoft Bing • Amazon</div><div class="problem-card__title">Design a Search Engine (like Google)</div><div class="problem-card__meta"><span class="tag">Inverted Index</span><span class="tag">TF-IDF</span><span class="tag">PageRank</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/spotify.html" class="problem-card" data-lesson-id="p-spotify" data-companies="amazon" data-tags="cdn caching ml distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Spotify • Apple Music • YouTube Music</div><div class="problem-card__title">Design Spotify / Music Streaming</div><div class="problem-card__meta"><span class="tag">CDN Audio</span><span class="tag">Collab Filtering</span><span class="tag">DRM</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/ticket-booking.html" class="problem-card" data-lesson-id="p-ticket-booking" data-companies="amazon" data-tags="sql realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">BookMyShow • Ticketmaster • Amazon</div><div class="problem-card__title">Design Ticket Booking System</div><div class="problem-card__meta"><span class="tag">Seat Locking</span><span class="tag">Redis SETNX</span><span class="tag">WebSocket</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/zoom.html" class="problem-card" data-lesson-id="p-zoom" data-companies="microsoft google" data-tags="realtime distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Zoom • Google Meet • Microsoft Teams</div><div class="problem-card__title">Design Zoom / Video Conferencing</div><div class="problem-card__meta"><span class="tag">SFU</span><span class="tag">WebRTC</span><span class="tag">Simulcast</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/trending-topics.html" class="problem-card" data-lesson-id="p-trending-topics" data-companies="twitter google meta" data-tags="kafka distributed ml"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Twitter/X • Google • TikTok • Meta</div><div class="problem-card__title">Design Trending Topics / Top-K System</div><div class="problem-card__meta"><span class="tag">Count-Min Sketch</span><span class="tag">Flink</span><span class="tag">Redis ZSet</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier2/facebook-messenger.html" class="problem-card" data-lesson-id="p-fb-messenger" data-companies="meta" data-tags="realtime kafka distributed"><div class="problem-card__tier problem-card__tier--2"></div><div class="problem-card__company">Meta • Telegram • Signal</div><div class="problem-card__title">Design Facebook Messenger</div><div class="problem-card__meta"><span class="tag">Group Fan-out</span><span class="tag">Read Receipts</span><span class="tag">Presence</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
         </div>
+        </div><!-- end #js-tier2-group -->
 
+        <div id="js-tier3-group">
         <h3 style="font-size:var(--text-xl);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-3)">
           <span style="color:var(--color-tier3)">●</span> Tier 3 — Staff+ Deep Dives
         </h3>
-        <div class="problem-grid">
-          <a href="problems/tier3/distributed-db.html" class="problem-card" data-lesson-id="p-dist-db"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Spanner • CockroachDB</div><div class="problem-card__title">Design a Distributed Database</div><div class="problem-card__meta"><span class="tag">Raft</span><span class="tag">TrueTime</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/content-moderation.html" class="problem-card" data-lesson-id="p-moderation"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Meta • YouTube • TikTok</div><div class="problem-card__title">Design Content Moderation System</div><div class="problem-card__meta"><span class="tag">ML Pipeline</span><span class="tag">Human Review</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/recommendation-engine.html" class="problem-card" data-lesson-id="p-recommendation"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Netflix • Amazon • Spotify</div><div class="problem-card__title">Design a Recommendation Engine</div><div class="problem-card__meta"><span class="tag">Collaborative Filtering</span><span class="tag">ML</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/cdn.html" class="problem-card" data-lesson-id="p-cdn"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Cloudflare • Akamai • AWS</div><div class="problem-card__title">Design a CDN</div><div class="problem-card__meta"><span class="tag">Edge</span><span class="tag">Anycast</span><span class="tag">Caching</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/analytics-pipeline.html" class="problem-card" data-lesson-id="p-analytics"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Analytics • Amplitude</div><div class="problem-card__title">Design Real-time Analytics Pipeline</div><div class="problem-card__meta"><span class="tag">Flink</span><span class="tag">Lambda Arch</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/distributed-tracing.html" class="problem-card" data-lesson-id="p-tracing"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Jaeger • Zipkin • Datadog</div><div class="problem-card__title">Design a Distributed Tracing System</div><div class="problem-card__meta"><span class="tag">Sampling</span><span class="tag">Spans</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/api-gateway.html" class="problem-card" data-lesson-id="p-api-gateway"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">AWS API GW • Kong • Nginx</div><div class="problem-card__title">Design an API Gateway</div><div class="problem-card__meta"><span class="tag">Auth</span><span class="tag">Rate Limiting</span><span class="tag">Routing</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/feature-flags.html" class="problem-card" data-lesson-id="p-flags"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">LaunchDarkly • Optimizely</div><div class="problem-card__title">Design a Feature Flag System</div><div class="problem-card__meta"><span class="tag">A/B Testing</span><span class="tag">Rollout</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/multi-tenant-saas.html" class="problem-card" data-lesson-id="p-saas"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Salesforce • Snowflake</div><div class="problem-card__title">Design Multi-tenant SaaS Platform</div><div class="problem-card__meta"><span class="tag">Isolation</span><span class="tag">Schema</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
-          <a href="problems/tier3/log-aggregation.html" class="problem-card" data-lesson-id="p-logs"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">ELK Stack • Splunk</div><div class="problem-card__title">Design Distributed Log Aggregation</div><div class="problem-card__meta"><span class="tag">Fluentd</span><span class="tag">ES</span><span class="tag">S3</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+        <div class="problem-grid" id="js-grid-tier3">
+          <a href="problems/tier3/distributed-db.html" class="problem-card" data-lesson-id="p-dist-db" data-companies="google" data-tags="sql distributed"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Spanner • CockroachDB</div><div class="problem-card__title">Design a Distributed Database</div><div class="problem-card__meta"><span class="tag">Raft</span><span class="tag">TrueTime</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/content-moderation.html" class="problem-card" data-lesson-id="p-moderation" data-companies="meta google" data-tags="ml distributed kafka"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Meta • YouTube • TikTok</div><div class="problem-card__title">Design Content Moderation System</div><div class="problem-card__meta"><span class="tag">ML Pipeline</span><span class="tag">Human Review</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/recommendation-engine.html" class="problem-card" data-lesson-id="p-recommendation" data-companies="netflix amazon" data-tags="ml distributed"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Netflix • Amazon • Spotify</div><div class="problem-card__title">Design a Recommendation Engine</div><div class="problem-card__meta"><span class="tag">Collaborative Filtering</span><span class="tag">ML</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/cdn.html" class="problem-card" data-lesson-id="p-cdn" data-companies="amazon google" data-tags="cdn distributed caching"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Cloudflare • Akamai • AWS</div><div class="problem-card__title">Design a CDN</div><div class="problem-card__meta"><span class="tag">Edge</span><span class="tag">Anycast</span><span class="tag">Caching</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/analytics-pipeline.html" class="problem-card" data-lesson-id="p-analytics" data-companies="google amazon" data-tags="kafka distributed ml"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Google Analytics • Amplitude</div><div class="problem-card__title">Design Real-time Analytics Pipeline</div><div class="problem-card__meta"><span class="tag">Flink</span><span class="tag">Lambda Arch</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/distributed-tracing.html" class="problem-card" data-lesson-id="p-tracing" data-companies="google amazon" data-tags="distributed kafka"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Jaeger • Zipkin • Datadog</div><div class="problem-card__title">Design a Distributed Tracing System</div><div class="problem-card__meta"><span class="tag">Sampling</span><span class="tag">Spans</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/api-gateway.html" class="problem-card" data-lesson-id="p-api-gateway" data-companies="amazon google" data-tags="distributed caching"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">AWS API GW • Kong • Nginx</div><div class="problem-card__title">Design an API Gateway</div><div class="problem-card__meta"><span class="tag">Auth</span><span class="tag">Rate Limiting</span><span class="tag">Routing</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/feature-flags.html" class="problem-card" data-lesson-id="p-flags" data-companies="amazon google meta" data-tags="distributed"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">LaunchDarkly • Optimizely</div><div class="problem-card__title">Design a Feature Flag System</div><div class="problem-card__meta"><span class="tag">A/B Testing</span><span class="tag">Rollout</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/multi-tenant-saas.html" class="problem-card" data-lesson-id="p-saas" data-companies="amazon microsoft" data-tags="sql distributed"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">Salesforce • Snowflake</div><div class="problem-card__title">Design Multi-tenant SaaS Platform</div><div class="problem-card__meta"><span class="tag">Isolation</span><span class="tag">Schema</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
+          <a href="problems/tier3/log-aggregation.html" class="problem-card" data-lesson-id="p-logs" data-companies="amazon google" data-tags="distributed kafka cdn"><div class="problem-card__tier problem-card__tier--3"></div><div class="problem-card__company">ELK Stack • Splunk</div><div class="problem-card__title">Design Distributed Log Aggregation</div><div class="problem-card__meta"><span class="tag">Fluentd</span><span class="tag">ES</span><span class="tag">S3</span></div><div class="problem-card__complete"><div class="problem-card__complete-icon"></div></div></a>
         </div>
+        </div><!-- end #js-tier3-group -->
       </div>
     </section>
 
@@ -561,6 +512,122 @@
     </div>
   </footer>
 
+  <script>
+    // ── Problem Search & Filter ──────────────────────────────────────────────
+    (function initProblemFilter() {
+      const searchInputElement   = document.getElementById('js-problem-search');
+      const filterSummaryElement = document.getElementById('js-filter-summary');
+      const filterCountElement   = document.getElementById('js-filter-count');
+      const filterClearElement   = document.getElementById('js-filter-clear');
+      const noResultsElement     = document.getElementById('js-no-results');
+      const tierLegendElement    = document.getElementById('js-tier-legend');
+      const tier1GroupElement    = document.getElementById('js-tier1-group');
+      const tier2GroupElement    = document.getElementById('js-tier2-group');
+      const tier3GroupElement    = document.getElementById('js-tier3-group');
+
+      const allCardElements = Array.from(document.querySelectorAll('.problem-card[data-companies]'));
+
+      let activeCompanyFilter = 'all';
+      let activeTagFilter     = 'all';
+      let activeSearchQuery   = '';
+
+      const DEBOUNCE_DELAY_MS = 200;
+      let debounceTimer = null;
+
+      function matchesFilters(cardElement) {
+        const companyText = cardElement.dataset.companies || '';
+        const tagText     = cardElement.dataset.tags || '';
+        const titleText   = cardElement.querySelector('.problem-card__title')?.textContent || '';
+        const companyLabel = cardElement.querySelector('.problem-card__company')?.textContent || '';
+        const tagLabels   = cardElement.querySelector('.problem-card__meta')?.textContent || '';
+
+        const searchable = (titleText + ' ' + companyLabel + ' ' + tagLabels).toLowerCase();
+
+        const companyMatch = activeCompanyFilter === 'all' || companyText.includes(activeCompanyFilter);
+        const tagMatch     = activeTagFilter     === 'all' || tagText.includes(activeTagFilter);
+        const searchMatch  = activeSearchQuery   === ''    || searchable.includes(activeSearchQuery);
+
+        return companyMatch && tagMatch && searchMatch;
+      }
+
+      function applyFilters() {
+        let visibleCount = 0;
+        const isFiltering = activeCompanyFilter !== 'all' || activeTagFilter !== 'all' || activeSearchQuery !== '';
+
+        allCardElements.forEach(function(cardElement) {
+          const visible = matchesFilters(cardElement);
+          cardElement.classList.toggle('is-hidden', !visible);
+          if (visible) visibleCount++;
+        });
+
+        // Show/hide tier group headings based on whether any card in that group is visible
+        [tier1GroupElement, tier2GroupElement, tier3GroupElement].forEach(function(groupElement) {
+          if (groupElement === null) return;
+          const anyVisible = Array.from(groupElement.querySelectorAll('.problem-card')).some(
+            function(cardElement) { return !cardElement.classList.contains('is-hidden'); }
+          );
+          groupElement.style.display = anyVisible ? '' : 'none';
+        });
+
+        // No-results state
+        noResultsElement.style.display = (visibleCount === 0) ? '' : 'none';
+        tierLegendElement.style.display = (isFiltering && visibleCount === 0) ? 'none' : '';
+
+        // Filter summary
+        if (isFiltering) {
+          filterSummaryElement.style.display = '';
+          filterCountElement.textContent = String(visibleCount);
+        } else {
+          filterSummaryElement.style.display = 'none';
+        }
+      }
+
+      function setCompanyFilter(value) {
+        activeCompanyFilter = value;
+        document.querySelectorAll('.js-filter-btn[data-filter-type="company"]').forEach(function(buttonElement) {
+          buttonElement.classList.toggle('filter-btn--active', buttonElement.dataset.filterValue === value);
+        });
+        applyFilters();
+      }
+
+      function setTagFilter(value) {
+        activeTagFilter = value;
+        document.querySelectorAll('.js-filter-btn[data-filter-type="tag"]').forEach(function(buttonElement) {
+          buttonElement.classList.toggle('filter-btn--active', buttonElement.dataset.filterValue === value);
+        });
+        applyFilters();
+      }
+
+      function clearAllFilters() {
+        activeSearchQuery = '';
+        searchInputElement.value = '';
+        setCompanyFilter('all');
+        setTagFilter('all');
+      }
+
+      // Event: filter buttons
+      document.querySelectorAll('.js-filter-btn').forEach(function(buttonElement) {
+        buttonElement.addEventListener('click', function handleFilterButtonClick() {
+          const filterType  = buttonElement.dataset.filterType;
+          const filterValue = buttonElement.dataset.filterValue;
+          if (filterType === 'company') { setCompanyFilter(filterValue); }
+          if (filterType === 'tag')     { setTagFilter(filterValue); }
+        });
+      });
+
+      // Event: search input (debounced)
+      searchInputElement.addEventListener('input', function handleSearchInput() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function() {
+          activeSearchQuery = searchInputElement.value.trim().toLowerCase();
+          applyFilters();
+        }, DEBOUNCE_DELAY_MS);
+      });
+
+      // Event: clear button
+      filterClearElement.addEventListener('click', clearAllFilters);
+    })();
+  </script>
   <script src="assets/js/shared.js" type="module"></script>
   <script type="module">
     // Update the hero completed count from progress store
