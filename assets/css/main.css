@@ -15,6 +15,7 @@
   --color-bg-elevated:     #232635;
   --color-border:          #2e3248;
   --color-border-subtle:   #1e2133;
+  --border:                #2e3248;
 
   --color-primary:         #6366f1;
   --color-primary-hover:   #7c7ff5;
@@ -1831,6 +1832,14 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Legacy inline next/prev wrappers used in some problem pages */
 .module-page .module-content > div[style*="justify-content:space-between"][style*="border-top:1px solid var(--color-border)"] {
+  margin-top: var(--space-10) !important;
+  padding-top: var(--space-5) !important;
+  border-top: 1px solid var(--color-border) !important;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.module-page .module-content > div[style*="justify-content:space-between"][style*="border-top:1px solid var(--border)"] {
   margin-top: var(--space-10) !important;
   padding-top: var(--space-5) !important;
   border-top: 1px solid var(--color-border) !important;
