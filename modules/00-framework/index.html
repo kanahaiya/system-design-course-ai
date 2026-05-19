@@ -729,31 +729,31 @@ public class FanoutService {
 
           <!-- Encoded questions as data attributes -->
           <div data-question="A candidate spends 35 minutes on the high-level design diagram in a 45-minute MAANG interview. What is the primary problem with this approach?"
-               data-options='["The diagram is too complex for the interviewer to understand","No time remains for the deep dive, which is the primary differentiator between L4 and L5+ candidates","The high-level design is not important in MAANG interviews","The candidate should have asked more requirements questions instead"]'
+               data-options="[&quot;The diagram is too complex for the interviewer to understand&quot;,&quot;No time remains for the deep dive, which is the primary differentiator between L4 and L5+ candidates&quot;,&quot;The high-level design is not important in MAANG interviews&quot;,&quot;The candidate should have asked more requirements questions instead&quot;]"
                data-correct="1"
                data-explanation="The deep dive is the most important phase — it's where candidates demonstrate senior engineering judgment. Spending 35 minutes on the HLD leaves no time for the 'D' phase, which is exactly where L5/L6 candidates separate from L4."
                style="display:none"></div>
 
           <div data-question="In the RESHADED framework, what is the purpose of the Estimation phase?"
-               data-options='["To show mathematical ability to the interviewer","To derive QPS, storage, and bandwidth numbers that justify every architecture decision","To estimate how long the project would take to build","To determine team size for implementation"]'
+               data-options="[&quot;To show mathematical ability to the interviewer&quot;,&quot;To derive QPS, storage, and bandwidth numbers that justify every architecture decision&quot;,&quot;To estimate how long the project would take to build&quot;,&quot;To determine team size for implementation&quot;]"
                data-correct="1"
                data-explanation="Estimation drives design: if QPS is 17,000 reads/second, you need a cache. If storage is 13TB, you need distributed storage. Every number you pick later (servers, sharding strategy, CDN) should trace back to these estimates."
                style="display:none"></div>
 
           <div data-question="Twitter has 300M DAU. Each user reads their feed 5 times per day. Approximately how many read QPS must the system handle?"
-               data-options='["~1,700 QPS","~17,000 QPS","~170,000 QPS","~1,700,000 QPS"]'
+               data-options="[&quot;~1,700 QPS&quot;,&quot;~17,000 QPS&quot;,&quot;~170,000 QPS&quot;,&quot;~1,700,000 QPS&quot;]"
                data-correct="1"
                data-explanation="300M × 5 reads = 1,500M reads/day. Divide by 86,400 seconds: 1,500,000,000 / 86,400 ≈ 17,361 QPS ≈ 17,000 QPS. Always round to the nearest order of magnitude in estimation."
                style="display:none"></div>
 
           <div data-question="You are designing Twitter's feed. Justin Bieber has 100M followers. What is the 'celebrity fanout problem'?"
-               data-options='["Justin Bieber's tweets contain too many characters","Writing a new tweet to 100M follower feed caches synchronously would cause massive write amplification and latency spikes","Justin Bieber reads the feed too frequently","Celebrity accounts require a different API endpoint"]'
+               data-options="[&quot;Justin Bieber's tweets contain too many characters&quot;,&quot;Writing a new tweet to 100M follower feed caches synchronously would cause massive write amplification and latency spikes&quot;,&quot;Justin Bieber reads the feed too frequently&quot;,&quot;Celebrity accounts require a different API endpoint&quot;]"
                data-correct="1"
                data-explanation="With push-based fanout, posting one tweet requires 100M Redis ZADD operations — this takes minutes and causes write spikes. The solution is hybrid fanout: push for normal users (&lt;1M followers), pull for celebrities (their tweets are fetched and merged at read time)."
                style="display:none"></div>
 
           <div data-question="During the Evaluate phase, a candidate says: 'My design can handle any load and will never go down.' How should an interviewer interpret this?"
-               data-options='["The candidate has designed a highly resilient system","The candidate lacks senior engineering maturity — every system has limits and trade-offs","The candidate is correctly confident in their work","The candidate should get bonus points for optimism"]'
+               data-options="[&quot;The candidate has designed a highly resilient system&quot;,&quot;The candidate lacks senior engineering maturity — every system has limits and trade-offs&quot;,&quot;The candidate is correctly confident in their work&quot;,&quot;The candidate should get bonus points for optimism&quot;]"
                data-correct="1"
                data-explanation="Senior engineers understand that every system has trade-offs, scaling limits, and failure modes. Claiming a perfect system signals lack of real-world experience. The correct pattern is: 'Current design supports X QPS. To go beyond, I'd [do Y]. The main trade-off I accepted is [Z].'"
                style="display:none"></div>
@@ -775,10 +775,10 @@ public class FanoutService {
       </section>
 
       <!-- Navigation -->
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+      <nav class="module-nav" aria-label="Module navigation">
         <a href="../../index.html" class="btn btn--outline">← Back to Home</a>
         <a href="../01-fundamentals/index.html" class="btn btn--primary">Module 01: Fundamentals →</a>
-      </div>
+      </nav>
 
     </main>
   </div>

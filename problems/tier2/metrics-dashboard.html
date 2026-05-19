@@ -1314,12 +1314,12 @@ public class GorillaCompressionDemo {
           <!-- Question 1: Cardinality explosion -->
           <div
             data-question="A developer adds the tag user_id to an HTTP latency metric that currently has 50 time series. The system has 10 million users. What happens to storage?"
-            data-options='[
-              "Storage increases by 10 million bytes — one extra byte per user per metric.",
-              "Storage increases proportionally: 50 series × 10M users = 500 million new time series. Each series has its own compressed block and index entry. At ~1KB metadata per series, the series index alone grows from ~50KB to ~500GB. Query performance degrades from milliseconds to minutes.",
-              "Tags are stored separately from values so the number of time series is unchanged.",
-              "Gorilla compression handles high-cardinality automatically by deduplicating similar tag values."
-            ]'
+            data-options="[
+              &quot;Storage increases by 10 million bytes — one extra byte per user per metric.&quot;,
+              &quot;Storage increases proportionally: 50 series × 10M users = 500 million new time series. Each series has its own compressed block and index entry. At ~1KB metadata per series, the series index alone grows from ~50KB to ~500GB. Query performance degrades from milliseconds to minutes.&quot;,
+              &quot;Tags are stored separately from values so the number of time series is unchanged.&quot;,
+              &quot;Gorilla compression handles high-cardinality automatically by deduplicating similar tag values.&quot;
+            ]"
             data-correct="1"
             data-explanation="This is cardinality explosion. Every unique (metric_name + tag_set) is a separate time series — a separate compressed block, a separate index entry, a separate in-memory buffer in Flink. 50 series × 10M users = 500M series. At Datadog's billing model, that's 500M custom metrics. At $0.05/custom metric/month = $25M/month. This is why 'never use user_id as a metric tag' is absolute. Use distributed traces (Jaeger, Zipkin) for per-request granularity."
             style="display:none"
@@ -1328,12 +1328,12 @@ public class GorillaCompressionDemo {
           <!-- Question 2: Why not relational -->
           <div
             data-question="Why is column-oriented storage (ClickHouse, Gorilla blocks) preferred over row-oriented (PostgreSQL) for time-series metrics?"
-            data-options='[
-              "Column stores have faster INSERT throughput for single row writes.",
-              "Time-series queries scan one dimension (value) across millions of rows (timestamps). Column stores co-locate all values together — one I/O operation fetches all values for a time range. Row stores co-locate all fields per timestamp — to read just values, you must read the entire row including metric_name, tags, and timestamp fields you don't need.",
-              "PostgreSQL cannot index floating-point values efficiently.",
-              "Column stores automatically apply Gorilla compression; row stores do not support binary compression."
-            ]'
+            data-options="[
+              &quot;Column stores have faster INSERT throughput for single row writes.&quot;,
+              &quot;Time-series queries scan one dimension (value) across millions of rows (timestamps). Column stores co-locate all values together — one I/O operation fetches all values for a time range. Row stores co-locate all fields per timestamp — to read just values, you must read the entire row including metric_name, tags, and timestamp fields you don't need.&quot;,
+              &quot;PostgreSQL cannot index floating-point values efficiently.&quot;,
+              &quot;Column stores automatically apply Gorilla compression; row stores do not support binary compression.&quot;
+            ]"
             data-correct="1"
             data-explanation="This is the core OLAP vs OLTP distinction. For SELECT value FROM metrics WHERE series_id=X AND timestamp BETWEEN A AND B: column store reads only the value column (1/N of the data on disk). Row store reads every row including all fields. At 10B data points and 8 bytes per field, if a row has 5 fields, column store reads 1/5 of the data. At 560 MB/sec write rate, this I/O difference compounds into hours vs seconds for year-long queries."
             style="display:none"
@@ -1342,12 +1342,12 @@ public class GorillaCompressionDemo {
           <!-- Question 3: Gorilla delta-of-delta -->
           <div
             data-question="Gorilla achieves ~1.5 bits per timestamp instead of 32 bits. The specific mechanism is delta-of-delta encoding. Why does this work so well for metrics?"
-            data-options='[
-              "Gorilla rounds timestamps to the nearest second, eliminating sub-second precision bits.",
-              "Metrics typically arrive at regular intervals (e.g., every 10 seconds). The delta between consecutive timestamps is always 10. The delta-of-delta = current_delta - previous_delta = 10 - 10 = 0. Gorilla encodes delta-of-delta=0 as a single control bit. Regular-interval metrics compress to ~1 bit per timestamp — 32× compression.",
-              "Delta encoding requires timestamps to be stored as relative offsets from Unix epoch which are smaller integers.",
-              "Gorilla uses a dictionary to map common timestamp patterns to short codes, similar to LZ77."
-            ]'
+            data-options="[
+              &quot;Gorilla rounds timestamps to the nearest second, eliminating sub-second precision bits.&quot;,
+              &quot;Metrics typically arrive at regular intervals (e.g., every 10 seconds). The delta between consecutive timestamps is always 10. The delta-of-delta = current_delta - previous_delta = 10 - 10 = 0. Gorilla encodes delta-of-delta=0 as a single control bit. Regular-interval metrics compress to ~1 bit per timestamp — 32× compression.&quot;,
+              &quot;Delta encoding requires timestamps to be stored as relative offsets from Unix epoch which are smaller integers.&quot;,
+              &quot;Gorilla uses a dictionary to map common timestamp patterns to short codes, similar to LZ77.&quot;
+            ]"
             data-correct="1"
             data-explanation="The insight is domain-specific: operational metrics are collected on a schedule. A Prometheus scrape every 15 seconds means every timestamp delta is exactly 15. Delta-of-delta = 0. One bit. Clock drift from NTP produces deltas of 0 ± a few seconds, which still encode in 7–9 bits (not 32). The only time you need full 32-bit encoding is for completely irregular arrival — which happens for less than 0.1% of data points in practice. This is why Gorilla's real-world compression (8.7×) matches the theoretical ceiling."
             style="display:none"
@@ -1356,12 +1356,12 @@ public class GorillaCompressionDemo {
           <!-- Question 4: Downsampling -->
           <div
             data-question="A user queries 'show CPU usage for the auth service over the past year.' Why does the system NOT query raw 1-second resolution data for this request?"
-            data-options='[
-              "The raw data is encrypted and cannot be decrypted efficiently for large ranges.",
-              "At 1-second resolution, a year-long query spans 31.5 billion data points per series. At 10 GB/s SSD read throughput, reading this data takes ~50 minutes — unusable for a dashboard. The system instead queries the 1-hour rollup tier (8,760 points per year) which answers in milliseconds, trading sub-second resolution for query feasibility.",
-              "Raw data is only retained for 24 hours to save storage costs.",
-              "The query engine automatically downsamples on-the-fly using reservoir sampling."
-            ]'
+            data-options="[
+              &quot;The raw data is encrypted and cannot be decrypted efficiently for large ranges.&quot;,
+              &quot;At 1-second resolution, a year-long query spans 31.5 billion data points per series. At 10 GB/s SSD read throughput, reading this data takes ~50 minutes — unusable for a dashboard. The system instead queries the 1-hour rollup tier (8,760 points per year) which answers in milliseconds, trading sub-second resolution for query feasibility.&quot;,
+              &quot;Raw data is only retained for 24 hours to save storage costs.&quot;,
+              &quot;The query engine automatically downsamples on-the-fly using reservoir sampling.&quot;
+            ]"
             data-correct="1"
             data-explanation="This is the core reason downsampling exists — it's not just about storage, it's about query feasibility. 31.5B points × 8 bytes = 252 GB just for one metric. No dashboard can afford to read that on every refresh. The 1-hour rollup (8,760 points) is 1/3,600 the data. The tradeoff: you lose the ability to detect a 5-minute spike that happened 6 months ago. For year-long trend analysis, this is acceptable. For debugging last week's incident, you use the 1-minute rollup (which still has that granularity)."
             style="display:none"
@@ -1370,12 +1370,12 @@ public class GorillaCompressionDemo {
           <!-- Question 5: Alert scale -->
           <div
             data-question="The alerting engine must evaluate 1 million alert rules every 60 seconds. What is the correct approach to handle this at scale without overloading the TSDB?"
-            data-options='[
-              "Run all 1M queries in parallel on the raw TSDB — modern SSDs can handle the concurrent I/O.",
-              "Pre-aggregate metrics into 1-minute rollup tables as they arrive. Alert rules evaluate against pre-aggregated data (an O(1) point lookup per rule) rather than scanning raw 1-second data. Partition the 1M rules across 10 evaluator nodes (100K rules each). Group alerts by metric to reuse query results: if 1000 rules check cpu.usage for different services, compute it once and fanout.",
-              "Evaluate alerts lazily — only when a user views their dashboard will the alert be checked.",
-              "Use Elasticsearch for alert evaluation because it supports full-text search over metric names."
-            ]'
+            data-options="[
+              &quot;Run all 1M queries in parallel on the raw TSDB — modern SSDs can handle the concurrent I/O.&quot;,
+              &quot;Pre-aggregate metrics into 1-minute rollup tables as they arrive. Alert rules evaluate against pre-aggregated data (an O(1) point lookup per rule) rather than scanning raw 1-second data. Partition the 1M rules across 10 evaluator nodes (100K rules each). Group alerts by metric to reuse query results: if 1000 rules check cpu.usage for different services, compute it once and fanout.&quot;,
+              &quot;Evaluate alerts lazily — only when a user views their dashboard will the alert be checked.&quot;,
+              &quot;Use Elasticsearch for alert evaluation because it supports full-text search over metric names.&quot;
+            ]"
             data-correct="1"
             data-explanation="1M PromQL queries per minute on raw TSDB = 16,667 queries/sec, each scanning 60 raw data points = 1 billion point reads/sec. Infeasible. The solution has three layers: (1) Pre-aggregation: alert rules evaluate the latest 1-min bucket (1 point lookup, not 60 point scan). (2) Sharding: 10 nodes × 100K rules each = 1,667 evals/sec/node — manageable. (3) Query deduplication: multiple rules querying the same metric share one TSDB read. Combined, this reduces TSDB load by ~99.9% compared to naive evaluation."
             style="display:none"

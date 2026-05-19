@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Manage your MAANG System Design account, plan status, subscription actions, and invoice history in one place.">
+  <title>Account — MAANG System Design</title>
+  <link rel="canonical" href="https://dataformatterpro.com/system-design/account/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/css/main.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="site-nav__inner">
+      <a href="../index.html" class="site-nav__logo">
+        <div class="site-nav__logo-icon" aria-hidden="true">SD</div>
+        MAANG System Design
+      </a>
+      <ul class="site-nav__links" role="list">
+        <li><a href="../index.html" class="site-nav__link">Home</a></li>
+        <li><a href="../pricing/index.html" class="site-nav__link">Pricing</a></li>
+        <li><a href="index.html" class="site-nav__link site-nav__link--active">Account</a></li>
+      </ul>
+      <a href="../modules/00-framework/index.html" class="site-nav__cta">Start Learning →</a>
+    </div>
+  </nav>
+
+  <main id="main" class="page-wrapper">
+    <section class="section">
+      <div class="container">
+        <div class="section__header">
+          <div class="section__label">Account</div>
+          <h1 class="section__title">Sign in and manage your plan</h1>
+        </div>
+
+        <div class="account-grid">
+          <article class="card">
+            <h2 style="margin-bottom:var(--space-4)">Sign in</h2>
+            <form id="js-auth-form" class="account-form">
+              <label for="js-auth-email">Email</label>
+              <input id="js-auth-email" name="email" type="email" required placeholder="you@example.com">
+              <button type="submit" class="btn btn--primary">Send Sign-in Link</button>
+              <button id="js-auth-signout" type="button" class="btn btn--outline">Sign Out</button>
+            </form>
+            <p id="js-auth-status" class="account-status" aria-live="polite"></p>
+          </article>
+
+          <article class="card">
+            <h2 style="margin-bottom:var(--space-4)">Plan</h2>
+            <p id="js-account-plan" class="account-status">Current plan: Free</p>
+            <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+              <a href="../pricing/index.html" class="btn btn--outline">Upgrade plan</a>
+              <a id="js-manage-subscription-link" class="btn btn--outline" href="https://example.com/customer-portal" target="_blank" rel="noopener noreferrer">Manage subscription</a>
+            </div>
+          </article>
+
+          <article class="card">
+            <h2 style="margin-bottom:var(--space-4)">Invoices</h2>
+            <ul id="js-invoice-list" class="account-invoice-list">
+              <li>No invoices yet.</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="../assets/js/launch-config.js"></script>
+  <script src="../assets/js/shared.js" type="module"></script>
+</body>
+</html>

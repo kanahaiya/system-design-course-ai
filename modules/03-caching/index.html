@@ -82,51 +82,81 @@
           Cache Write Patterns
         </h2>
         <div class="content-section__body">
-          <svg viewBox="0 0 480 220" class="content-section__diagram" role="img" aria-label="Cache write pattern comparison: cache-aside, write-through, write-back">
+          <svg viewBox="0 -14 560 274" class="content-section__diagram" role="img" aria-label="Cache write pattern comparison: cache-aside, write-through, write-back">
+            <defs>
+              <marker id="cache-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+              </marker>
+            </defs>
+            <text x="10" y="214" font-family="Inter,sans-serif" font-size="8" fill="#94a3b8">Animated flow: pulses represent request/data movement.</text>
             <!-- Cache-aside -->
-            <text x="70" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#6366f1">Cache-Aside (Lazy)</text>
+            <g data-diagram-group="cache-aside">
+            <text x="86" y="16" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#6366f1">Cache-Aside (Lazy)</text>
             <rect x="10" y="20" width="60" height="25" rx="4" fill="#6366f1"/>
             <text x="40" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
             <rect x="90" y="20" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#6366f1" stroke-width="1.5"/>
             <text x="117" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
-            <rect x="10" y="70" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
-            <text x="37" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
-            <line x1="70" y1="45" x2="90" y2="32" stroke="#6366f1" stroke-width="1.2"/>
-            <text x="80" y="42" font-family="Inter,sans-serif" font-size="7" fill="#6366f1">1. read</text>
-            <line x1="117" y1="45" x2="80" y2="68" stroke="#e11d48" stroke-width="1.2" stroke-dasharray="4,2"/>
-            <text x="83" y="60" font-family="Inter,sans-serif" font-size="7" fill="#e11d48">MISS</text>
-            <line x1="37" y1="70" x2="37" y2="52" stroke="#64748b" stroke-width="1.2"/>
-            <text x="8" y="62" font-family="Inter,sans-serif" font-size="7" fill="#64748b">2.DB read</text>
-            <text x="40" y="110" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">App manages cache.</text>
-            <text x="40" y="120" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Stale on write.</text>
+            <rect x="10" y="92" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="37" y="108" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="70" y1="32" x2="90" y2="32" stroke="#6366f1" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="66" y="26" font-family="Inter,sans-serif" font-size="7" fill="#6366f1">1. read</text>
+            <line x1="117" y1="45" x2="64" y2="92" stroke="#e11d48" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#cache-arrow)">
+              <animate attributeName="stroke-dashoffset" values="0;12" dur="0.8s" repeatCount="indefinite"/>
+            </line>
+            <text x="84" y="76" font-family="Inter,sans-serif" font-size="7" fill="#e11d48">MISS</text>
+            <line x1="37" y1="92" x2="37" y2="45" stroke="#64748b" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="2" y="74" font-family="Inter,sans-serif" font-size="7" fill="#64748b">2. DB read</text>
+            <line x1="37" y1="45" x2="90" y2="45" stroke="#6366f1" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="49" y="54" font-family="Inter,sans-serif" font-size="7" fill="#6366f1">3. populate</text>
+            <circle cx="80" cy="32" r="2.2" fill="#6366f1">
+              <animate attributeName="cx" values="70;90;70" dur="1.8s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.8s" repeatCount="indefinite"/>
+            </circle>
+            <text x="78" y="144" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">App manages cache.</text>
+            <text x="78" y="156" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Stale on write.</text>
+            </g>
             <!-- Write-through -->
-            <text x="250" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#16a34a">Write-Through</text>
-            <rect x="195" y="20" width="55" height="25" rx="4" fill="#16a34a"/>
-            <text x="222" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
-            <rect x="260" y="20" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#16a34a" stroke-width="1.5"/>
-            <text x="287" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
-            <rect x="260" y="70" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
-            <text x="287" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
-            <line x1="250" y1="45" x2="270" y2="20" stroke="#16a34a" stroke-width="1.2"/>
-            <text x="258" y="38" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">1.write</text>
-            <line x1="287" y1="45" x2="287" y2="70" stroke="#16a34a" stroke-width="1.2"/>
-            <text x="291" y="60" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">2.write</text>
-            <text x="250" y="110" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Always consistent.</text>
-            <text x="250" y="120" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Higher write latency.</text>
+            <g data-diagram-group="write-through">
+            <text x="290" y="16" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#16a34a">Write-Through</text>
+            <rect x="230" y="20" width="55" height="25" rx="4" fill="#16a34a"/>
+            <text x="257" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
+            <rect x="295" y="20" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#16a34a" stroke-width="1.5"/>
+            <text x="322" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
+            <rect x="295" y="70" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="322" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="285" y1="32" x2="295" y2="32" stroke="#16a34a" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="278" y="26" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">1. write</text>
+            <line x1="322" y1="45" x2="322" y2="70" stroke="#16a34a" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="327" y="60" font-family="Inter,sans-serif" font-size="7" fill="#16a34a">2. write</text>
+            <circle cx="290" cy="32" r="2.2" fill="#16a34a">
+              <animate attributeName="cx" values="285;295;285" dur="1.2s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" repeatCount="indefinite"/>
+            </circle>
+            <text x="290" y="136" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Always consistent.</text>
+            <text x="290" y="148" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Higher write latency.</text>
+            </g>
             <!-- Write-back -->
-            <text x="430" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#f59e0b">Write-Back</text>
-            <rect x="380" y="20" width="55" height="25" rx="4" fill="#f59e0b"/>
-            <text x="407" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
-            <rect x="380" y="70" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#f59e0b" stroke-width="1.5"/>
-            <text x="407" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
-            <rect x="380" y="120" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
-            <text x="407" y="136" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
-            <line x1="407" y1="45" x2="407" y2="70" stroke="#f59e0b" stroke-width="1.2"/>
-            <text x="411" y="62" font-family="Inter,sans-serif" font-size="7" fill="#f59e0b">1.write</text>
-            <line x1="407" y1="95" x2="407" y2="120" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4,2"/>
-            <text x="411" y="112" font-family="Inter,sans-serif" font-size="7" fill="#64748b">async</text>
-            <text x="407" y="165" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Fastest writes.</text>
-            <text x="407" y="175" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Risk of data loss.</text>
+            <g data-diagram-group="write-back">
+            <text x="500" y="16" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#f59e0b">Write-Back</text>
+            <rect x="470" y="20" width="55" height="25" rx="4" fill="#f59e0b"/>
+            <text x="497" y="36" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="white">App</text>
+            <rect x="470" y="70" width="55" height="25" rx="4" fill="#f1f5f9" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="497" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">Cache</text>
+            <rect x="470" y="120" width="55" height="25" rx="4" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
+            <text x="497" y="136" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#1e293b">DB</text>
+            <line x1="497" y1="45" x2="497" y2="70" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#cache-arrow)"/>
+            <text x="502" y="58" font-family="Inter,sans-serif" font-size="7" fill="#f59e0b">1. write</text>
+            <line x1="497" y1="95" x2="497" y2="120" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#cache-arrow)">
+              <animate attributeName="stroke-dashoffset" values="0;12" dur="1s" repeatCount="indefinite"/>
+            </line>
+            <text x="505" y="112" font-family="Inter,sans-serif" font-size="7" fill="#64748b">async</text>
+            <circle cx="497" cy="82" r="2.2" fill="#f59e0b">
+              <animate attributeName="cy" values="46;70;46" dur="1.4s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.4s" repeatCount="indefinite"/>
+            </circle>
+            <text x="497" y="182" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Fastest writes.</text>
+            <text x="497" y="194" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#64748b">Risk of data loss.</text>
+            </g>
           </svg>
 
           <h3>Cache-Aside (Lazy Loading)</h3>
@@ -481,37 +511,55 @@ public class LruCache&lt;K, V&gt; {
           <span class="content-section__title-icon" aria-hidden="true">🧠</span>
           Knowledge Check
         </h2>
-        <div class="quiz" data-quiz-id="module-03-quiz" role="region" aria-label="Module 03 quiz">
+        <div class="quiz" role="region" aria-label="Module 03 quiz">
           <div class="quiz__header">
             <div class="quiz__title"><span aria-hidden="true">🧠</span> Caching Quiz</div>
             <div class="quiz__score" aria-live="polite"></div>
           </div>
           <div class="quiz__question">
             <div class="quiz__question-number">Question 1 of 4</div>
-            <div class="quiz__question-text"></div>
-            <div class="quiz__options" role="group" aria-label="Answer options"></div>
-            <div class="quiz__explanation" role="alert" aria-live="polite"></div>
+            <div class="quiz__question-text">A product page cache key expires at midnight every day for all users. At midnight, your database gets slammed by thousands of simultaneous requests. What is this problem and what is the fastest fix?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options">
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">A</span><span>Cache miss cascade — fix by increasing cache size</span></button>
+              <button class="quiz__option" type="button" data-correct="true"><span class="quiz__option-letter">B</span><span>Cache stampede (thundering herd) — fix by adding TTL jitter (random ±10% to expiry time) to prevent synchronized expiration</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">C</span><span>Cache invalidation bug — fix by switching to write-through</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">D</span><span>Database overload — fix by adding more database replicas</span></button>
+            </div>
+            <div class="quiz__explanation" role="alert" aria-live="polite">This is a classic cache stampede: synchronized TTL expiration causes all misses to hit the DB simultaneously. TTL jitter is the fastest fix — spread expiration times randomly so not all keys expire at the same second. The more robust fix is probabilistic early expiration or a per-key mutex to serialize DB rebuilds.</div>
           </div>
-          <div data-question="A product page cache key expires at midnight every day for all users. At midnight, your database gets slammed by thousands of simultaneous requests. What is this problem and what is the fastest fix?"
-               data-options='["Cache miss cascade — fix by increasing cache size","Cache stampede (thundering herd) — fix by adding TTL jitter (random ±10% to expiry time) to prevent synchronized expiration","Cache invalidation bug — fix by switching to write-through","Database overload — fix by adding more database replicas"]'
-               data-correct="1"
-               data-explanation="This is a classic cache stampede: synchronized TTL expiration causes all misses to hit the DB simultaneously. TTL jitter is the fastest fix — spread expiration times randomly so not all keys expire at the same second. The more robust fix is probabilistic early expiration or a per-key mutex to serialize DB rebuilds."
-               style="display:none"></div>
-          <div data-question="You are building a Twitter-like system. Users' follower counts must be accurate to within 5 minutes. What caching strategy and TTL is optimal?"
-               data-options='["Write-through with no TTL — follower counts must always be exact","Cache-aside with TTL=300s — on miss load from DB, cache for 5 minutes. On follow/unfollow, invalidate the cache key immediately for faster consistency","Write-back with 5-minute flush interval — minimize DB write load","LFU eviction with no TTL — popular users stay in cache forever"]'
-               data-correct="1"
-               data-explanation="Cache-aside + TTL=300s is correct. The 5-minute staleness requirement is naturally handled by TTL. Active invalidation on follow/unfollow events gives faster consistency for recent actions. Write-through doubles write latency. Write-back risks losing follower count data if the cache crashes. LFU without TTL gives no staleness bound."
-               style="display:none"></div>
-          <div data-question="Which Redis data structure is most efficient for a real-time leaderboard requiring top-10 players by score, with O(log N) insertion?"
-               data-options='["String — store a JSON array of all scores","Hash — HSET scores player1 9800 player2 9200","Sorted Set (ZSET) — ZADD leaderboard 9800 player1; ZRANGE leaderboard 0 9 REV for top-10","List — LPUSH leaderboard entries sorted manually by application"]'
-               data-correct="2"
-               data-explanation="Redis Sorted Sets (ZSET) are purpose-built for this. ZADD is O(log N), ZRANGE is O(log N + K) where K is the result count. The data structure maintains sorted order automatically. Strings require full deserialization. Hashes cannot range-scan by value. Lists need manual sorting in application code."
-               style="display:none"></div>
-          <div data-question="Your LRU cache (capacity=1000) is serving a sequential file scan reading 1 million unique records. After the scan, what is the cache hit rate for your normally hot data?"
-               data-options='["~80% — most hot data was already cached before the scan","~0% — the sequential scan has evicted all previously cached hot data since 1M unique keys exceed the 1000-entry capacity","~50% — half the scan data was evicted, half the hot data survived","Unchanged — LRU protects frequently accessed data from sequential scans"]'
-               data-correct="1"
-               data-explanation="This is LRU's famous weakness: a sequential scan (1M unique reads) will completely pollute a 1000-entry cache. All hot data gets evicted as each scan item displaces an existing entry. The fix: use a scan-resistant variant. MySQL InnoDB uses a 'young/old' sublist where scan blocks enter the old list and are evicted without reaching the young (hot) list."
-               style="display:none"></div>
+          <div class="quiz__question is-hidden">
+            <div class="quiz__question-number">Question 2 of 4</div>
+            <div class="quiz__question-text">You are building a Twitter-like system. Users' follower counts must be accurate to within 5 minutes. What caching strategy and TTL is optimal?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options">
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">A</span><span>Write-through with no TTL — follower counts must always be exact</span></button>
+              <button class="quiz__option" type="button" data-correct="true"><span class="quiz__option-letter">B</span><span>Cache-aside with TTL=300s — on miss load from DB, cache for 5 minutes. On follow/unfollow, invalidate the cache key immediately for faster consistency</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">C</span><span>Write-back with 5-minute flush interval — minimize DB write load</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">D</span><span>LFU eviction with no TTL — popular users stay in cache forever</span></button>
+            </div>
+            <div class="quiz__explanation" role="alert" aria-live="polite">Cache-aside + TTL=300s is correct. The 5-minute staleness requirement is naturally handled by TTL. Active invalidation on follow/unfollow events gives faster consistency for recent actions. Write-through doubles write latency. Write-back risks losing follower count data if the cache crashes. LFU without TTL gives no staleness bound.</div>
+          </div>
+          <div class="quiz__question is-hidden">
+            <div class="quiz__question-number">Question 3 of 4</div>
+            <div class="quiz__question-text">Which Redis data structure is most efficient for a real-time leaderboard requiring top-10 players by score, with O(log N) insertion?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options">
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">A</span><span>String — store a JSON array of all scores</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">B</span><span>Hash — HSET scores player1 9800 player2 9200</span></button>
+              <button class="quiz__option" type="button" data-correct="true"><span class="quiz__option-letter">C</span><span>Sorted Set (ZSET) — ZADD leaderboard 9800 player1; ZRANGE leaderboard 0 9 REV for top-10</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">D</span><span>List — LPUSH leaderboard entries sorted manually by application</span></button>
+            </div>
+            <div class="quiz__explanation" role="alert" aria-live="polite">Redis Sorted Sets (ZSET) are purpose-built for this. ZADD is O(log N), ZRANGE is O(log N + K) where K is the result count. The data structure maintains sorted order automatically. Strings require full deserialization. Hashes cannot range-scan by value. Lists need manual sorting in application code.</div>
+          </div>
+          <div class="quiz__question is-hidden">
+            <div class="quiz__question-number">Question 4 of 4</div>
+            <div class="quiz__question-text">Your LRU cache (capacity=1000) is serving a sequential file scan reading 1 million unique records. After the scan, what is the cache hit rate for your normally hot data?</div>
+            <div class="quiz__options" role="group" aria-label="Answer options">
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">A</span><span>~80% — most hot data was already cached before the scan</span></button>
+              <button class="quiz__option" type="button" data-correct="true"><span class="quiz__option-letter">B</span><span>~0% — the sequential scan has evicted all previously cached hot data since 1M unique keys exceed the 1000-entry capacity</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">C</span><span>~50% — half the scan data was evicted, half the hot data survived</span></button>
+              <button class="quiz__option" type="button" data-correct="false"><span class="quiz__option-letter">D</span><span>Unchanged — LRU protects frequently accessed data from sequential scans</span></button>
+            </div>
+            <div class="quiz__explanation" role="alert" aria-live="polite">This is LRU's famous weakness: a sequential scan (1M unique reads) will completely pollute a 1000-entry cache. All hot data gets evicted as each scan item displaces an existing entry. The fix: use a scan-resistant variant. MySQL InnoDB uses a young/old sublist where scan blocks enter the old list and are evicted without reaching the young (hot) list.</div>
+          </div>
           <div class="quiz__progress" aria-label="Quiz progress" role="progressbar"></div>
           <div class="quiz__actions">
             <div></div>

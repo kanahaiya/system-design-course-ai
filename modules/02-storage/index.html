@@ -491,22 +491,22 @@ public class ConsistentHashRing {
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
           <div data-question="Your system shards users by userId using hash(userId) % 4. You need to add a 5th shard. What is the primary operational concern with simple hash sharding?"
-               data-options='["The hash function may collide","~80% of existing data must be moved to new shard assignments — requires a full data migration","You cannot add shards without downtime","Range queries will stop working"]'
+               data-options="[&quot;The hash function may collide&quot;,&quot;~80% of existing data must be moved to new shard assignments — requires a full data migration&quot;,&quot;You cannot add shards without downtime&quot;,&quot;Range queries will stop working&quot;]"
                data-correct="1"
                data-explanation="With modulo hashing (hash(key) % N), changing N from 4 to 5 remaps almost every key — roughly (N-1)/N = 80% of data moves. Consistent hashing solves this by only moving ~1/N of keys (20% in this case). This is why DynamoDB and Cassandra use consistent hashing internally."
                style="display:none"></div>
           <div data-question="In Cassandra with N=3 replicas, W=2 (write quorum), R=2 (read quorum). Is strong consistency guaranteed? Why?"
-               data-options='["Yes — any read quorum overlaps with any write quorum since W+R > N (2+2=4 > 3)","No — Cassandra is always eventually consistent regardless of quorum settings","Yes — but only if using the LOCAL_QUORUM consistency level","No — W+R must equal N exactly for strong consistency"]'
+               data-options="[&quot;Yes — any read quorum overlaps with any write quorum since W+R > N (2+2=4 > 3)&quot;,&quot;No — Cassandra is always eventually consistent regardless of quorum settings&quot;,&quot;Yes — but only if using the LOCAL_QUORUM consistency level&quot;,&quot;No — W+R must equal N exactly for strong consistency&quot;]"
                data-correct="0"
                data-explanation="When W + R > N, any read quorum (R nodes) must overlap with any write quorum (W nodes) by at least one node. That overlapping node has the latest write, guaranteeing the read sees the freshest data. This is the quorum intersection property — the mathematical basis for Dynamo-style strong consistency."
                style="display:none"></div>
           <div data-question="Why does LSM-tree outperform B-tree for write-heavy workloads like time-series logging?"
-               data-options='["LSM-trees use less memory","LSM-trees convert random writes into sequential writes via the memtable → SSTable flush, eliminating random disk I/O which is 100× slower than sequential I/O","LSM-trees do not need compaction unlike B-trees","LSM-trees automatically partition data across shards"]'
+               data-options="[&quot;LSM-trees use less memory&quot;,&quot;LSM-trees convert random writes into sequential writes via the memtable → SSTable flush, eliminating random disk I/O which is 100× slower than sequential I/O&quot;,&quot;LSM-trees do not need compaction unlike B-trees&quot;,&quot;LSM-trees automatically partition data across shards&quot;]"
                data-correct="1"
                data-explanation="B-trees do in-place updates which require random writes to disk pages (expensive, especially on HDDs). LSM-trees buffer all writes in memory (memtable), then flush them as sequential immutable SSTables. Sequential writes are ~100× faster than random writes on HDDs and ~10× on SSDs. The trade-off: reads are slower and require bloom filters + multiple SSTable checks."
                style="display:none"></div>
           <div data-question="You are designing a social feed system (Instagram-style). Users follow others and see their posts ordered by time. What sharding key and database type is most appropriate?"
-               data-options='["Shard by postId using range sharding; use PostgreSQL for strong consistency","Shard by userId (author) using consistent hashing; use Cassandra with a time-clustered partition key for efficient time-range fan-out reads","Use a single PostgreSQL instance with a posts table — social scale doesn't require sharding","Shard by timestamp; use DynamoDB with GSI on userId"]'
+               data-options="[&quot;Shard by postId using range sharding; use PostgreSQL for strong consistency&quot;,&quot;Shard by userId (author) using consistent hashing; use Cassandra with a time-clustered partition key for efficient time-range fan-out reads&quot;,&quot;Use a single PostgreSQL instance with a posts table — social scale doesn't require sharding&quot;,&quot;Shard by timestamp; use DynamoDB with GSI on userId&quot;]"
                data-correct="1"
                data-explanation="Instagram and Twitter shard by userId (the author). Cassandra's partition key = userId, clustering key = (timestamp DESC) enables efficient 'get all posts by user ordered by time' — the core feed query — in a single partition scan. Range sharding by postId creates hotspots. Timestamp sharding puts all recent writes on one shard."
                style="display:none"></div>

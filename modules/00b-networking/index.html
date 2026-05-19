@@ -1137,31 +1137,31 @@ public class TcpEchoClient {
 
           <!-- Question data — hidden, consumed by shared.js quiz engine -->
           <div data-question="An HTTP 302 redirect is returned when a user visits bit.ly/xyz. Which browser behavior correctly describes what happens next?"
-               data-options='["The browser displays a 302 error page","The browser sends a new GET request to the Location header URL, and caches this redirect permanently","The browser sends a new GET request to the Location header URL, but does NOT cache this redirect permanently","The browser retries the same URL up to 3 times"]'
+               data-options="[&quot;The browser displays a 302 error page&quot;,&quot;The browser sends a new GET request to the Location header URL, and caches this redirect permanently&quot;,&quot;The browser sends a new GET request to the Location header URL, but does NOT cache this redirect permanently&quot;,&quot;The browser retries the same URL up to 3 times&quot;]"
                data-correct="2"
                data-explanation="302 Found is a temporary redirect. The browser follows the Location header with a new GET request but does NOT cache it — so future requests to the short URL still hit the server (important for analytics). A 301 would be cached by the browser, breaking analytics."
                style="display:none"></div>
 
           <div data-question="You are designing a multiplayer game that sends 60 position updates per second from each client. Which transport protocol should you use and why?"
-               data-options='["TCP — because it guarantees reliable delivery of all 60 updates per second","UDP — because the overhead of TCP reliability mechanisms would add unacceptable latency, and a slightly stale position is better than a delayed one","HTTP — because it works over TCP and is the standard protocol for web applications","WebSocket — because it provides full-duplex communication unlike TCP"]'
+               data-options="[&quot;TCP — because it guarantees reliable delivery of all 60 updates per second&quot;,&quot;UDP — because the overhead of TCP reliability mechanisms would add unacceptable latency, and a slightly stale position is better than a delayed one&quot;,&quot;HTTP — because it works over TCP and is the standard protocol for web applications&quot;,&quot;WebSocket — because it provides full-duplex communication unlike TCP&quot;]"
                data-correct="1"
                data-explanation="UDP is correct. For real-time games, a position update that arrives 50ms late is useless — you would rather render the last good position and receive the next one. TCP retransmission on loss would stall the stream. UDP is used by Quake, Counter-Strike, and most real-time games."
                style="display:none"></div>
 
           <div data-question="An L7 load balancer is receiving requests. Which of the following routing decisions can ONLY be made by an L7 load balancer and NOT by an L4 load balancer?"
-               data-options='["Route traffic to the least-loaded server","Route requests to /api/v2/* to the v2 service cluster and /api/v1/* to the v1 cluster","Route traffic based on the client IP address","Distribute traffic in a round-robin pattern across servers"]'
+               data-options="[&quot;Route traffic to the least-loaded server&quot;,&quot;Route requests to /api/v2/* to the v2 service cluster and /api/v1/* to the v1 cluster&quot;,&quot;Route traffic based on the client IP address&quot;,&quot;Distribute traffic in a round-robin pattern across servers&quot;]"
                data-correct="1"
                data-explanation="URL path-based routing requires inspecting the HTTP request content — only possible at Layer 7. An L4 load balancer sees only IP addresses and ports, not HTTP paths. URL routing, header-based routing, and cookie-based sticky sessions all require L7."
                style="display:none"></div>
 
           <div data-question="A user types 'google.com' in their browser for the first time (cold start, no cache). In what order does DNS resolution proceed?"
-               data-options='["Recursive resolver → Root NS → TLD NS → Authoritative NS → browser","Browser cache → OS cache → Recursive resolver → Root NS → TLD NS → Authoritative NS","Root NS → TLD NS → Authoritative NS → Recursive resolver → browser cache","OS cache → Browser cache → ISP DNS → Root NS → Authoritative NS"]'
+               data-options="[&quot;Recursive resolver → Root NS → TLD NS → Authoritative NS → browser&quot;,&quot;Browser cache → OS cache → Recursive resolver → Root NS → TLD NS → Authoritative NS&quot;,&quot;Root NS → TLD NS → Authoritative NS → Recursive resolver → browser cache&quot;,&quot;OS cache → Browser cache → ISP DNS → Root NS → Authoritative NS&quot;]"
                data-correct="1"
                data-explanation="DNS resolution goes: browser cache (miss) → OS /etc/hosts + local resolver cache (miss) → recursive resolver (your ISP DNS) → root nameserver (knows which NS handles .com) → TLD nameserver (knows which NS handles google.com) → authoritative nameserver (returns the A record IP). Each step caches the result for the TTL duration."
                style="display:none"></div>
 
           <div data-question="You are designing a system where clients connect and maintain state across multiple requests (e.g., a shopping cart in a session). HTTP is stateless by default. What is the correct approach to maintain session state?"
-               data-options='["Use HTTP PUT instead of GET — PUT is stateful by design","Store session data server-side (Redis) keyed by a session ID stored in a cookie, OR use JWTs in the Authorization header that carry self-contained state","HTTP/2 is stateful — upgrade to HTTP/2 to solve this","Use a dedicated stateful protocol like FTP instead of HTTP"]'
+               data-options="[&quot;Use HTTP PUT instead of GET — PUT is stateful by design&quot;,&quot;Store session data server-side (Redis) keyed by a session ID stored in a cookie, OR use JWTs in the Authorization header that carry self-contained state&quot;,&quot;HTTP/2 is stateful — upgrade to HTTP/2 to solve this&quot;,&quot;Use a dedicated stateful protocol like FTP instead of HTTP&quot;]"
                data-correct="1"
                data-explanation="HTTP is stateless by design — each request is independent. State is maintained externally: (1) Server-side sessions: generate a session ID, store data in Redis, send session ID as cookie. (2) Client-side tokens: JWT contains encoded state (user ID, roles) — signed so it cannot be tampered with. JWT is stateless on the server."
                style="display:none"></div>
@@ -1183,10 +1183,10 @@ public class TcpEchoClient {
       </section>
 
       <!-- Navigation -->
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+      <nav class="module-nav" aria-label="Module navigation">
         <a href="../00-framework/index.html" class="btn btn--outline">← Module 00: Framework</a>
         <a href="../01-fundamentals/index.html" class="btn btn--primary">Module 01: Fundamentals →</a>
-      </div>
+      </nav>
 
     </main>
   </div>

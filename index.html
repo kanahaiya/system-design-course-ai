@@ -50,6 +50,7 @@
         <li><a href="mock-interview/index.html" class="site-nav__link">Mock Interview</a></li>
         <li><a href="cheatsheets/index.html" class="site-nav__link">Cheatsheets</a></li>
         <li><a href="progress/index.html" class="site-nav__link">Progress</a></li>
+        <li><a href="pricing/index.html" class="site-nav__link">Pricing</a></li>
       </ul>
       <a href="modules/00-framework/index.html" class="site-nav__cta">Start Learning →</a>
     </div>
@@ -76,6 +77,9 @@
           animated diagrams, and a real mock interview simulator.
         </p>
         <div class="hero__actions animate-fade-in-up animate-delay-3">
+          <a href="onboarding/index.html" class="btn btn--outline">
+            Start with Onboarding
+          </a>
           <a href="modules/00-framework/index.html" class="btn btn--primary">
             Start with the Framework →
           </a>
@@ -508,6 +512,30 @@
       </div>
     </section>
 
+    <section class="section" aria-labelledby="waitlist-title">
+      <div class="container">
+        <div class="card">
+          <h2 id="waitlist-title" style="margin-bottom:var(--space-3)">Join the launch waitlist</h2>
+          <p style="color:var(--color-text-secondary);margin-bottom:var(--space-4)">Get updates on new modules, release notes, and mock interview packs.</p>
+          <form id="js-waitlist-form" class="account-form">
+            <label for="js-waitlist-email">Email</label>
+            <input id="js-waitlist-email" name="email" type="email" required placeholder="you@example.com">
+            <label for="js-waitlist-focus">Primary focus</label>
+            <select id="js-waitlist-focus" name="focus" required>
+              <option value="">Select focus</option>
+              <option value="sde2">SDE 2 prep</option>
+              <option value="senior">Senior level prep</option>
+              <option value="staff">Staff level prep</option>
+            </select>
+            <label for="js-company" class="visually-hidden">Company</label>
+            <input id="js-company" name="company" type="text" autocomplete="off" tabindex="-1" class="visually-hidden" aria-hidden="true">
+            <button type="submit" class="btn btn--primary">Join waitlist</button>
+          </form>
+          <p id="js-waitlist-status" class="account-status" aria-live="polite"></p>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer class="site-footer" role="contentinfo">
@@ -517,6 +545,11 @@
         <a href="progress/index.html" class="site-footer__link">My Progress</a>
         <a href="cheatsheets/index.html" class="site-footer__link">Cheatsheets</a>
         <a href="mock-interview/index.html" class="site-footer__link">Mock Interview</a>
+        <a href="faq/index.html" class="site-footer__link">FAQs</a>
+        <a href="feedback/index.html" class="site-footer__link">Feedback</a>
+        <a href="legal/privacy.html" class="site-footer__link">Privacy</a>
+        <a href="legal/terms.html" class="site-footer__link">Terms</a>
+        <a href="legal/refund.html" class="site-footer__link">Refund</a>
       </nav>
     </div>
   </footer>
@@ -637,6 +670,7 @@
       filterClearElement.addEventListener('click', clearAllFilters);
     })();
   </script>
+  <script src="assets/js/launch-config.js"></script>
   <script src="assets/js/shared.js" type="module"></script>
   <script type="module">
     // Update the hero completed count from progress store

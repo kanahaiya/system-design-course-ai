@@ -480,22 +480,22 @@ public class CapKeyValueStore {
             <div class="quiz__explanation" role="alert" aria-live="polite"></div>
           </div>
           <div data-question="You are designing a payment processing system. A network partition occurs. Which CAP choice is correct and why?"
-               data-options='["AP — payment availability is more important than consistency","CP — a payment must never be double-charged or lost; reject writes during partition","CA — use a single-region DB to avoid partitions entirely","CP — but only if using Paxos; Raft is not sufficient"]'
+               data-options="[&quot;AP — payment availability is more important than consistency&quot;,&quot;CP — a payment must never be double-charged or lost; reject writes during partition&quot;,&quot;CA — use a single-region DB to avoid partitions entirely&quot;,&quot;CP — but only if using Paxos; Raft is not sufficient&quot;]"
                data-correct="1"
                data-explanation="CP is correct for payments. A double charge or lost payment is a business catastrophe. Rejecting the write during partition (returning an error to the client) is preferable to creating inconsistent state. CA is not realistic — network partitions in distributed systems are inevitable."
                style="display:none"></div>
           <div data-question="Cassandra uses tunable consistency. A team sets read/write consistency to ONE for maximum speed. What guarantee do they lose?"
-               data-options='["Durability — writes may not reach disk","Availability — the cluster may refuse reads","Linearizability — reads may return stale data from a replica that hasn't received the latest write","Partition tolerance — the cluster cannot handle node failures"]'
+               data-options="[&quot;Durability — writes may not reach disk&quot;,&quot;Availability — the cluster may refuse reads&quot;,&quot;Linearizability — reads may return stale data from a replica that hasn't received the latest write&quot;,&quot;Partition tolerance — the cluster cannot handle node failures&quot;]"
                data-correct="2"
                data-explanation="With ONE consistency, Cassandra reads from a single replica without checking others. If that replica hasn't received the latest write yet (replication lag), you get stale data. Durability and partition tolerance are unaffected by the consistency level setting."
                style="display:none"></div>
           <div data-question="An engineer says 'Our system is eventually consistent — within 50ms all replicas agree.' What is the critical flaw in this statement?"
-               data-options='["Eventual consistency has no time bound — the statement is technically incorrect as eventual consistency only guarantees convergence eventually, not within any specific window","50ms is too slow for modern systems","The engineer should use linearizable consistency instead","This is a correct description of eventual consistency"]'
+               data-options="[&quot;Eventual consistency has no time bound — the statement is technically incorrect as eventual consistency only guarantees convergence eventually, not within any specific window&quot;,&quot;50ms is too slow for modern systems&quot;,&quot;The engineer should use linearizable consistency instead&quot;,&quot;This is a correct description of eventual consistency&quot;]"
                data-correct="0"
                data-explanation="Eventual consistency makes no timing guarantees. 'Within 50ms' is a bounded staleness guarantee, not eventual consistency. Real eventual consistency could take seconds, minutes, or theoretically longer if partitions persist. The correct term for time-bounded staleness is 'bounded staleness consistency' (used by Azure Cosmos DB)."
                style="display:none"></div>
           <div data-question="Using Jeff Dean's latency numbers, a request needs to: read 1 MB from SSD, make 2 same-datacenter round trips, and read 1 MB from RAM. Approximately how long does this take?"
-               data-options='["~0.35 ms","~2.25 ms","~12 ms","~150 ms"]'
+               data-options="[&quot;~0.35 ms&quot;,&quot;~2.25 ms&quot;,&quot;~12 ms&quot;,&quot;~150 ms&quot;]"
                data-correct="1"
                data-explanation="SSD 1MB read ≈ 1ms + 2 DC round trips × 0.5ms = 1ms + 1ms = 2ms + RAM 1MB read ≈ 0.25ms = total ~2.25ms. This order-of-magnitude calculation is what matters — not precision, but knowing SSD is ~1ms and DC round trip is ~0.5ms."
                style="display:none"></div>

@@ -1361,56 +1361,56 @@ public class TileServer {
 
           <!-- Question data — hidden, parsed by quiz.js -->
           <div data-question="Why does Contraction Hierarchies (CH) reduce route query time from minutes to under 1ms, even on the world road graph?"
-               data-options='[
-                 "CH compresses the graph into a smaller representation that fits in CPU cache",
-                 "CH only explores edges going upward in the node importance hierarchy — both forward and backward searches converge on high-importance nodes (motorways, interchanges), examining only ~1,000 nodes instead of millions",
-                 "CH pre-computes all pairwise shortest paths and stores them in a lookup table",
-                 "CH replaces Dijkstra with a more efficient algorithm that has O(1) time complexity"
-               ]'
+               data-options="[
+                 &quot;CH compresses the graph into a smaller representation that fits in CPU cache&quot;,
+                 &quot;CH only explores edges going upward in the node importance hierarchy — both forward and backward searches converge on high-importance nodes (motorways, interchanges), examining only ~1,000 nodes instead of millions&quot;,
+                 &quot;CH pre-computes all pairwise shortest paths and stores them in a lookup table&quot;,
+                 &quot;CH replaces Dijkstra with a more efficient algorithm that has O(1) time complexity&quot;
+               ]"
                data-correct="1"
                data-explanation="Standard Dijkstra explores nodes in all directions until reaching the target — on a 50M-node graph, this can mean millions of node expansions. CH preprocessing creates a hierarchical ordering where less important nodes (residential streets) are contracted first. The query then only relaxes edges going upward — toward highway nodes. Both forward and backward searches quickly reach the motorway network and meet there, examining typically 1,000–10,000 nodes total. This is a 5,000× speedup, not from a different algorithm, but from dramatically pruning the search space via preprocessing."
                style="display:none"></div>
 
           <div data-question="Google Maps can display routes with current traffic conditions in under 200ms. How does it update edge weights from real-time GPS data without re-running CH preprocessing (which takes hours)?"
-               data-options='[
-                 "The graph is re-preprocessed every 60 seconds using a faster incremental CH algorithm",
-                 "A/B testing shows that traffic does not significantly affect most routes, so static weights are used",
-                 "Customizable CH (CCH) separates structure preprocessing (run once) from metric customization (apply live weights to shortcuts in ~100ms). The routing query uses the latest customized weights.",
-                 "Traffic edge weights are only applied post-query by scaling the raw route duration by a congestion multiplier"
-               ]'
+               data-options="[
+                 &quot;The graph is re-preprocessed every 60 seconds using a faster incremental CH algorithm&quot;,
+                 &quot;A/B testing shows that traffic does not significantly affect most routes, so static weights are used&quot;,
+                 &quot;Customizable CH (CCH) separates structure preprocessing (run once) from metric customization (apply live weights to shortcuts in ~100ms). The routing query uses the latest customized weights.&quot;,
+                 &quot;Traffic edge weights are only applied post-query by scaling the raw route duration by a congestion multiplier&quot;
+               ]"
                data-correct="2"
                data-explanation="Standard CH bakes edge weights into shortcut distances during preprocessing — changing any weight invalidates shortcuts. Customizable CH (CCH) solves this by separating two phases: (1) the structure phase processes graph topology only — which shortcuts to add, node ordering — and runs once or when roads change structurally (hours). (2) The customization phase takes current edge weights and propagates them through the precomputed shortcut structure in ~100ms for world-scale graphs. This enables per-minute traffic refresh: Route Service calls customization with latest Redis speeds, gets an updated CH graph, and queries it. Full re-preprocessing is never needed for traffic updates."
                style="display:none"></div>
 
           <div data-question="Why does Google Maps use S2 Geometry Library instead of Geohash for geospatial indexing?"
-               data-options='[
-                 "S2 cells are hexagonal, which provides better coverage for circular search areas",
-                 "S2 cells use 64-bit integer IDs (fast arithmetic), have near-equal area globally (Geohash cells shrink near poles), and support efficient arbitrary polygon covering via cell unions — enabling O(1) containment checks without computational geometry",
-                 "S2 is a proprietary Google library that cannot be used without a license, giving Google a competitive advantage",
-                 "Geohash requires a database index while S2 can be computed in-memory without any persistence layer"
-               ]'
+               data-options="[
+                 &quot;S2 cells are hexagonal, which provides better coverage for circular search areas&quot;,
+                 &quot;S2 cells use 64-bit integer IDs (fast arithmetic), have near-equal area globally (Geohash cells shrink near poles), and support efficient arbitrary polygon covering via cell unions — enabling O(1) containment checks without computational geometry&quot;,
+                 &quot;S2 is a proprietary Google library that cannot be used without a license, giving Google a competitive advantage&quot;,
+                 &quot;Geohash requires a database index while S2 can be computed in-memory without any persistence layer&quot;
+               ]"
                data-correct="1"
                data-explanation="Three properties make S2 superior to Geohash at Google's scale: (1) Equal-area cells — Geohash uses a lat/lng grid where cells near the poles are tiny, causing inconsistent search radii. S2 projects the sphere onto a cube face, giving near-equal cell areas globally. (2) Integer IDs — S2 cell IDs are 64-bit integers enabling fast arithmetic for neighbor finding and range queries; Geohash is base-32 string manipulation. (3) Region covering — S2 can approximate any polygon (city boundary, search area) with a minimal set of cells (a 'cell union'). Containment check becomes 'is this cell ID in this set?' — pure integer comparison, no geometry computation. This is how reverse geocoding scales to millions of QPS."
                style="display:none"></div>
 
           <div data-question="A GPS ping from a user shows them at 150 km/h on a residential street (speed limit 50 km/h). The Traffic Aggregation Service receives this ping. What should happen?"
-               data-options='[
-                 "Accept the reading — the user may be in an emergency vehicle or the GPS speed is accurate",
-                 "The ping is flagged by anomaly detection (speed > speed_limit × 1.5 threshold) and rejected or down-weighted. The segment speed is not updated. If only 2 valid probes remain in the window, fall back to the historical baseline.",
-                 "The segment speed is capped at the speed limit automatically",
-                 "The user account is flagged for review and all their historical GPS data is invalidated"
-               ]'
+               data-options="[
+                 &quot;Accept the reading — the user may be in an emergency vehicle or the GPS speed is accurate&quot;,
+                 &quot;The ping is flagged by anomaly detection (speed > speed_limit × 1.5 threshold) and rejected or down-weighted. The segment speed is not updated. If only 2 valid probes remain in the window, fall back to the historical baseline.&quot;,
+                 &quot;The segment speed is capped at the speed limit automatically&quot;,
+                 &quot;The user account is flagged for review and all their historical GPS data is invalidated&quot;
+               ]"
                data-correct="1"
                data-explanation="Real-time traffic accuracy depends on probe quality. Accepting implausible readings corrupts speed estimates — a single bad data point showing 150 km/h would falsely suggest the street is clear and fast, leading to wrong ETAs and routing decisions. Anomaly detection rejects pings where: speed > speed_limit × 1.5 (physical implausibility), acceleration > 10 m/s² (impossible for cars), or heading is inconsistent with road geometry (GPS multipath error). With fewer than 3 valid probes in a 5-minute window, the Traffic Aggregation Service falls back to the historical baseline for that time-of-day and day-of-week. Graceful degradation preserves ETA accuracy even with noisy probe data."
                style="display:none"></div>
 
           <div data-question="At zoom level 0, a single tile covers the entire world (512×512 pixels). At zoom level 20, what is the approximate ground resolution (meters per pixel) at the equator, and what does this mean for map detail?"
-               data-options='[
-                 "~1 meter/pixel — enough to show individual lanes on roads, but not individual people",
-                 "~0.15 meters/pixel — enough to see cars, large vehicles, and road markings; building footprints are clearly visible",
-                 "~0.01 meters/pixel — centimeter accuracy, enough to see individual people",
-                 "~10 meters/pixel — you can see city blocks but not individual buildings"
-               ]'
+               data-options="[
+                 &quot;~1 meter/pixel — enough to show individual lanes on roads, but not individual people&quot;,
+                 &quot;~0.15 meters/pixel — enough to see cars, large vehicles, and road markings; building footprints are clearly visible&quot;,
+                 &quot;~0.01 meters/pixel — centimeter accuracy, enough to see individual people&quot;,
+                 &quot;~10 meters/pixel — you can see city blocks but not individual buildings&quot;
+               ]"
                data-correct="1"
                data-explanation="The Web Mercator projection formula gives ground resolution ≈ cos(latitude) × Earth_circumference / (512 × 2^zoom). At zoom 20, equator: cos(0°) × 40,075,017m / (512 × 2^20) = 40,075,017 / 536,870,912 ≈ 0.075 m/pixel. So zoom 20 is ~7.5 cm/pixel — enough to clearly resolve cars (~1.8m wide = 24 pixels) and lane markings. Google Maps typically uses zoom 19–20 for maximum detail views, showing individual parking spaces and building details. This also explains why max-zoom satellite imagery is so large — each zoom-20 tile covers roughly 76m × 76m of ground at the equator."
                style="display:none"></div>
